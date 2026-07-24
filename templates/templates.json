@@ -1,0 +1,20 @@
+[
+  {
+    "id": "default",
+    "name": "经典绿意",
+    "description": "清新的淡绿主题，适合日常日记导出",
+    "file": "default.html"
+  },
+  {
+    "id": "elegant",
+    "name": "优雅排版",
+    "description": "衬线字体居中排版，适合长文与文学性记录",
+    "file": "elegant.html"
+  },
+  {
+    "id": "cover",
+    "name": "封面卡片",
+    "description": "带绿色渐变封面页，适合重要日记或合集导出",
+    "file": "cover.html"
+  }
+]

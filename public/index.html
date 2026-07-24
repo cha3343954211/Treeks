@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Treeks · 日记</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" id="hljs-theme" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@14.1.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- 登录注册页 -->
+    <section id="auth-view" class="view auth-view">
+      <!-- 装饰叶子 -->
+      <svg class="deco-leaf leaf-1" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M32 8C20 16 14 26 14 38c0 10 8 18 18 18s18-8 18-18c0-12-6-22-18-30z" fill="currentColor" opacity="0.85"/>
+        <path d="M32 14v36" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        <path d="M32 22c-3 1-5 3-6 6M32 30c-4 1-7 3-9 7M32 38c-3 1-5 3-6 6" stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.5" fill="none"/>
+      </svg>
+      <svg class="deco-leaf leaf-2" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M32 8C20 16 14 26 14 38c0 10 8 18 18 18s18-8 18-18c0-12-6-22-18-30z" fill="currentColor" opacity="0.7"/>
+        <path d="M32 14v36" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+      </svg>
+      <svg class="deco-leaf leaf-3" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M32 8C20 16 14 26 14 38c0 10 8 18 18 18s18-8 18-18c0-12-6-22-18-30z" fill="currentColor" opacity="0.6"/>
+      </svg>
+      <div class="auth-card">
+        <div class="auth-logo">
+          <div class="logo-icon">
+            <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" width="48" height="48">
+              <path d="M32 6L12 28h8L14 44h12v12h12V44h12l-6-16h8L32 6z" fill="url(#treeGrad)"/>
+              <defs>
+                <linearGradient id="treeGrad" x1="32" y1="6" x2="32" y2="56" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#6dbb7d"/>
+                  <stop offset="1" stop-color="#3b8a48"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h1 id="site-name">Treeks</h1>
+          <p class="auth-subtitle">记录生活中的每一片绿叶</p>
+          <div id="site-notice" class="site-notice" style="display:none;"></div>
+        </div>
+        <div class="auth-tabs" id="auth-tabs">
+          <button class="auth-tab active" data-tab="login">登录</button>
+          <button class="auth-tab" data-tab="register" id="register-tab">注册</button>
+        </div>
+        <form id="login-form" class="auth-form active">
+          <div class="form-group">
+            <label>用户名</label>
+            <input type="text" id="login-username" placeholder="请输入用户名" required autocomplete="username">
+          </div>
+          <div class="form-group">
+            <label>密码</label>
+            <input type="password" id="login-password" placeholder="请输入密码" required autocomplete="current-password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">登录</button>
+        </form>
+        <form id="register-form" class="auth-form">
+          <div class="form-group">
+            <label>用户名</label>
+            <input type="text" id="reg-username" placeholder="中英文/数字/下划线, 2-20位" required autocomplete="username">
+          </div>
+          <div class="form-group">
+            <label>昵称（可选）</label>
+            <input type="text" id="reg-nickname" placeholder="显示在日记中的名字" autocomplete="nickname">
+          </div>
+          <div class="form-group">
+            <label>密码</label>
+            <input type="password" id="reg-password" placeholder="至少 6 位" required autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">注册</button>
+        </form>
+        <div id="auth-message" class="auth-message"></div>
+      </div>
+    </section>
+
+    <!-- 主应用 -->
+    <section id="main-view" class="view main-view" style="display:none;">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo-icon">
+            <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+              <path d="M32 6L12 28h8L14 44h12v12h12V44h12l-6-16h8L32 6z" fill="url(#sidebarTreeGrad)"/>
+              <defs>
+                <linearGradient id="sidebarTreeGrad" x1="32" y1="6" x2="32" y2="56" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#6dbb7d"/>
+                  <stop offset="1" stop-color="#3b8a48"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <span class="brand">Treeks</span>
+        </div>
+        <div class="user-card" id="user-card">
+          <div class="avatar" id="user-avatar"></div>
+          <div class="user-info">
+            <div class="user-name" id="user-name">用户</div>
+            <div class="user-handle" id="user-handle">@username</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-block nav-new" id="btn-new-diary">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          写新日记
+        </button>
+        <div class="nav-section">
+          <div class="nav-section-title">导航</div>
+          <nav class="sidebar-nav">
+            <button class="nav-item active" data-nav="list">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+              </svg>
+              全部日记
+            </button>
+            <button class="nav-item" data-nav="pinned">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2L8 6v6L4 16h6v6l2-2 2 2v-6h6l-4-4V6l-4-4z"/>
+              </svg>
+              置顶日记
+            </button>
+            <button class="nav-item" data-nav="stats">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 3v18h18"/>
+                <rect x="7" y="13" width="3" height="5"/>
+                <rect x="12" y="9" width="3" height="9"/>
+                <rect x="17" y="5" width="3" height="13"/>
+              </svg>
+              统计概览
+            </button>
+            <button class="nav-item" data-nav="images">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <path d="M21 15l-5-5L5 21"/>
+              </svg>
+              我的图片
+            </button>
+            <button class="nav-item" data-nav="calendar">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/>
+                <line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+              </svg>
+              日历日程
+            </button>
+            <button class="nav-item" data-nav="theme">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/>
+                <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/>
+                <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/>
+                <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/>
+                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
+              </svg>
+              主题设置
+            </button>
+            <button class="nav-item" data-nav="my-data">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+              </svg>
+              我的数据
+            </button>
+          </nav>
+        </div>
+        <div class="nav-section admin-section" id="admin-nav-section" style="display:none;">
+          <div class="nav-section-title">管理</div>
+          <nav class="sidebar-nav">
+            <button class="nav-item" data-nav="admin-dashboard">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"/>
+                <rect x="14" y="3" width="7" height="7"/>
+                <rect x="14" y="14" width="7" height="7"/>
+                <rect x="3" y="14" width="7" height="7"/>
+              </svg>
+              管理概览
+            </button>
+            <button class="nav-item" data-nav="admin-users">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              用户管理
+            </button>
+            <button class="nav-item" data-nav="admin-settings">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+              平台设置
+            </button>
+            <button class="nav-item" data-nav="admin-system">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+              </svg>
+              系统性能
+            </button>
+            <button class="nav-item" data-nav="admin-logs">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+              操作日志
+            </button>
+            <button class="nav-item" data-nav="admin-data">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              数据管理
+            </button>
+          </nav>
+        </div>
+        <div class="sidebar-footer">
+          <div class="nav-section-title">设置</div>
+          <button class="nav-item" id="btn-profile">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            个人设置
+          </button>
+          <button class="nav-item" id="btn-logout">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            退出登录
+          </button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <!-- 顶部栏 -->
+        <header class="topbar">
+          <div class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/>
+              <line x1="21" y1="21" x2="16.5" y2="16.5"/>
+            </svg>
+            <input type="text" id="search-input" placeholder="搜索日记标题或内容...">
+            <button class="btn-clear-search" id="clear-search" style="display:none;">
+              <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="topbar-actions">
+            <select id="filter-tag" class="filter-select">
+              <option value="">所有标签</option>
+            </select>
+            <input type="date" id="filter-date" class="filter-date">
+            <button class="btn btn-ghost btn-icon" id="btn-reset-filter" title="重置筛选">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"/>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- 列表视图 -->
+        <div id="view-list" class="content-view active">
+          <div class="content-header">
+            <h2 id="list-title">全部日记</h2>
+            <span class="content-count" id="list-count"></span>
+            <div class="content-header-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-toggle-select" title="批量选择">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                批量选择
+              </button>
+              <button class="btn btn-ghost btn-sm" id="btn-export-all" title="导出当前列表">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                导出全部
+              </button>
+            </div>
+          </div>
+          <div class="batch-select-bar" id="batch-select-bar" style="display:none;">
+            <label class="checkbox select-all-label">
+              <input type="checkbox" id="select-all-checkbox"> 全选当前页
+            </label>
+            <span class="batch-count" id="batch-count">已选 0 篇</span>
+            <div class="batch-actions">
+              <button class="btn btn-primary btn-sm" id="btn-batch-export" disabled>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                导出选中
+              </button>
+              <button class="btn btn-ghost btn-sm" id="btn-cancel-select">取消</button>
+            </div>
+          </div>
+          <div id="diary-list" class="diary-list"></div>
+          <div id="list-pagination" class="pagination"></div>
+        </div>
+
+        <!-- 编辑器视图 -->
+        <div id="view-editor" class="content-view">
+          <div class="editor-header">
+            <button class="btn btn-ghost" id="btn-back-list">← 返回</button>
+            <div class="editor-meta">
+              <input type="text" id="editor-title" class="editor-title-input" placeholder="无标题">
+              <div class="editor-options">
+                <input type="text" id="editor-mood" class="meta-input" placeholder="心情 😊" maxlength="20">
+                <input type="text" id="editor-weather" class="meta-input" placeholder="天气 ☀️" maxlength="20">
+                <input type="text" id="editor-tags" class="meta-input" placeholder="标签 (逗号分隔)" maxlength="100">
+              </div>
+            </div>
+          </div>
+          <div class="editor-toolbar">
+            <div class="tool-group">
+              <button class="tool-btn" data-md="bold" title="加粗 (Ctrl+B)">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h8a4 4 0 0 1 0 8H6zM6 12h9a4 4 0 0 1 0 8H6z"/></svg>
+              </button>
+              <button class="tool-btn" data-md="italic" title="斜体 (Ctrl+I)">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="4" x2="10" y2="4"/><line x1="14" y1="20" x2="5" y2="20"/><line x1="15" y1="4" x2="9" y2="20"/></svg>
+              </button>
+              <button class="tool-btn" data-md="strike" title="删除线">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4H9a3 3 0 0 0-2.83 4M14 12a4 4 0 0 1 0 8H6"/><line x1="4" y1="12" x2="20" y2="12"/></svg>
+              </button>
+            </div>
+            <span class="tool-divider"></span>
+            <div class="tool-group">
+              <button class="tool-btn tool-btn-wide" data-md="h1" title="一级标题">H1</button>
+              <button class="tool-btn tool-btn-wide" data-md="h2" title="二级标题">H2</button>
+              <button class="tool-btn tool-btn-wide" data-md="h3" title="三级标题">H3</button>
+            </div>
+            <span class="tool-divider"></span>
+            <div class="tool-group">
+              <button class="tool-btn" data-md="quote" title="引用">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><path d="M7.17 17c-.51 0-.98-.29-1.2-.74-.23-.46-.18-1.01.13-1.41L8 12.5H5c-1.66 0-3-1.34-3-3V7c0-1.66 1.34-3 3-3h3c.55 0 1 .45 1 1v6.5L7.17 17zM17.17 17c-.51 0-.98-.29-1.2-.74-.23-.46-.18-1.01.13-1.41L18 12.5h-3c-1.66 0-3-1.34-3-3V7c0-1.66 1.34-3 3-3h3c.55 0 1 .45 1 1v6.5L17.17 17z"/></svg>
+              </button>
+              <button class="tool-btn" data-md="code" title="行内代码">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              </button>
+              <button class="tool-btn" data-md="codeblock" title="代码块">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="9 10 7 12 9 14"/><polyline points="15 10 17 12 15 14"/></svg>
+              </button>
+            </div>
+            <span class="tool-divider"></span>
+            <div class="tool-group">
+              <button class="tool-btn" data-md="ul" title="无序列表">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/></svg>
+              </button>
+              <button class="tool-btn" data-md="ol" title="有序列表">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="3" y="8" font-size="6" font-weight="600" fill="currentColor" stroke="none">1.</text><text x="3" y="14" font-size="6" font-weight="600" fill="currentColor" stroke="none">2.</text><text x="3" y="20" font-size="6" font-weight="600" fill="currentColor" stroke="none">3.</text></svg>
+              </button>
+              <button class="tool-btn" data-md="task" title="任务列表">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              </button>
+            </div>
+            <span class="tool-divider"></span>
+            <div class="tool-group">
+              <button class="tool-btn" data-md="link" title="链接">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              </button>
+              <button class="tool-btn" data-md="image" title="插入图片">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+              </button>
+              <button class="tool-btn" data-md="table" title="表格">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+              </button>
+              <button class="tool-btn" data-md="hr" title="分割线">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+              </button>
+            </div>
+            <span class="tool-divider"></span>
+            <label class="tool-btn upload-btn" title="上传图片">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <span>上传</span>
+              <input type="file" id="upload-input" accept="image/*" multiple style="display:none;">
+            </label>
+            <div class="tool-spacer"></div>
+            <div class="tool-mode-toggle" id="editor-mode-toggle" title="切换预览/编辑">
+              <button class="mode-btn active" data-mode="split">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+              </button>
+              <button class="mode-btn" data-mode="edit">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+              <button class="mode-btn" data-mode="preview">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <div class="editor-pane">
+              <textarea id="editor-textarea" class="editor-textarea" placeholder="在这里写下今天的故事...&#10;&#10;支持 Markdown 语法，可粘贴图片或点击工具栏上传。"></textarea>
+            </div>
+            <div class="preview-pane">
+              <div id="editor-preview" class="markdown-body preview-content"></div>
+            </div>
+          </div>
+          <div class="editor-footer">
+            <div class="editor-status">
+              <span id="word-count">0 字</span>
+              <span><span class="status-dot draft" id="save-dot"></span><span id="save-status">草稿</span></span>
+            </div>
+            <div class="editor-actions">
+              <label class="checkbox">
+                <input type="checkbox" id="editor-pinned"> 置顶
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="editor-public"> 公开
+              </label>
+              <button class="btn btn-ghost" id="btn-delete-diary" style="display:none;">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                删除
+              </button>
+              <button class="btn btn-ghost" id="btn-export-diary" title="导出当前日记">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                导出
+              </button>
+              <button class="btn btn-primary" id="btn-save-diary">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 统计视图 -->
+        <div id="view-stats" class="content-view">
+          <div class="content-header">
+            <h2>统计概览</h2>
+          </div>
+          <div id="stats-content" class="stats-content"></div>
+        </div>
+
+        <!-- 图片视图 -->
+        <div id="view-images" class="content-view">
+          <div class="content-header">
+            <h2>我的图片</h2>
+            <label class="btn btn-primary">
+              ⬆ 上传图片
+              <input type="file" accept="image/*" multiple style="display:none;" id="gallery-upload">
+            </label>
+          </div>
+          <div id="images-grid" class="images-grid"></div>
+        </div>
+
+        <!-- 个人设置视图 -->
+        <div id="view-profile" class="content-view">
+          <div class="content-header">
+            <h2>个人设置</h2>
+          </div>
+          <div class="profile-card">
+            <form id="profile-form">
+              <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="profile-username" disabled>
+              </div>
+              <div class="form-group">
+                <label>昵称</label>
+                <input type="text" id="profile-nickname">
+              </div>
+              <div class="form-group">
+                <label>个性签名</label>
+                <textarea id="profile-bio" rows="3" maxlength="200"></textarea>
+              </div>
+              <div class="form-group">
+                <label>存储空间</label>
+                <div class="storage-bar" id="user-storage-bar"></div>
+              </div>
+              <button type="submit" class="btn btn-primary">保存资料</button>
+            </form>
+            <hr class="divider">
+            <form id="password-form">
+              <div class="form-group">
+                <label>原密码</label>
+                <input type="password" id="pwd-old" required autocomplete="current-password">
+              </div>
+              <div class="form-group">
+                <label>新密码（至少 6 位）</label>
+                <input type="password" id="pwd-new" required autocomplete="new-password">
+              </div>
+              <button type="submit" class="btn btn-secondary">修改密码</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- 管理员视图 -->
+        <div id="view-admin-dashboard" class="content-view">
+          <div class="content-header">
+            <h2>管理概览</h2>
+            <button class="btn btn-ghost" id="btn-refresh-dashboard">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              刷新
+            </button>
+          </div>
+          <div id="admin-dashboard-content"></div>
+        </div>
+
+        <div id="view-admin-users" class="content-view">
+          <div class="content-header">
+            <h2>用户管理</h2>
+          </div>
+          <div class="admin-toolbar">
+            <input type="text" id="admin-user-search" class="filter-input" placeholder="搜索用户名或昵称...">
+            <select id="admin-user-status" class="filter-select">
+              <option value="">所有状态</option>
+              <option value="active">正常</option>
+              <option value="disabled">已停用</option>
+            </select>
+            <button class="btn btn-ghost" id="admin-user-refresh">刷新</button>
+          </div>
+          <div id="admin-users-content"></div>
+          <div id="admin-users-pagination" class="pagination"></div>
+        </div>
+
+        <div id="view-admin-settings" class="content-view">
+          <div class="content-header">
+            <h2>平台设置</h2>
+          </div>
+          <div id="admin-settings-content"></div>
+        </div>
+
+        <div id="view-admin-system" class="content-view">
+          <div class="content-header">
+            <h2>系统性能</h2>
+            <button class="btn btn-ghost" id="btn-refresh-system">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              刷新
+            </button>
+          </div>
+          <div id="admin-system-content"></div>
+        </div>
+
+        <div id="view-admin-logs" class="content-view">
+          <div class="content-header">
+            <h2>操作日志</h2>
+          </div>
+          <div id="admin-logs-content"></div>
+          <div id="admin-logs-pagination" class="pagination"></div>
+        </div>
+
+        <!-- 数据管理视图 -->
+        <div id="view-admin-data" class="content-view">
+          <div class="content-header">
+            <h2>数据管理</h2>
+            <button class="btn btn-ghost" id="btn-refresh-data">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              刷新
+            </button>
+          </div>
+          <div id="admin-data-content"></div>
+        </div>
+
+        <!-- 日历日程视图 -->
+        <div id="view-calendar" class="content-view">
+          <div class="content-header">
+            <h2>日历日程</h2>
+            <div class="calendar-nav">
+              <button class="btn btn-ghost btn-icon" id="cal-prev" title="上个月">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <span id="cal-title" class="cal-title">2026年7月</span>
+              <button class="btn btn-ghost btn-icon" id="cal-next" title="下个月">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+              <button class="btn btn-ghost" id="cal-today">今天</button>
+              <button class="btn btn-primary" id="cal-add-schedule">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                新建日程
+              </button>
+            </div>
+          </div>
+          <div class="calendar-layout">
+            <div class="calendar-main">
+              <div class="calendar-grid" id="calendar-grid"></div>
+            </div>
+            <div class="calendar-side">
+              <div class="day-detail" id="day-detail">
+                <div class="day-detail-header">
+                  <h3 id="day-detail-date">选择一天</h3>
+                </div>
+                <div id="day-detail-content" class="day-detail-content">
+                  <p class="day-detail-empty">点击日历上的日期查看详情</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 主题设置视图 -->
+        <div id="view-theme" class="content-view">
+          <div class="content-header">
+            <h2>主题设置</h2>
+          </div>
+          <div id="theme-settings-content"></div>
+        </div>
+
+        <!-- 我的数据视图 -->
+        <div id="view-my-data" class="content-view">
+          <div class="content-header">
+            <h2>我的数据</h2>
+          </div>
+          <div id="my-data-content"></div>
+        </div>
+      </main>
+    </section>
+  </div>
+
+  <!-- Toast 通知 -->
+  <div id="toast" class="toast"></div>
+
+  <!-- 模态对话框 -->
+  <div id="modal" class="modal" style="display:none;">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-title">提示</h3>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="modal-cancel">取消</button>
+        <button class="btn btn-primary" id="modal-confirm">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出对话框 -->
+  <div id="export-modal" class="modal" style="display:none;">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-content-wide">
+      <div class="modal-header">
+        <h3 id="export-modal-title">导出日记</h3>
+        <button class="modal-close" id="export-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-section">
+          <div class="export-section-title">导出格式</div>
+          <div class="export-format-grid" id="export-format-grid">
+            <label class="export-format-option">
+              <input type="radio" name="export-format" value="md" checked>
+              <div class="export-format-card">
+                <div class="export-format-icon">
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="15" y2="11"/></svg>
+                </div>
+                <div class="export-format-name">Markdown</div>
+                <div class="export-format-desc">.md 文件，可编辑</div>
+              </div>
+            </label>
+            <label class="export-format-option">
+              <input type="radio" name="export-format" value="pdf">
+              <div class="export-format-card">
+                <div class="export-format-icon">
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h1.5a1.5 1.5 0 0 1 0 3H9v-3zM9 16v1.5"/></svg>
+                </div>
+                <div class="export-format-name">PDF 单篇</div>
+                <div class="export-format-desc">每篇独立 PDF 打包</div>
+              </div>
+            </label>
+            <label class="export-format-option">
+              <input type="radio" name="export-format" value="pdf-merged">
+              <div class="export-format-card">
+                <div class="export-format-icon">
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                </div>
+                <div class="export-format-name">PDF 合集</div>
+                <div class="export-format-desc">所有日记合并为一份</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="export-section" id="template-section">
+          <div class="export-section-title">PDF 模板</div>
+          <div class="export-template-grid" id="export-template-grid">
+            <!-- 模板列表由 JS 动态填充 -->
+          </div>
+        </div>
+
+        <div class="export-section">
+          <div class="export-section-title">导出内容</div>
+          <div class="export-summary" id="export-summary">已选择 0 篇日记</div>
+        </div>
+
+        <div class="export-progress" id="export-progress" style="display:none;">
+          <div class="export-progress-bar">
+            <div class="export-progress-fill" id="export-progress-fill"></div>
+          </div>
+          <div class="export-progress-text" id="export-progress-text">正在导出...</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="export-modal-cancel">取消</button>
+        <button class="btn btn-primary" id="export-modal-confirm">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          导出
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
