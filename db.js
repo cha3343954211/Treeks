@@ -94,9 +94,86 @@ function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_schedules_user_id ON schedules(user_id);
     CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules(schedule_date);
+
+    -- 好友关系（双向，存两行）
+    CREATE TABLE IF NOT EXISTS friends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      friend_id INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(user_id, friend_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_friends_user_id ON friends(user_id);
+    CREATE INDEX IF NOT EXISTS idx_friends_friend_id ON friends(friend_id);
+
+    -- 好友请求
+    CREATE TABLE IF NOT EXISTS friend_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      message TEXT,
+      status TEXT DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_friend_requests_to ON friend_requests(to_user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_friend_requests_from ON friend_requests(from_user_id, status);
+
+    -- 日记协作者
+    CREATE TABLE IF NOT EXISTS diary_collaborators (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      diary_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role TEXT DEFAULT 'editor',
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(diary_id, user_id),
+      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_diary_collaborators_diary ON diary_collaborators(diary_id);
+    CREATE INDEX IF NOT EXISTS idx_diary_collaborators_user ON diary_collaborators(user_id);
+
+    -- 日记指定可见用户
+    CREATE TABLE IF NOT EXISTS diary_visible_to (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      diary_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(diary_id, user_id),
+      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_diary_visible_to_user ON diary_visible_to(user_id);
+
+    -- 信件
+    CREATE TABLE IF NOT EXISTS letters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      diary_id INTEGER,
+      subject TEXT DEFAULT '',
+      content TEXT DEFAULT '',
+      is_read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      read_at TEXT,
+      FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_letters_recipient ON letters(recipient_id, is_read);
+    CREATE INDEX IF NOT EXISTS idx_letters_sender ON letters(sender_id);
   `);
 
-  // 兼容旧库：补字段（ALTER TABLE ADD COLUMN 在已存在时会抛错，需逐一 try）
+  // 兼容旧库：补字段
   const addColumnIfMissing = (table, column, def) => {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
     if (!cols.includes(column)) {
@@ -108,6 +185,8 @@ function initDatabase() {
   addColumnIfMissing('users', 'status', "TEXT DEFAULT 'active'");
   addColumnIfMissing('users', 'storage_limit', 'INTEGER DEFAULT 104857600');
   addColumnIfMissing('users', 'theme', "TEXT DEFAULT 'green'");
+  // 日记可见性：private / public / friends / specific
+  addColumnIfMissing('diaries', 'visibility', "TEXT DEFAULT 'private'");
 
   // 默认设置
   const defaultSettings = {

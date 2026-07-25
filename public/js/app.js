@@ -302,6 +302,7 @@ function showMainView() {
   updateAdminNavVisibility();
   navigateTo('list');
   loadTags();
+  updateNavBadges();
 }
 
 function renderUserCard() {
@@ -364,6 +365,15 @@ function navigateTo(nav) {
   } else if (nav === 'calendar') {
     showView('calendar');
     loadCalendar();
+  } else if (nav === 'friends') {
+    showView('friends');
+    loadFriendsView();
+  } else if (nav === 'letters') {
+    showView('letters');
+    loadLettersView();
+  } else if (nav === 'shared') {
+    showView('shared');
+    loadSharedView();
   } else if (nav === 'theme') {
     showView('theme');
     loadThemeSettings();
@@ -563,9 +573,11 @@ async function openEditor(id) {
   const weatherInput = document.getElementById('editor-weather');
   const tagsInput = document.getElementById('editor-tags');
   const pinnedInput = document.getElementById('editor-pinned');
-  const publicInput = document.getElementById('editor-public');
+  const visibilitySelect = document.getElementById('editor-visibility');
   const deleteBtn = document.getElementById('btn-delete-diary');
   const saveStatus = document.getElementById('save-status');
+  const collabBtn = document.getElementById('btn-collaborators');
+  const sendLetterBtn = document.getElementById('btn-send-letter');
 
   if (id) {
     try {
@@ -576,9 +588,18 @@ async function openEditor(id) {
       weatherInput.value = d.weather || '';
       tagsInput.value = (d.tags || []).join(', ');
       pinnedInput.checked = d.is_pinned;
-      publicInput.checked = d.is_public;
-      deleteBtn.style.display = '';
+      visibilitySelect.value = d.visibility || 'private';
+      deleteBtn.style.display = d.is_owner === false ? 'none' : '';
+      // 非作者不能修改可见性/置顶
+      const isOwner = d.is_owner !== false;
+      pinnedInput.disabled = !isOwner;
+      visibilitySelect.disabled = !isOwner;
+      collabBtn.style.display = isOwner ? '' : 'none';
+      sendLetterBtn.style.display = '';
       setSaveStatus('已加载', 'saved');
+      state.currentDiary = d;
+      // 连接 WebSocket 协同
+      collabJoin(id);
     } catch (e) {
       toast(e.message, 'error');
       showView('list');
@@ -590,9 +611,14 @@ async function openEditor(id) {
     weatherInput.value = '';
     tagsInput.value = '';
     pinnedInput.checked = false;
-    publicInput.checked = false;
+    visibilitySelect.value = 'private';
+    pinnedInput.disabled = false;
+    visibilitySelect.disabled = false;
     deleteBtn.style.display = 'none';
+    collabBtn.style.display = 'none';
+    sendLetterBtn.style.display = 'none';
     setSaveStatus('草稿', 'draft');
+    state.currentDiary = null;
   }
   updatePreview();
   updateWordCount();
@@ -628,14 +654,28 @@ async function saveDiary() {
   const tagsStr = document.getElementById('editor-tags').value.trim();
   const tags = tagsStr ? tagsStr.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
   const is_pinned = document.getElementById('editor-pinned').checked;
-  const is_public = document.getElementById('editor-public').checked;
+  const visibility = document.getElementById('editor-visibility').value;
+  const is_public = visibility === 'public' ? 1 : 0;
 
   if (!content.trim() && !title) {
     toast('请输入日记标题或内容', 'error');
     return;
   }
 
-  const body = { title, content, mood, weather, tags, is_pinned, is_public };
+  // 如果是指定可见，需要选择用户
+  let visibleTo = null;
+  if (visibility === 'specific') {
+    const friends = await api('/api/friends');
+    if (!friends.items.length) {
+      toast('请先添加好友才能使用指定可见功能', 'error');
+      return;
+    }
+    visibleTo = await pickUsers(friends.items, '选择可见用户');
+    if (visibleTo === null) return; // 取消
+  }
+
+  const body = { title, content, mood, weather, tags, is_pinned, is_public, visibility };
+  if (visibleTo) body.visibleTo = visibleTo;
   const saveBtn = document.getElementById('btn-save-diary');
   saveBtn.disabled = true;
   const origBtn = saveBtn.innerHTML;
@@ -1177,6 +1217,7 @@ function bindEvents() {
 
   // 编辑器
   document.getElementById('btn-back-list').addEventListener('click', () => {
+    if (state.editingId) collabLeave(state.editingId);
     state.editingId = null;
     navigateTo('list');
   });
@@ -1191,10 +1232,44 @@ function bindEvents() {
         await api(`/api/diaries/${id}`, { method: 'DELETE' });
         toast('已删除', 'success');
         state.editingId = null;
+        collabLeave(id);
         navigateTo('list');
         loadTags();
       } catch (e) { toast(e.message, 'error'); }
     }, { danger: true, confirmText: '删除' });
+  });
+
+  // 协作者管理
+  document.getElementById('btn-collaborators').addEventListener('click', openCollaboratorModal);
+
+  // 发送信件（从编辑器）
+  document.getElementById('btn-send-letter').addEventListener('click', () => {
+    if (!state.editingId) { toast('请先保存日记', 'error'); return; }
+    openComposeLetterModal(state.editingId);
+  });
+
+  // 添加好友
+  document.getElementById('btn-add-friend').addEventListener('click', openAddFriendModal);
+
+  // 写信
+  document.getElementById('btn-compose-letter').addEventListener('click', () => openComposeLetterModal(null));
+
+  // 信件 tabs
+  document.querySelectorAll('.letters-tabs .letter-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.letters-tabs .letter-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadLettersList(btn.dataset.tab);
+    });
+  });
+
+  // 共享 tabs
+  document.querySelectorAll('[data-shared-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-shared-tab]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadSharedList(btn.dataset.sharedTab);
+    });
   });
 
   // Markdown 工具栏
@@ -1231,6 +1306,13 @@ function bindEvents() {
     typingTimer = setTimeout(() => {
       setSaveStatus('未保存', 'draft');
     }, 800);
+    // 协同编辑：广播内容变更
+    collabSendEdit('content', textarea.value);
+  });
+
+  // 标题变更广播
+  document.getElementById('editor-title').addEventListener('input', (e) => {
+    collabSendEdit('title', e.target.value);
   });
 
   // 快捷键
@@ -3096,6 +3178,665 @@ async function init() {
     applyTheme(savedTheme);
     showAuthView();
   }
+}
+
+// ===== 好友 / 信件 / 协作 / 共享 =====
+
+function avatarText(name) {
+  return (name || '?').charAt(0).toUpperCase();
+}
+
+function avatarColor(id) {
+  const colors = ['#4c995c', '#3b7dd8', '#d97a3b', '#9c5cb8', '#c94f7a', '#5c8bb8', '#b89c3b'];
+  return colors[(id - 1) % colors.length] || '#4c995c';
+}
+
+function userAvatarHtml(user, size) {
+  const s = size || 36;
+  const name = user.nickname || user.username || '?';
+  const color = avatarColor(user.id);
+  if (user.avatar) {
+    return `<img class="avatar-img" src="${escapeHtml(user.avatar)}" style="width:${s}px;height:${s}px;border-radius:50%;object-fit:cover;">`;
+  }
+  return `<div class="avatar-circle" style="width:${s}px;height:${s}px;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;border-radius:50%;font-weight:600;font-size:${Math.floor(s*0.4)}px;">${escapeHtml(avatarText(name))}</div>`;
+}
+
+// 更新导航徽标（好友请求数 + 未读信件数）
+async function updateNavBadges() {
+  if (!state.token) return;
+  try {
+    const fs = await api('/api/friends/summary');
+    const badgeF = document.getElementById('badge-friends');
+    if (fs.pendingRequests > 0) {
+      badgeF.textContent = fs.pendingRequests;
+      badgeF.style.display = '';
+    } else { badgeF.style.display = 'none'; }
+
+    const ls = await api('/api/letters/unread/count');
+    const badgeL = document.getElementById('badge-letters');
+    if (ls.unread > 0) {
+      badgeL.textContent = ls.unread;
+      badgeL.style.display = '';
+    } else { badgeL.style.display = 'none'; }
+  } catch {}
+}
+
+// ===== 好友页面 =====
+async function loadFriendsView() {
+  const c = document.getElementById('friends-content');
+  c.innerHTML = '<div class="loading-state">加载中...</div>';
+  try {
+    const [friends, requests, sentReqs] = await Promise.all([
+      api('/api/friends'),
+      api('/api/friends/requests'),
+      api('/api/friends/requests/sent')
+    ]);
+    renderFriendsView(friends.items || [], requests.items || [], sentReqs.items || []);
+  } catch (e) {
+    c.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderFriendsView(friends, requests, sentReqs) {
+  const c = document.getElementById('friends-content');
+  let html = '';
+
+  // 待处理请求
+  if (requests.length) {
+    html += '<div class="friends-section"><h3 class="friends-section-title">好友请求</h3>';
+    html += '<div class="friends-grid">';
+    requests.forEach(r => {
+      html += `<div class="friend-card friend-request-card">
+        ${userAvatarHtml({ id: r.from_user_id, username: r.from_username, nickname: r.from_nickname, avatar: r.from_avatar }, 44)}
+        <div class="friend-info">
+          <div class="friend-name">${escapeHtml(r.from_nickname || r.from_username)}</div>
+          <div class="friend-handle">@${escapeHtml(r.from_username)}</div>
+          ${r.message ? `<div class="friend-msg">${escapeHtml(r.message)}</div>` : ''}
+        </div>
+        <div class="friend-actions">
+          <button class="btn btn-primary btn-sm" data-accept-request="${r.id}">接受</button>
+          <button class="btn btn-ghost btn-sm" data-reject-request="${r.id}">拒绝</button>
+        </div>
+      </div>`;
+    });
+    html += '</div></div>';
+  }
+
+  // 已发送请求
+  if (sentReqs.length) {
+    const pending = sentReqs.filter(r => r.status === 'pending');
+    if (pending.length) {
+      html += '<div class="friends-section"><h3 class="friends-section-title">已发送请求</h3>';
+      html += '<div class="friends-grid">';
+      pending.forEach(r => {
+        html += `<div class="friend-card">
+          ${userAvatarHtml({ id: r.to_user_id, username: r.to_username, nickname: r.to_nickname, avatar: r.to_avatar }, 44)}
+          <div class="friend-info">
+            <div class="friend-name">${escapeHtml(r.to_nickname || r.to_username)}</div>
+            <div class="friend-handle">@${escapeHtml(r.to_username)}</div>
+            <div class="friend-status">等待确认</div>
+          </div>
+        </div>`;
+      });
+      html += '</div></div>';
+    }
+  }
+
+  // 好友列表
+  html += '<div class="friends-section"><h3 class="friends-section-title">我的好友</h3>';
+  if (friends.length) {
+    html += '<div class="friends-grid">';
+    friends.forEach(f => {
+      html += `<div class="friend-card">
+        ${userAvatarHtml(f, 44)}
+        <div class="friend-info">
+          <div class="friend-name">${escapeHtml(f.nickname || f.username)}</div>
+          <div class="friend-handle">@${escapeHtml(f.username)}</div>
+          ${f.bio ? `<div class="friend-bio">${escapeHtml(f.bio)}</div>` : ''}
+        </div>
+        <div class="friend-actions">
+          <button class="btn btn-ghost btn-sm" data-letter-to="${f.id}" title="发信件">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </button>
+          <button class="btn btn-ghost btn-sm" data-remove-friend="${f.id}" title="删除好友">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  } else {
+    html += `<div class="empty-state">
+      <p>还没有好友，点击右上角"添加好友"开始吧！</p>
+    </div>`;
+  }
+  html += '</div>';
+
+  c.innerHTML = html;
+
+  // 绑定事件
+  c.querySelectorAll('[data-accept-request]').forEach(b => {
+    b.addEventListener('click', async () => {
+      try {
+        await api(`/api/friends/requests/${b.dataset.acceptRequest}/accept`, { method: 'POST' });
+        toast('已添加好友', 'success');
+        loadFriendsView();
+        updateNavBadges();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+  c.querySelectorAll('[data-reject-request]').forEach(b => {
+    b.addEventListener('click', async () => {
+      try {
+        await api(`/api/friends/requests/${b.dataset.rejectRequest}/reject`, { method: 'POST' });
+        toast('已拒绝', '');
+        loadFriendsView();
+        updateNavBadges();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+  c.querySelectorAll('[data-remove-friend]').forEach(b => {
+    b.addEventListener('click', () => {
+      const fid = b.dataset.removeFriend;
+      showModal('删除好友', '确定要删除该好友吗？', async () => {
+        try {
+          await api(`/api/friends/${fid}`, { method: 'DELETE' });
+          toast('已删除好友', '');
+          loadFriendsView();
+        } catch (e) { toast(e.message, 'error'); }
+      }, { danger: true, confirmText: '删除' });
+    });
+  });
+  c.querySelectorAll('[data-letter-to]').forEach(b => {
+    b.addEventListener('click', () => openComposeLetterModal(null, parseInt(b.dataset.letterTo, 10)));
+  });
+}
+
+// 添加好友弹窗
+function openAddFriendModal() {
+  const body = `
+    <div class="friend-search-box">
+      <input type="text" id="friend-search-input" class="filter-input" placeholder="搜索用户名或昵称..." autocomplete="off">
+    </div>
+    <div id="friend-search-results" class="friend-search-results">
+      <p class="search-hint">输入用户名或昵称搜索用户</p>
+    </div>
+  `;
+  showModal('添加好友', body, null, { hideCancel: true, confirmText: '关闭' });
+
+  const input = document.getElementById('friend-search-input');
+  const results = document.getElementById('friend-search-results');
+  let timer;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = '<p class="search-hint">输入用户名或昵称搜索用户</p>'; return; }
+    timer = setTimeout(async () => {
+      try {
+        const data = await api(`/api/friends/search?q=${encodeURIComponent(q)}`);
+        if (!data.items.length) {
+          results.innerHTML = '<p class="search-hint">未找到匹配的用户</p>';
+          return;
+        }
+        results.innerHTML = data.items.map(u => `
+          <div class="search-user-card">
+            ${userAvatarHtml(u, 36)}
+            <div class="search-user-info">
+              <div class="search-user-name">${escapeHtml(u.nickname || u.username)}</div>
+              <div class="search-user-handle">@${escapeHtml(u.username)}</div>
+            </div>
+            ${u.is_friend ? '<span class="badge badge-friend">已是好友</span>' :
+              u.request_pending ? '<span class="badge badge-pending">已申请</span>' :
+              `<button class="btn btn-primary btn-sm" data-send-request="${u.id}">加好友</button>`}
+          </div>
+        `).join('');
+        results.querySelectorAll('[data-send-request]').forEach(b => {
+          b.addEventListener('click', async () => {
+            try {
+              const res = await api('/api/friends/requests', {
+                method: 'POST', body: JSON.stringify({ toUserId: parseInt(b.dataset.sendRequest, 10) })
+              });
+              toast(res.message || res.becameFriends ? '已互加为好友' : '请求已发送', 'success');
+              if (res.becameFriends) loadFriendsView();
+              openAddFriendModal(); // 刷新
+              updateNavBadges();
+            } catch (e) { toast(e.message, 'error'); }
+          });
+        });
+      } catch (e) { results.innerHTML = `<p class="search-hint">${escapeHtml(e.message)}</p>`; }
+    }, 300);
+  });
+  setTimeout(() => input.focus(), 100);
+}
+
+// ===== 信件页面 =====
+let lettersState = { tab: 'inbox' };
+
+async function loadLettersView() {
+  lettersState.tab = 'inbox';
+  document.querySelectorAll('.letters-tabs .letter-tab').forEach(b => b.classList.remove('active'));
+  document.querySelector('.letters-tabs .letter-tab[data-tab="inbox"]').classList.add('active');
+  loadLettersList('inbox');
+}
+
+async function loadLettersList(tab) {
+  lettersState.tab = tab;
+  const c = document.getElementById('letters-content');
+  c.innerHTML = '<div class="loading-state">加载中...</div>';
+  try {
+    const data = await api(`/api/letters/${tab}`);
+    renderLettersList(data.items || [], tab);
+  } catch (e) {
+    c.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderLettersList(items, tab) {
+  const c = document.getElementById('letters-content');
+  if (!items.length) {
+    c.innerHTML = `<div class="empty-state"><p>${tab === 'inbox' ? '收件箱为空' : '发件箱为空'}</p></div>`;
+    return;
+  }
+  c.innerHTML = '<div class="letters-list">' + items.map(l => {
+    const user = tab === 'inbox' ? {
+      id: l.sender_id, username: l.sender_username, nickname: l.sender_nickname, avatar: l.sender_avatar
+    } : {
+      id: l.recipient_id, username: l.recipient_username, nickname: l.recipient_nickname, avatar: l.recipient_avatar
+    };
+    const label = tab === 'inbox' ? '来自' : '发给';
+    const unread = tab === 'inbox' && !l.is_read;
+    return `<div class="letter-card ${unread ? 'letter-unread' : ''}" data-letter-id="${l.id}">
+      ${userAvatarHtml(user, 40)}
+      <div class="letter-body">
+        <div class="letter-header">
+          <span class="letter-from">${label} <strong>${escapeHtml(user.nickname || user.username)}</strong></span>
+          <span class="letter-date">${formatDate(l.created_at)}</span>
+        </div>
+        <div class="letter-subject">${escapeHtml(l.subject || '(无主题)')} ${unread ? '<span class="unread-dot"></span>' : ''}</div>
+        <div class="letter-preview">${escapeHtml((l.content || '').slice(0, 80))}${l.content && l.content.length > 80 ? '...' : ''}</div>
+        ${l.diary_title ? `<div class="letter-attached"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> 附带日记: ${escapeHtml(l.diary_title)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+
+  c.querySelectorAll('[data-letter-id]').forEach(card => {
+    card.addEventListener('click', () => openLetterDetail(parseInt(card.dataset.letterId, 10)));
+  });
+}
+
+async function openLetterDetail(id) {
+  try {
+    const l = await api(`/api/letters/${id}`);
+    const body = `
+      <div class="letter-detail">
+        <div class="letter-detail-header">
+          ${userAvatarHtml(l.sender, 48)}
+          <div>
+            <div class="letter-detail-from">${escapeHtml(l.sender.nickname || l.sender.username)}</div>
+            <div class="letter-detail-date">${formatDate(l.created_at)}</div>
+          </div>
+        </div>
+        <h3 class="letter-detail-subject">${escapeHtml(l.subject || '(无主题)')}</h3>
+        <div class="letter-detail-content">${escapeHtml(l.content || '').replace(/\n/g, '<br>')}</div>
+        ${l.diary ? `<div class="letter-detail-diary">
+          <div class="attached-diary-label">附带日记：</div>
+          <h4>${escapeHtml(l.diary.title || '(无标题)')}</h4>
+          <button class="btn btn-ghost btn-sm" data-open-diary="${l.diary.id}">在编辑器中打开</button>
+        </div>` : ''}
+      </div>
+    `;
+    showModal(l.subject || '信件', body, null, { hideCancel: true, confirmText: '关闭' });
+    const openBtn = document.querySelector('[data-open-diary]');
+    if (openBtn) {
+      openBtn.addEventListener('click', () => {
+        closeModal();
+        openEditor(l.diary.id);
+      });
+    }
+    // 如果在收件箱，刷新未读数
+    if (lettersState.tab === 'inbox') updateNavBadges();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// 写信弹窗
+function openComposeLetterModal(diaryId, presetRecipientId) {
+  const body = `
+    <div class="compose-form">
+      <div class="form-group">
+        <label>收件人</label>
+        <select id="compose-recipient" class="filter-select">
+          <option value="">选择好友...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>主题</label>
+        <input type="text" id="compose-subject" class="filter-input" placeholder="信件主题" maxlength="200">
+      </div>
+      <div class="form-group">
+        <label>内容</label>
+        <textarea id="compose-content" rows="8" class="compose-textarea" placeholder="写下你想说的话..."></textarea>
+      </div>
+      <div id="compose-attached-info" style="display:none;" class="compose-attached-info">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span id="compose-attached-text">附带当前日记</span>
+      </div>
+    </div>
+  `;
+  showModal('写信', body, async () => {
+    const recipientId = parseInt(document.getElementById('compose-recipient').value, 10);
+    const subject = document.getElementById('compose-subject').value.trim();
+    const content = document.getElementById('compose-content').value;
+    if (!recipientId) { toast('请选择收件人', 'error'); return false; }
+    if (!content.trim()) { toast('请输入信件内容', 'error'); return false; }
+    try {
+      const body = { recipientId, subject, content };
+      if (diaryId) body.diaryId = diaryId;
+      await api('/api/letters', { method: 'POST', body: JSON.stringify(body) });
+      toast('信件已发送', 'success');
+    } catch (e) { toast(e.message, 'error'); return false; }
+  }, { confirmText: '发送' });
+
+  // 加载好友列表
+  api('/api/friends').then(data => {
+    const sel = document.getElementById('compose-recipient');
+    (data.items || []).forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.id;
+      opt.textContent = `${f.nickname || f.username} (@${f.username})`;
+      if (presetRecipientId === f.id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  });
+
+  if (diaryId) {
+    document.getElementById('compose-attached-info').style.display = '';
+    api(`/api/diaries/${diaryId}`).then(d => {
+      document.getElementById('compose-attached-text').textContent = '附带日记: ' + (d.title || '(无标题)');
+    });
+  }
+}
+
+// ===== 共享日记页面 =====
+let sharedState = { tab: 'shared' };
+
+async function loadSharedView() {
+  sharedState.tab = 'shared';
+  document.querySelectorAll('[data-shared-tab]').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-shared-tab="shared"]').classList.add('active');
+  loadSharedList('shared');
+}
+
+async function loadSharedList(tab) {
+  sharedState.tab = tab;
+  const c = document.getElementById('shared-content');
+  c.innerHTML = '<div class="loading-state">加载中...</div>';
+  try {
+    const endpoint = tab === 'collaborating' ? '/api/diaries/collaborating/list' : '/api/diaries/shared/list';
+    const data = await api(endpoint);
+    renderSharedList(data.items || [], tab);
+  } catch (e) {
+    c.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderSharedList(items, tab) {
+  const c = document.getElementById('shared-content');
+  if (!items.length) {
+    c.innerHTML = `<div class="empty-state"><p>${tab === 'collaborating' ? '暂无协作日记' : '暂无好友分享的日记'}</p></div>`;
+    return;
+  }
+  c.innerHTML = '<div class="diary-list">' + items.map(d => {
+    const author = {
+      id: d.author_id, username: d.author_username, nickname: d.author_nickname, avatar: d.author_avatar
+    };
+    const preview = (d.content || '').replace(/[#*`>\-\[\]]/g, '').slice(0, 120);
+    const visLabel = { public: '公开', friends: '好友可见', specific: '指定可见' }[d.visibility] || '';
+    return `<div class="diary-card shared-diary-card" data-open-shared="${d.id}">
+      <div class="diary-card-header">
+        ${userAvatarHtml(author, 28)}
+        <span class="diary-author">${escapeHtml(author.nickname || author.username)}</span>
+        ${visLabel ? `<span class="vis-badge vis-${d.visibility}">${visLabel}</span>` : ''}
+        ${d.my_role ? `<span class="role-badge role-${d.my_role}">${d.my_role === 'editor' ? '可编辑' : '只读'}</span>` : ''}
+        <span class="diary-date">${formatDate(d.created_at)}</span>
+      </div>
+      <h3 class="diary-title">${escapeHtml(d.title || '(无标题)')}</h3>
+      <p class="diary-preview">${escapeHtml(preview)}${d.content && d.content.length > 120 ? '...' : ''}</p>
+      ${(d.tags || []).length ? `<div class="diary-tags">${d.tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+    </div>`;
+  }).join('') + '</div>';
+
+  c.querySelectorAll('[data-open-shared]').forEach(card => {
+    card.addEventListener('click', () => openEditor(parseInt(card.dataset.openShared, 10)));
+  });
+}
+
+// ===== 协作者管理弹窗 =====
+async function openCollaboratorModal() {
+  if (!state.editingId) { toast('请先保存日记', 'error'); return; }
+  const id = state.editingId;
+  const body = `
+    <div id="collab-list" class="collab-list">加载中...</div>
+    <div class="collab-add-section">
+      <h4>添加协作者</h4>
+      <select id="collab-add-user" class="filter-select">
+        <option value="">选择好友...</option>
+      </select>
+      <select id="collab-add-role" class="filter-select">
+        <option value="editor">可编辑</option>
+        <option value="viewer">只读</option>
+      </select>
+      <button class="btn btn-primary btn-sm" id="collab-add-btn">添加</button>
+    </div>
+  `;
+  showModal('协作者管理', body, null, { hideCancel: true, confirmText: '关闭' });
+
+  // 加载协作者列表
+  try {
+    const [collab, friends] = await Promise.all([
+      api(`/api/diaries/${id}/collaborators`),
+      api('/api/friends')
+    ]);
+    const list = document.getElementById('collab-list');
+    if (!collab.items.length) {
+      list.innerHTML = '<p class="search-hint">暂无协作者</p>';
+    } else {
+      list.innerHTML = collab.items.map(c => `
+        <div class="collab-item">
+          ${userAvatarHtml(c, 36)}
+          <div class="collab-info">
+            <div class="collab-name">${escapeHtml(c.nickname || c.username)}</div>
+            <div class="collab-role">${c.role === 'editor' ? '可编辑' : '只读'}</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" data-remove-collab="${c.id}" title="移除">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </button>
+        </div>
+      `).join('');
+      list.querySelectorAll('[data-remove-collab]').forEach(b => {
+        b.addEventListener('click', async () => {
+          try {
+            await api(`/api/diaries/${id}/collaborators/${b.dataset.removeCollab}`, { method: 'DELETE' });
+            toast('已移除', '');
+            openCollaboratorModal();
+          } catch (e) { toast(e.message, 'error'); }
+        });
+      });
+    }
+    // 填充好友选择
+    const sel = document.getElementById('collab-add-user');
+    (friends.items || []).forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.id;
+      opt.textContent = `${f.nickname || f.username} (@${f.username})`;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    document.getElementById('collab-list').innerHTML = `<p class="search-hint">${escapeHtml(e.message)}</p>`;
+  }
+
+  document.getElementById('collab-add-btn').addEventListener('click', async () => {
+    const userId = parseInt(document.getElementById('collab-add-user').value, 10);
+    const role = document.getElementById('collab-add-role').value;
+    if (!userId) { toast('请选择好友', 'error'); return; }
+    try {
+      await api(`/api/diaries/${id}/collaborators`, {
+        method: 'POST', body: JSON.stringify({ userId, role })
+      });
+      toast('已添加协作者', 'success');
+      openCollaboratorModal();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+// ===== 多选用户弹窗（用于指定可见） =====
+function pickUsers(users, title) {
+  return new Promise(resolve => {
+    const body = `
+      <div class="pick-users-list">
+        ${users.map(u => `
+          <label class="pick-user-item">
+            <input type="checkbox" value="${u.id}">
+            ${userAvatarHtml(u, 32)}
+            <span>${escapeHtml(u.nickname || u.username)} <small>@${escapeHtml(u.username)}</small></span>
+          </label>
+        `).join('')}
+      </div>
+    `;
+    showModal(title || '选择用户', body, () => {
+      const checked = Array.from(document.querySelectorAll('.pick-users-list input:checked')).map(c => parseInt(c.value, 10));
+      resolve(checked);
+    }, { confirmText: '确定' });
+    // 自定义取消：返回 null
+    const oldClose = closeModal;
+    closeModal = () => {
+      closeModal = oldClose;
+      closeModal();
+      resolve(null);
+    };
+  });
+}
+
+// ===== WebSocket 协同编辑 =====
+let collabWs = null;
+let collabCurrentDiaryId = null;
+let collabDebounceTimer = null;
+
+function collabConnect() {
+  if (collabWs && collabWs.readyState === 1) return Promise.resolve();
+  if (!state.token) return Promise.reject(new Error('no token'));
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return new Promise((resolve, reject) => {
+    try {
+      collabWs = new WebSocket(`${proto}//${location.host}/collab?token=${state.token}`);
+    } catch (e) { reject(e); return; }
+
+    collabWs.onopen = () => resolve();
+
+    collabWs.onmessage = (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch { return; }
+      if (data.type === 'presence') {
+        renderCollabPresence(data.diaryId, data.users);
+      } else if (data.type === 'update' && data.diaryId === collabCurrentDiaryId) {
+        // 远程更新：同步到编辑器（避免循环）
+        const textarea = document.getElementById('editor-textarea');
+        const titleInput = document.getElementById('editor-title');
+        if (data.field === 'title' && data.title !== undefined && document.activeElement !== titleInput) {
+          titleInput.value = data.title;
+        } else if (data.content !== undefined && document.activeElement !== textarea) {
+          textarea.value = data.content;
+          updatePreview();
+          updateWordCount();
+        } else if (data.title !== undefined && data.content !== undefined) {
+          if (document.activeElement !== titleInput) titleInput.value = data.title;
+          if (document.activeElement !== textarea) {
+            textarea.value = data.content;
+            updatePreview();
+            updateWordCount();
+          }
+        }
+        setSaveStatus(`${data.username || '协作者'} 已更新`, 'saved');
+      } else if (data.type === 'error') {
+        console.warn('[Collab]', data.message);
+      }
+    };
+
+    collabWs.onclose = () => {
+      collabWs = null;
+      // 5秒后尝试重连
+      setTimeout(() => { if (collabCurrentDiaryId) collabConnect().then(() => { if (collabCurrentDiaryId) collabSendJoin(collabCurrentDiaryId); }).catch(() => {}); }, 5000);
+    };
+    collabWs.onerror = () => {};
+  });
+}
+
+function collabSend(msg) {
+  if (collabWs && collabWs.readyState === 1) {
+    collabWs.send(JSON.stringify(msg));
+  }
+}
+
+function collabSendJoin(diaryId) {
+  collabSend({ type: 'join', diaryId });
+}
+
+function collabJoin(diaryId) {
+  collabCurrentDiaryId = diaryId;
+  if (!collabWs || collabWs.readyState !== 1) {
+    collabConnect();
+    const wait = setInterval(() => {
+      if (collabWs && collabWs.readyState === 1) {
+        clearInterval(wait);
+        collabSendJoin(diaryId);
+      }
+    }, 200);
+    setTimeout(() => clearInterval(wait), 5000);
+  } else {
+    collabSendJoin(diaryId);
+  }
+}
+
+function collabLeave(diaryId) {
+  collabSend({ type: 'leave', diaryId });
+  collabCurrentDiaryId = null;
+  const el = document.getElementById('collab-presence');
+  if (el) el.style.display = 'none';
+}
+
+function collabSendEdit(field, value) {
+  if (!collabCurrentDiaryId) return;
+  clearTimeout(collabDebounceTimer);
+  collabDebounceTimer = setTimeout(() => {
+    const msg = { type: 'edit', diaryId: collabCurrentDiaryId, field };
+    msg[field] = value;
+    collabSend(msg);
+  }, 500);
+}
+
+function renderCollabPresence(diaryId, users) {
+  if (diaryId !== collabCurrentDiaryId) return;
+  const el = document.getElementById('collab-presence');
+  if (!el) return;
+  if (!users || !users.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = users.slice(0, 5).map(u => {
+    const name = u.nickname || u.username || '?';
+    return `<div class="collab-avatar" title="${escapeHtml(name)} 在线" style="background:${avatarColor(u.id)};">${escapeHtml(name.charAt(0).toUpperCase())}</div>`;
+  }).join('') + (users.length > 5 ? `<div class="collab-avatar collab-more">+${users.length - 5}</div>` : '');
+}
+
+// 日期格式化
+function formatDate(s) {
+  if (!s) return '';
+  const d = new Date(s.replace(' ', 'T'));
+  if (isNaN(d)) return s;
+  const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
+  if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
+  if (diff < 604800) return Math.floor(diff / 86400) + '天前';
+  return d.toLocaleDateString('zh-CN');
 }
 
 document.addEventListener('DOMContentLoaded', init);

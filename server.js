@@ -3,12 +3,14 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { initDatabase } = require('./db');
 
 // 初始化数据库
 initDatabase();
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // 确保上传目录存在
@@ -31,6 +33,11 @@ app.use('/api/diaries', require('./routes/diaries'));
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/schedules', require('./routes/schedules'));
+app.use('/api/friends', require('./routes/friends'));
+app.use('/api/letters', require('./routes/letters'));
+
+// WebSocket 协同编辑
+require('./services/collab').setupWebSocket(server);
 
 // 静态文件访问上传的图片
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
@@ -56,7 +63,7 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || '服务器内部错误' });
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`\n🌲 Treeks 日记应用已启动`);
   console.log(`   本地访问: http://localhost:${PORT}`);
   console.log(`   上传目录: ${uploadDir}\n`);

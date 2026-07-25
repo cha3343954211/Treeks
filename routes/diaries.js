@@ -16,6 +16,42 @@ function stringifyTags(tagsArr) {
   return JSON.stringify(tagsArr || []);
 }
 
+// 判断用户是否可读某篇日记
+function canReadDiary(diary, userId) {
+  if (!diary) return false;
+  if (diary.user_id === userId) return true;
+  // 协作者可读
+  if (db.prepare('SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ?').get(diary.id, userId)) return true;
+  const vis = diary.visibility || 'private';
+  if (vis === 'public') return true;
+  if (vis === 'friends') {
+    return !!db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(diary.user_id, userId);
+  }
+  if (vis === 'specific') {
+    return !!db.prepare('SELECT 1 FROM diary_visible_to WHERE diary_id = ? AND user_id = ?').get(diary.id, userId);
+  }
+  return false;
+}
+
+// 判断用户是否可编辑某篇日记
+function canEditDiary(diaryId, userId) {
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
+  if (!diary) return false;
+  if (diary.user_id === userId) return true;
+  const c = db.prepare("SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ? AND role = 'editor'").get(diaryId, userId);
+  return !!c;
+}
+
+// 同步日记可见性指定用户列表
+function syncVisibleTo(diaryId, userIds) {
+  db.prepare('DELETE FROM diary_visible_to WHERE diary_id = ?').run(diaryId);
+  if (Array.isArray(userIds) && userIds.length) {
+    const stmt = db.prepare('INSERT OR IGNORE INTO diary_visible_to (diary_id, user_id) VALUES (?, ?)');
+    const tx = db.transaction(() => userIds.forEach(uid => stmt.run(diaryId, uid)));
+    tx();
+  }
+}
+
 // 获取日记列表（支持分页、搜索、标签过滤、日期过滤）
 router.get('/', (req, res) => {
   const {
@@ -52,7 +88,7 @@ router.get('/', (req, res) => {
 
   const total = db.prepare(`SELECT COUNT(*) as count FROM diaries ${where}`).get(...params).count;
   const rows = db.prepare(
-    `SELECT id, title, content, mood, weather, tags, is_pinned, is_public, created_at, updated_at
+    `SELECT id, title, content, mood, weather, tags, is_pinned, is_public, visibility, created_at, updated_at
      FROM diaries ${where} ${orderClause} LIMIT ? OFFSET ?`
   ).all(...params, limitNum, offset);
 
@@ -72,26 +108,40 @@ router.get('/', (req, res) => {
   });
 });
 
-// 获取单篇日记
+// 获取单篇日记（支持协作者/被授权用户读取他人日记）
 router.get('/:id', (req, res) => {
-  const row = db.prepare(
-    'SELECT * FROM diaries WHERE id = ? AND user_id = ?'
-  ).get(req.params.id, req.user.id);
+  const id = parseInt(req.params.id, 10);
+  const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '日记不存在' });
+  if (!canReadDiary(row, req.user.id)) return res.status(403).json({ error: '无权查看此日记' });
+
+  const isOwner = row.user_id === req.user.id;
+  const canEdit = canEditDiary(id, req.user.id);
+  const collaborators = db.prepare(
+    `SELECT u.id, u.username, u.nickname, u.avatar, dc.role
+     FROM diary_collaborators dc
+     JOIN users u ON u.id = dc.user_id
+     WHERE dc.diary_id = ?`
+  ).all(id);
+
   res.json({
     ...row,
     tags: parseTags(row.tags),
     is_pinned: !!row.is_pinned,
-    is_public: !!row.is_public
+    is_public: !!row.is_public,
+    is_owner: isOwner,
+    can_edit: canEdit,
+    collaborators
   });
 });
 
 // 创建日记
 router.post('/', (req, res) => {
-  const { title, content, mood, weather, tags, is_pinned, is_public } = req.body || {};
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators } = req.body || {};
+  const vis = ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : 'private';
   const result = db.prepare(
-    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     req.user.id,
     (title || '').trim(),
@@ -100,9 +150,25 @@ router.post('/', (req, res) => {
     weather || null,
     stringifyTags(tags),
     is_pinned ? 1 : 0,
-    is_public ? 1 : 0
+    is_public ? 1 : 0,
+    vis
   );
-  const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(result.lastInsertRowid);
+  const newId = result.lastInsertRowid;
+
+  if (vis === 'specific' && Array.isArray(visibleTo)) {
+    syncVisibleTo(newId, visibleTo);
+  }
+  // 创建时直接添加协作者
+  if (Array.isArray(collaborators)) {
+    const stmt = db.prepare('INSERT OR IGNORE INTO diary_collaborators (diary_id, user_id, role) VALUES (?, ?, ?)');
+    collaborators.forEach(c => {
+      if (c.userId && c.userId !== req.user.id) {
+        stmt.run(newId, c.userId, c.role === 'viewer' ? 'viewer' : 'editor');
+      }
+    });
+  }
+
+  const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(newId);
   res.status(201).json({
     ...row,
     tags: parseTags(row.tags),
@@ -111,13 +177,21 @@ router.post('/', (req, res) => {
   });
 });
 
-// 更新日记
+// 更新日记（协作者也可编辑）
 router.put('/:id', (req, res) => {
-  const existing = db.prepare('SELECT id FROM diaries WHERE id = ? AND user_id = ?')
-    .get(req.params.id, req.user.id);
+  const id = parseInt(req.params.id, 10);
+  const existing = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '日记不存在' });
 
-  const { title, content, mood, weather, tags, is_pinned, is_public } = req.body || {};
+  const isOwner = existing.user_id === req.user.id;
+  const canEdit = isOwner || canEditDiary(id, req.user.id);
+  if (!canEdit) return res.status(403).json({ error: '无权编辑此日记' });
+
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo } = req.body || {};
+
+  // 仅 owner 可改可见性/置顶/公开
+  const canChangeMeta = isOwner;
+  const vis = canChangeMeta && ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : existing.visibility;
 
   db.prepare(
     `UPDATE diaries SET
@@ -128,21 +202,27 @@ router.put('/:id', (req, res) => {
        tags = COALESCE(?, tags),
        is_pinned = COALESCE(?, is_pinned),
        is_public = COALESCE(?, is_public),
+       visibility = ?,
        updated_at = datetime('now', 'localtime')
-     WHERE id = ? AND user_id = ?`
+     WHERE id = ?`
   ).run(
     title !== undefined ? title : null,
     content !== undefined ? content : null,
     mood !== undefined ? mood : null,
     weather !== undefined ? weather : null,
     tags !== undefined ? stringifyTags(tags) : null,
-    is_pinned !== undefined ? (is_pinned ? 1 : 0) : null,
-    is_public !== undefined ? (is_public ? 1 : 0) : null,
-    req.params.id,
-    req.user.id
+    canChangeMeta && is_pinned !== undefined ? (is_pinned ? 1 : 0) : null,
+    canChangeMeta && is_public !== undefined ? (is_public ? 1 : 0) : null,
+    vis,
+    id
   );
 
-  const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(req.params.id);
+  // 仅 owner 可同步可见性用户列表
+  if (canChangeMeta && vis === 'specific' && Array.isArray(visibleTo)) {
+    syncVisibleTo(id, visibleTo);
+  }
+
+  const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
   res.json({
     ...row,
     tags: parseTags(row.tags),
@@ -151,11 +231,11 @@ router.put('/:id', (req, res) => {
   });
 });
 
-// 删除日记
+// 删除日记（仅 owner）
 router.delete('/:id', (req, res) => {
   const result = db.prepare('DELETE FROM diaries WHERE id = ? AND user_id = ?')
     .run(req.params.id, req.user.id);
-  if (result.changes === 0) return res.status(404).json({ error: '日记不存在' });
+  if (result.changes === 0) return res.status(404).json({ error: '日记不存在或无权删除' });
   res.json({ message: '已删除' });
 });
 
@@ -167,6 +247,98 @@ router.patch('/:id/pin', (req, res) => {
   if (result.changes === 0) return res.status(404).json({ error: '日记不存在' });
   const row = db.prepare('SELECT is_pinned FROM diaries WHERE id = ?').get(req.params.id);
   res.json({ is_pinned: !!row.is_pinned });
+});
+
+// ===== 共享/协作相关 =====
+
+// 我能看到的他人日记（好友公开 / 指定可见 / 我协作的）
+router.get('/shared/list', (req, res) => {
+  const rows = db.prepare(
+    `SELECT d.id, d.title, d.content, d.mood, d.weather, d.tags, d.visibility, d.created_at, d.updated_at,
+            u.id AS author_id, u.username AS author_username, u.nickname AS author_nickname, u.avatar AS author_avatar
+     FROM diaries d
+     JOIN users u ON u.id = d.user_id
+     WHERE d.user_id != ?
+       AND (
+         d.visibility = 'public'
+         OR (d.visibility = 'friends' AND EXISTS (
+           SELECT 1 FROM friends f WHERE f.user_id = d.user_id AND f.friend_id = ?
+         ))
+         OR EXISTS (SELECT 1 FROM diary_visible_to dv WHERE dv.diary_id = d.id AND dv.user_id = ?)
+         OR EXISTS (SELECT 1 FROM diary_collaborators dc WHERE dc.diary_id = d.id AND dc.user_id = ?)
+       )
+     ORDER BY d.created_at DESC
+     LIMIT 100`
+  ).all(req.user.id, req.user.id, req.user.id, req.user.id);
+  const items = rows.map(r => ({ ...r, tags: parseTags(r.tags) }));
+  res.json({ items, total: items.length });
+});
+
+// 我正在协作的日记
+router.get('/collaborating/list', (req, res) => {
+  const rows = db.prepare(
+    `SELECT d.id, d.title, d.content, d.mood, d.weather, d.tags, d.visibility, d.created_at, d.updated_at,
+            u.id AS author_id, u.username AS author_username, u.nickname AS author_nickname, u.avatar AS author_avatar,
+            dc.role AS my_role
+     FROM diary_collaborators dc
+     JOIN diaries d ON d.id = dc.diary_id
+     JOIN users u ON u.id = d.user_id
+     WHERE dc.user_id = ?
+     ORDER BY d.updated_at DESC`
+  ).all(req.user.id);
+  const items = rows.map(r => ({ ...r, tags: parseTags(r.tags) }));
+  res.json({ items, total: items.length });
+});
+
+// 列出某日记的协作者
+router.get('/:id/collaborators', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  if (!canReadDiary({ id, user_id: diary.user_id, visibility: 'private' }, req.user.id) && diary.user_id !== req.user.id) {
+    return res.status(403).json({ error: '无权查看' });
+  }
+  const rows = db.prepare(
+    `SELECT u.id, u.username, u.nickname, u.avatar, dc.role, dc.created_at AS joined_at
+     FROM diary_collaborators dc
+     JOIN users u ON u.id = dc.user_id
+     WHERE dc.diary_id = ?`
+  ).all(id);
+  res.json({ items: rows, total: rows.length });
+});
+
+// 添加协作者（仅 owner）
+router.post('/:id/collaborators', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  if (diary.user_id !== req.user.id) return res.status(403).json({ error: '只有日记作者可添加协作者' });
+
+  const { userId, role } = req.body || {};
+  const uid = parseInt(userId, 10);
+  if (!uid) return res.status(400).json({ error: '请指定用户' });
+  if (uid === req.user.id) return res.status(400).json({ error: '不能添加自己为协作者' });
+
+  const user = db.prepare("SELECT id, status FROM users WHERE id = ?").get(uid);
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+  if (user.status !== 'active') return res.status(400).json({ error: '用户已被停用' });
+
+  db.prepare('INSERT OR IGNORE INTO diary_collaborators (diary_id, user_id, role) VALUES (?, ?, ?)')
+    .run(id, uid, role === 'viewer' ? 'viewer' : 'editor');
+  res.status(201).json({ message: '已添加协作者' });
+});
+
+// 移除协作者（仅 owner，或自己退出）
+router.delete('/:id/collaborators/:userId', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const uid = parseInt(req.params.userId, 10);
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  if (diary.user_id !== req.user.id && uid !== req.user.id) {
+    return res.status(403).json({ error: '无权移除协作者' });
+  }
+  db.prepare('DELETE FROM diary_collaborators WHERE diary_id = ? AND user_id = ?').run(id, uid);
+  res.json({ message: '已移除协作者' });
 });
 
 // 写作热力图 - 返回指定年份每天的日记数（GitHub 风格）

@@ -150,6 +150,34 @@
               </svg>
               日历日程
             </button>
+            <button class="nav-item" data-nav="friends">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              好友
+              <span class="nav-badge" id="badge-friends" style="display:none;"></span>
+            </button>
+            <button class="nav-item" data-nav="letters">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                <polyline points="22,6 12,13 2,6"/>
+              </svg>
+              信件
+              <span class="nav-badge" id="badge-letters" style="display:none;"></span>
+            </button>
+            <button class="nav-item" data-nav="shared">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/>
+                <circle cx="6" cy="12" r="3"/>
+                <circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              共享日记
+            </button>
             <button class="nav-item" data-nav="theme">
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/>
@@ -407,14 +435,22 @@
             <div class="editor-status">
               <span id="word-count">0 字</span>
               <span><span class="status-dot draft" id="save-dot"></span><span id="save-status">草稿</span></span>
+              <span id="collab-presence" class="collab-presence" style="display:none;"></span>
             </div>
             <div class="editor-actions">
               <label class="checkbox">
                 <input type="checkbox" id="editor-pinned"> 置顶
               </label>
-              <label class="checkbox">
-                <input type="checkbox" id="editor-public"> 公开
-              </label>
+              <select id="editor-visibility" class="filter-select" title="可见性">
+                <option value="private">仅自己</option>
+                <option value="friends">好友可见</option>
+                <option value="specific">指定用户</option>
+                <option value="public">完全公开</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" id="btn-collaborators" title="协作者管理">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                协作者
+              </button>
               <button class="btn btn-ghost" id="btn-delete-diary" style="display:none;">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
                 删除
@@ -422,6 +458,10 @@
               <button class="btn btn-ghost" id="btn-export-diary" title="导出当前日记">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 导出
+              </button>
+              <button class="btn btn-ghost btn-sm" id="btn-send-letter" title="作为信件发送给好友">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                发送
               </button>
               <button class="btn btn-primary" id="btn-save-diary">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
@@ -608,6 +648,46 @@
             <h2>我的数据</h2>
           </div>
           <div id="my-data-content"></div>
+        </div>
+
+        <!-- 好友视图 -->
+        <div id="view-friends" class="content-view">
+          <div class="content-header">
+            <h2>好友</h2>
+            <button class="btn btn-primary btn-sm" id="btn-add-friend">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+              添加好友
+            </button>
+          </div>
+          <div id="friends-content"></div>
+        </div>
+
+        <!-- 信件视图 -->
+        <div id="view-letters" class="content-view">
+          <div class="content-header">
+            <h2>信件</h2>
+            <button class="btn btn-primary btn-sm" id="btn-compose-letter">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              写信
+            </button>
+          </div>
+          <div class="letters-tabs" id="letters-tabs">
+            <button class="letter-tab active" data-tab="inbox">收件箱</button>
+            <button class="letter-tab" data-tab="sent">发件箱</button>
+          </div>
+          <div id="letters-content"></div>
+        </div>
+
+        <!-- 共享日记视图 -->
+        <div id="view-shared" class="content-view">
+          <div class="content-header">
+            <h2>共享日记</h2>
+            <div class="shared-tabs">
+              <button class="letter-tab active" data-shared-tab="shared">好友分享</button>
+              <button class="letter-tab" data-shared-tab="collaborating">我协作的</button>
+            </div>
+          </div>
+          <div id="shared-content"></div>
         </div>
       </main>
     </section>
