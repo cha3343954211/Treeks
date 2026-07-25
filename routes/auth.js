@@ -126,12 +126,26 @@ router.put('/password', authRequired, (req, res) => {
 // 设置主题
 router.put('/theme', authRequired, (req, res) => {
   const { theme } = req.body || {};
-  const allowed = ['green', 'blue', 'purple', 'orange', 'pink', 'dark', 'auto'];
-  if (!theme || !allowed.includes(theme)) {
+  // 支持新格式 palette:mode（如 green:light, blue:dark）+ 兼容旧值 green/blue/.../dark/auto
+  const allowedLegacy = ['green', 'blue', 'purple', 'orange', 'pink', 'dark', 'auto'];
+  const palettes = ['green', 'blue', 'purple', 'orange', 'pink', 'rose', 'teal', 'indigo'];
+  const modes = ['light', 'dark'];
+  let normalized = null;
+  if (typeof theme === 'string') {
+    if (allowedLegacy.includes(theme)) {
+      normalized = theme;
+    } else if (theme === 'auto') {
+      normalized = 'auto';
+    } else {
+      const [p, m] = theme.split(':');
+      if (palettes.includes(p) && modes.includes(m)) normalized = `${p}:${m}`;
+    }
+  }
+  if (!normalized) {
     return res.status(400).json({ error: '不支持的主题' });
   }
-  db.prepare('UPDATE users SET theme = ? WHERE id = ?').run(theme, req.user.id);
-  res.json({ message: '主题已更新', theme });
+  db.prepare('UPDATE users SET theme = ? WHERE id = ?').run(normalized, req.user.id);
+  res.json({ message: '主题已更新', theme: normalized });
 });
 
 // 公开接口：平台基本信息（无需登录）

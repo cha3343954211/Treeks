@@ -141,12 +141,84 @@ function getMarked() {
   return markedInstance;
 }
 
+// KaTeX 单例（按需加载，避免未安装时崩溃）
+let katexInstance = null;
+function getKatex() {
+  if (katexInstance === null) {
+    try {
+      katexInstance = require('katex');
+    } catch (e) {
+      console.warn('[Export] KaTeX 未安装，公式将以原始 LaTeX 文本输出:', e.message);
+      katexInstance = false;
+    }
+  }
+  return katexInstance || null;
+}
+
+// 在 Markdown 渲染前预处理 LaTeX 公式，与前端逻辑保持一致
+function preprocessLatex(text) {
+  const placeholders = [];
+  const stash = (html) => {
+    const key = '\u0000KATEX' + placeholders.length + '\u0000';
+    placeholders.push(html);
+    return key;
+  };
+  const renderKatex = (expr, displayMode) => {
+    const katex = getKatex();
+    if (!katex) {
+      // 回退：保留原始 LaTeX 文本
+      return escapeHtml('$' + (displayMode ? '$' : '') + expr + '$' + (displayMode ? '$' : ''));
+    }
+    try {
+      return katex.renderToString(expr, {
+        displayMode,
+        throwOnError: true,
+        output: 'html',
+        strict: 'ignore'
+      });
+    } catch (e) {
+      return '<span style="color:#c75450;">[公式错误: ' + escapeHtml(e.message) + ']</span>';
+    }
+  };
+
+  // 块级公式 $$...$$
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => stash(renderKatex(expr, true)));
+  // 行内公式 $...$（避开 \$）
+  text = text.replace(/(^|[^\\])\$([^\n$]+?)\$/g, (_, pre, expr) => pre + stash(renderKatex(expr, false)));
+
+  return { text, placeholders };
+}
+
+function restoreLatexPlaceholders(html, placeholders) {
+  placeholders.forEach((ph, i) => {
+    html = html.replace('\u0000KATEX' + i + '\u0000', ph);
+  });
+  return html;
+}
+
 function renderMarkdownToHtml(mdText) {
   try {
-    return getMarked().parse(mdText || '');
+    const { text, placeholders } = preprocessLatex(mdText || '');
+    let html = getMarked().parse(text);
+    html = restoreLatexPlaceholders(html, placeholders);
+    return html;
   } catch (e) {
     return '<p>' + escapeHtml(mdText || '') + '</p>';
   }
+}
+
+// 注入 KaTeX CSS 到导出 HTML（用于 PDF 渲染时显示公式样式）
+const KATEX_CSS_TAG = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">';
+function injectKatexCss(html) {
+  if (html.includes('katex.min.css')) return html; // 已注入
+  // 在 </head> 之前注入；若无 head，则在 <body> 之前注入
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, KATEX_CSS_TAG + '</head>');
+  }
+  if (/<body/i.test(html)) {
+    return html.replace(/<body/i, KATEX_CSS_TAG + '<body');
+  }
+  return KATEX_CSS_TAG + html;
 }
 
 // 生成单个日记的完整 HTML
@@ -155,7 +227,8 @@ function buildDiaryHtml(diary, user, templateId) {
   if (!tplInfo) throw new Error('模板不存在');
   const data = prepareDiaryData(diary, user);
   data.content = inlineLocalImages(renderMarkdownToHtml(data.content));
-  return renderTemplate(tplInfo.content, data);
+  const html = renderTemplate(tplInfo.content, data);
+  return injectKatexCss(html);
 }
 
 // 生成多个日记合并的 HTML
@@ -182,6 +255,7 @@ function buildMultiDiaryHtml(diaries, user, templateId) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <style>
     @page { size: A4; margin: 18mm 16mm; }
     body {
@@ -191,6 +265,7 @@ function buildMultiDiaryHtml(diaries, user, templateId) {
     }
     .multi-section { page-break-after: always; }
     .multi-section:last-child { page-break-after: auto; }
+    .katex-display { margin: 1em 0; overflow-x: hidden; }
   </style>
 </head>
 <body>

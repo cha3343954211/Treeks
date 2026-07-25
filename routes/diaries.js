@@ -132,6 +132,18 @@ router.get('/:id', (req, res) => {
      WHERE dc.diary_id = ?`
   ).all(id);
 
+  // 指定可见用户列表（仅 owner 可见完整列表；其他人只看是否能见）
+  let visibleTo = [];
+  let visibleToUsers = [];
+  if (isOwner) {
+    visibleTo = db.prepare('SELECT user_id FROM diary_visible_to WHERE diary_id = ?').all(id).map(r => r.user_id);
+    if (visibleTo.length) {
+      visibleToUsers = db.prepare(
+        `SELECT id, username, nickname, avatar FROM users WHERE id IN (${visibleTo.map(() => '?').join(',')})`
+      ).all(...visibleTo);
+    }
+  }
+
   res.json({
     ...row,
     tags: parseTags(row.tags),
@@ -139,7 +151,9 @@ router.get('/:id', (req, res) => {
     is_public: !!row.is_public,
     is_owner: isOwner,
     can_edit: canEdit,
-    collaborators
+    collaborators,
+    visibleTo,
+    visibleToUsers
   });
 });
 

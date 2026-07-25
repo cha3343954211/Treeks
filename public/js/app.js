@@ -155,6 +155,75 @@ function highlightCodeIn(container) {
   });
 }
 
+// ===== 编辑/预览滚动跟随 =====
+// split 模式下根据 textarea 滚动位置计算对应的预览滚动位置
+let scrollSyncLock = false; // 防止双向触发死循环
+function setupScrollSync() {
+  const textarea = document.getElementById('editor-textarea');
+  const previewPane = document.querySelector('.preview-pane');
+  if (!textarea || !previewPane) return;
+
+  const sync = (source, target) => {
+    if (scrollSyncLock) return;
+    const body = document.querySelector('.editor-body');
+    if (!body || !body.classList.contains('mode-split')) return; // 仅 split 模式生效
+    const srcMax = source.scrollHeight - source.clientHeight;
+    const tgtMax = target.scrollHeight - target.clientHeight;
+    if (srcMax <= 0 || tgtMax <= 0) return;
+    const ratio = source.scrollTop / srcMax;
+    scrollSyncLock = true;
+    target.scrollTop = ratio * tgtMax;
+    requestAnimationFrame(() => { scrollSyncLock = false; });
+  };
+
+  textarea.addEventListener('scroll', () => sync(textarea, previewPane));
+  previewPane.addEventListener('scroll', () => sync(previewPane, textarea));
+}
+
+// ===== 预览模式双击进入编辑 =====
+function setupPreviewDblClick() {
+  const preview = document.getElementById('editor-preview');
+  if (!preview) return;
+  preview.addEventListener('dblclick', (e) => {
+    const body = document.querySelector('.editor-body');
+    if (!body || !body.classList.contains('mode-preview')) return; // 仅 preview 模式
+    // 找到点击位置对应的 markdown 行：通过预览内元素的位置比例反推
+    const textarea = document.getElementById('editor-textarea');
+    const previewPane = document.querySelector('.preview-pane');
+    if (!textarea || !previewPane) return;
+
+    // 计算点击位置在预览中的比例
+    const rect = previewPane.getBoundingClientRect();
+    const y = e.clientY - rect.top + previewPane.scrollTop;
+    const ratio = y / Math.max(1, previewPane.scrollHeight);
+    const lines = textarea.value.split('\n');
+    const targetLine = Math.floor(ratio * lines.length);
+    // 计算目标行起始字符索引
+    let pos = 0;
+    for (let i = 0; i < targetLine && i < lines.length; i++) {
+      pos += lines[i].length + 1;
+    }
+
+    // 切换到编辑模式
+    document.querySelectorAll('#editor-mode-toggle .mode-btn').forEach(b => b.classList.remove('active'));
+    const editBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="edit"]');
+    if (editBtn) editBtn.classList.add('active');
+    body.classList.remove('mode-preview');
+    body.classList.add('mode-edit');
+
+    // 聚焦并定位光标
+    requestAnimationFrame(() => {
+      textarea.focus();
+      try {
+        textarea.setSelectionRange(pos, pos);
+        // 滚动到光标位置
+        const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 22;
+        textarea.scrollTop = targetLine * lineHeight;
+      } catch (err) {}
+    });
+  });
+}
+
 function escapeHtml(s) {
   if (!s) return '';
   return String(s).replace(/[&<>"']/g, c => ({
@@ -206,7 +275,10 @@ const state = {
   saveTimer: null,
   selectMode: false,
   exportTemplates: [],
-  exportContext: { ids: [], source: 'list' }
+  exportContext: { ids: [], source: 'list' },
+  // 编辑器：当前指定可见用户列表（避免每次保存时重新选择）
+  visibleTo: [],
+  visibleToUsers: [] // 缓存用户信息（id/username/nickname/avatar）用于展示
 };
 
 // 触发文件下载：使用 fetch + Blob，避免 ORB / 导航中止问题
@@ -439,12 +511,10 @@ function navigateTo(nav) {
   } else if (nav === 'shared') {
     showView('shared');
     loadSharedView();
-  } else if (nav === 'theme') {
-    showView('theme');
-    loadThemeSettings();
-  } else if (nav === 'my-data') {
-    showView('my-data');
-    loadMyData();
+  } else if (nav === 'theme' || nav === 'my-data') {
+    // 主题设置与我的数据已并入个人设置页
+    navigateTo('profile');
+    return;
   } else if (nav === 'admin-dashboard') {
     showView('admin-dashboard');
     loadAdminDashboard();
@@ -665,6 +735,10 @@ async function openEditor(id) {
       visibilitySelect.disabled = !isOwner;
       collabBtn.style.display = isOwner ? '' : 'none';
       sendLetterBtn.style.display = '';
+      // 加载已保存的指定可见用户列表
+      state.visibleTo = Array.isArray(d.visibleTo) ? d.visibleTo : [];
+      state.visibleToUsers = Array.isArray(d.visibleToUsers) ? d.visibleToUsers : [];
+      renderVisibleToBadge();
       setSaveStatus('已加载', 'saved');
       state.currentDiary = d;
       // 连接 WebSocket 协同
@@ -686,11 +760,77 @@ async function openEditor(id) {
     deleteBtn.style.display = 'none';
     collabBtn.style.display = 'none';
     sendLetterBtn.style.display = 'none';
+    // 清空指定可见用户
+    state.visibleTo = [];
+    state.visibleToUsers = [];
+    renderVisibleToBadge();
     setSaveStatus('草稿', 'draft');
     state.currentDiary = null;
   }
   updatePreview();
   updateWordCount();
+}
+
+// 渲染"指定可见用户"徽标（在可见性下拉框旁展示当前已选用户）
+function renderVisibleToBadge() {
+  let badge = document.getElementById('visible-to-badge');
+  if (!badge) {
+    // 动态创建容器，紧邻可见性 select
+    const select = document.getElementById('editor-visibility');
+    if (!select) return;
+    badge = document.createElement('div');
+    badge.id = 'visible-to-badge';
+    badge.className = 'visible-to-badge';
+    select.parentNode.insertBefore(badge, select.nextSibling);
+  }
+  const users = state.visibleToUsers || [];
+  if (!users.length) {
+    badge.innerHTML = '';
+    badge.style.display = 'none';
+    return;
+  }
+  badge.style.display = '';
+  badge.innerHTML = `
+    <div class="visible-to-users">
+      ${users.slice(0, 5).map(u => `
+        <span class="visible-to-chip" title="${escapeHtml(u.nickname || u.username)}">
+          ${userAvatarHtml(u, 18)}
+          <span class="visible-to-name">${escapeHtml(u.nickname || u.username)}</span>
+        </span>
+      `).join('')}
+      ${users.length > 5 ? `<span class="visible-to-more">+${users.length - 5}</span>` : ''}
+      <button type="button" class="visible-to-edit" id="btn-edit-visible-to" title="修改可见用户">管理</button>
+    </div>
+  `;
+  const editBtn = document.getElementById('btn-edit-visible-to');
+  if (editBtn) {
+    editBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      openVisibleToPicker();
+    });
+  }
+}
+
+// 弹出选择可见用户对话框
+async function openVisibleToPicker() {
+  try {
+    const friends = await api('/api/friends');
+    if (!friends.items.length) {
+      toast('请先添加好友才能使用指定可见功能', 'error');
+      return;
+    }
+    // 预选当前 state.visibleTo
+    const selected = await pickUsers(friends.items, '选择可见用户', state.visibleTo);
+    if (selected === null) return; // 取消
+    state.visibleTo = selected;
+    // 缓存用户信息用于展示
+    const map = new Map(friends.items.map(u => [u.id, u]));
+    state.visibleToUsers = selected.map(id => map.get(id)).filter(Boolean);
+    renderVisibleToBadge();
+    toast(selected.length ? `已选择 ${selected.length} 位用户` : '已清空可见用户', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 function setSaveStatus(text, type) {
@@ -731,16 +871,15 @@ async function saveDiary() {
     return;
   }
 
-  // 如果是指定可见，需要选择用户
+  // 如果是指定可见，使用 state.visibleTo（已通过下拉框 change 事件预选）
+  // 未选用户则提示用户先选择，不阻塞保存流程
   let visibleTo = null;
   if (visibility === 'specific') {
-    const friends = await api('/api/friends');
-    if (!friends.items.length) {
-      toast('请先添加好友才能使用指定可见功能', 'error');
+    if (!state.visibleTo || !state.visibleTo.length) {
+      toast('请先选择可见用户（点击下拉框旁"管理"按钮）', 'error');
       return;
     }
-    visibleTo = await pickUsers(friends.items, '选择可见用户');
-    if (visibleTo === null) return; // 取消
+    visibleTo = state.visibleTo;
   }
 
   const body = { title, content, mood, weather, tags, is_pinned, is_public, visibility };
@@ -829,9 +968,13 @@ function applyMarkdown(type) {
 
   ta.value = before + insert + after;
   ta.focus();
-  ta.setSelectionRange(newStart, newEnd);
-  updatePreview();
-  updateWordCount();
+  // 用 requestAnimationFrame + 防止 mousedown 抢焦点导致光标跳到末尾
+  requestAnimationFrame(() => {
+    ta.focus();
+    ta.setSelectionRange(newStart, newEnd);
+    updatePreview();
+    updateWordCount();
+  });
 }
 
 // ===== 图片上传 =====
@@ -1146,6 +1289,9 @@ function loadProfileView() {
   document.getElementById('profile-nickname').value = state.user.nickname || '';
   document.getElementById('profile-bio').value = state.user.bio || '';
   loadUserStorage();
+  // 顺带加载主题设置与我的数据（已并入个人设置页）
+  if (typeof loadThemeSettings === 'function') loadThemeSettings();
+  if (typeof loadMyData === 'function') loadMyData();
 }
 
 async function loadUserStorage() {
@@ -1247,6 +1393,32 @@ function bindEvents() {
   if (sidebarOverlay) {
     sidebarOverlay.addEventListener('click', closeSidebarDrawer);
   }
+
+  // 桌面端：侧栏收起/展开
+  const mainView = document.getElementById('main-view');
+  const btnCollapseSidebar = document.getElementById('btn-collapse-sidebar');
+  const btnExpandSidebar = document.getElementById('btn-expand-sidebar');
+  const toggleDesktopSidebar = (collapse) => {
+    if (!mainView) return;
+    if (collapse === undefined) {
+      collapse = !mainView.classList.contains('sidebar-collapsed');
+    }
+    mainView.classList.toggle('sidebar-collapsed', collapse);
+    try { localStorage.setItem('treeks:sidebar-collapsed', collapse ? '1' : '0'); } catch (e) {}
+  };
+  if (btnCollapseSidebar) {
+    btnCollapseSidebar.addEventListener('click', () => toggleDesktopSidebar(true));
+  }
+  if (btnExpandSidebar) {
+    btnExpandSidebar.addEventListener('click', () => toggleDesktopSidebar(false));
+  }
+  // 恢复上次状态
+  try {
+    if (localStorage.getItem('treeks:sidebar-collapsed') === '1') {
+      mainView.classList.add('sidebar-collapsed');
+    }
+  } catch (e) {}
+  window.__toggleDesktopSidebar = toggleDesktopSidebar;
   // 点击遮罩或再次点击品牌区也关闭
   function toggleSidebarDrawer() {
     if (!sidebarEl) return;
@@ -1396,8 +1568,9 @@ function bindEvents() {
     });
   });
 
-  // Markdown 工具栏
+  // Markdown 工具栏 - 阻止 mousedown 默认行为以保留 textarea 焦点与选区
   document.querySelectorAll('.tool-btn[data-md]').forEach(btn => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.addEventListener('click', () => applyMarkdown(btn.dataset.md));
   });
 
@@ -1419,6 +1592,12 @@ function bindEvents() {
     });
   });
 
+  // ===== 编辑/预览滚动跟随（split 模式下双向同步）=====
+  setupScrollSync();
+
+  // ===== 预览模式双击进入编辑 =====
+  setupPreviewDblClick();
+
   // 编辑器实时预览
   const textarea = document.getElementById('editor-textarea');
   let typingTimer;
@@ -1438,6 +1617,29 @@ function bindEvents() {
   document.getElementById('editor-title').addEventListener('input', (e) => {
     collabSendEdit('title', e.target.value);
   });
+
+  // 可见性切换：选"指定用户"时自动弹出选择框；切换到其他选项时清空缓存
+  const visibilitySelectEl = document.getElementById('editor-visibility');
+  if (visibilitySelectEl) {
+    visibilitySelectEl.addEventListener('change', async (e) => {
+      const val = e.target.value;
+      if (val === 'specific') {
+        // 已有可见用户则不强制重新选择（保留已加载的列表）
+        if (!state.visibleTo || state.visibleTo.length === 0) {
+          await openVisibleToPicker();
+          // 若用户取消且未选过，回退到 private 避免保存时阻塞
+          if (!state.visibleTo || state.visibleTo.length === 0) {
+            e.target.value = 'private';
+          }
+        }
+      } else {
+        // 切换到非 specific 时清空缓存（不影响已保存的日记下次再切回时重新加载）
+        state.visibleTo = [];
+        state.visibleToUsers = [];
+        renderVisibleToBadge();
+      }
+    });
+  }
 
   // 快捷键
   textarea.addEventListener('keydown', e => {
@@ -3228,76 +3430,215 @@ function showScheduleModal(defaultDate, existing) {
 }
 
 // ===== 主题设置 =====
-const THEMES = [
-  { id: 'green', name: '森林绿', desc: '清新自然，默认主题', colors: ['#4c995c', '#8fc391', '#ebf2eb'] },
-  { id: 'blue', name: '海洋蓝', desc: '宁静深邃', colors: ['#3b82f6', '#60a5fa', '#dbeafe'] },
-  { id: 'purple', name: '薰衣草', desc: '优雅浪漫', colors: ['#8b5cf6', '#a78bfa', '#ede9fe'] },
-  { id: 'orange', name: '暖阳橙', desc: '温暖活力', colors: ['#f59e0b', '#fbbf24', '#fef3c7'] },
-  { id: 'pink', name: '樱花粉', desc: '柔和甜美', colors: ['#ec4899', '#f472b6', '#fce7f3'] },
-  { id: 'dark', name: '深夜黑', desc: '护眼暗色', colors: ['#10b981', '#34d399', '#1f2937'] },
-  { id: 'auto', name: '跟随系统', desc: '根据系统设置自动切换', colors: ['#4c995c', '#8fc391', '#1f2937'] }
+// ===== 主题系统：调色板 + 明暗模式 =====
+const THEME_PALETTES = [
+  { id: 'green',  name: '森林绿',  desc: '清新自然，默认主题',  light: '#4c995c', dark: '#10b981', bg: '#ebf2eb' },
+  { id: 'blue',   name: '海洋蓝',  desc: '宁静深邃',            light: '#3b82f6', dark: '#3b82f6', bg: '#dbeafe' },
+  { id: 'purple', name: '薰衣草',  desc: '优雅浪漫',            light: '#8b5cf6', dark: '#a78bfa', bg: '#ede9fe' },
+  { id: 'orange', name: '暖阳橙',  desc: '温暖活力',            light: '#f59e0b', dark: '#fbbf24', bg: '#fef3c7' },
+  { id: 'pink',   name: '樱花粉',  desc: '柔和甜美',            light: '#ec4899', dark: '#f472b6', bg: '#fce7f3' },
+  { id: 'rose',   name: '玫瑰红',  desc: '热情鲜活',            light: '#f43f5e', dark: '#fb7185', bg: '#ffe4e6' },
+  { id: 'teal',   name: '青碧',    desc: '沉静如海',            light: '#14b8a6', dark: '#2dd4bf', bg: '#ccfbf1' },
+  { id: 'indigo', name: '靛蓝',    desc: '稳重神秘',            light: '#6366f1', dark: '#818cf8', bg: '#e0e7ff' }
 ];
+const THEME_MODES = [
+  { id: 'light', name: '浅色', icon: 'sun' },
+  { id: 'dark',  name: '深色', icon: 'moon' }
+];
+
+// 将数据库 theme 字符串解析为 { palette, mode, auto }
+function parseThemeValue(theme) {
+  if (!theme || theme === 'auto') return { palette: 'green', mode: 'light', auto: true };
+  // 旧值兼容：green/blue/purple/orange/pink → palette:light；dark → green:dark
+  const legacy = ['green', 'blue', 'purple', 'orange', 'pink'];
+  if (legacy.includes(theme)) return { palette: theme, mode: 'light', auto: false };
+  if (theme === 'dark') return { palette: 'green', mode: 'dark', auto: false };
+  // 新格式 palette:mode
+  const [p, m] = theme.split(':');
+  if (THEME_PALETTES.find(t => t.id === p) && THEME_MODES.find(t => t.id === m)) {
+    return { palette: p, mode: m, auto: false };
+  }
+  return { palette: 'green', mode: 'light', auto: false };
+}
+
+// 当前生效的 { palette, mode }（auto 模式根据系统偏好推导）
+function resolveCurrentTheme() {
+  const stored = state.user?.theme || localStorage.getItem('treeks_theme') || 'green';
+  const parsed = parseThemeValue(stored);
+  if (parsed.auto) {
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return { palette: parsed.palette, mode: prefersDark ? 'dark' : 'light', auto: true };
+  }
+  return { palette: parsed.palette, mode: parsed.mode, auto: false };
+}
 
 async function loadThemeSettings() {
   const c = document.getElementById('theme-settings-content');
-  const current = state.user?.theme || 'green';
+  if (!c) return;
+  const cur = resolveCurrentTheme();
+  const stored = state.user?.theme || localStorage.getItem('treeks_theme') || 'green';
+  const parsed = parseThemeValue(stored);
+  const isAuto = parsed.auto;
+
   c.innerHTML = `
-    <div class="theme-grid">
-      ${THEMES.map(t => `
-        <div class="theme-card ${current === t.id ? 'active' : ''}" data-theme="${t.id}">
-          <div class="theme-preview">
-            <div class="theme-preview-bar" style="background:${t.colors[0]}"></div>
-            <div class="theme-preview-body">
-              <div class="theme-preview-bg" style="background:${t.colors[2]}"></div>
-              <div class="theme-preview-card" style="border-color:${t.colors[1]}">
-                <div class="theme-preview-dot" style="background:${t.colors[1]}"></div>
-                <div class="theme-preview-line"></div>
-                <div class="theme-preview-line short"></div>
+    <div class="theme-settings-v2">
+      <!-- 明暗模式切换 -->
+      <div class="theme-section">
+        <div class="theme-section-title">
+          <span>明暗模式</span>
+          <label class="theme-auto-toggle">
+            <input type="checkbox" id="theme-auto-checkbox" ${isAuto ? 'checked' : ''}>
+            <span class="theme-auto-label">跟随系统</span>
+          </label>
+        </div>
+        <div class="theme-mode-row" ${isAuto ? 'style="opacity:0.4;pointer-events:none;"' : ''}>
+          ${THEME_MODES.map(m => `
+            <button class="theme-mode-card ${cur.mode === m.id && !isAuto ? 'active' : ''}" data-mode="${m.id}">
+              ${m.icon === 'sun'
+                ? '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
+                : '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>'
+              }
+              <span>${m.name}</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- 调色板选择 -->
+      <div class="theme-section">
+        <div class="theme-section-title"><span>主题色</span></div>
+        <div class="theme-palette-grid">
+          ${THEME_PALETTES.map(p => {
+            const active = cur.palette === p.id;
+            const previewColor = cur.mode === 'dark' ? p.dark : p.light;
+            const previewBg = cur.mode === 'dark' ? '#1c1c1e' : p.bg;
+            return `
+              <button class="theme-palette-card ${active ? 'active' : ''}" data-palette="${p.id}" title="${p.name} · ${p.desc}">
+                <div class="palette-preview" style="background:${previewBg};">
+                  <div class="palette-accent-bar" style="background:${previewColor};"></div>
+                  <div class="palette-mini-card">
+                    <div class="palette-mini-dot" style="background:${previewColor};"></div>
+                    <div class="palette-mini-line"></div>
+                    <div class="palette-mini-line short"></div>
+                  </div>
+                </div>
+                <div class="palette-info">
+                  <div class="palette-name">${p.name}</div>
+                  <div class="palette-swatch" style="background:${previewColor};"></div>
+                </div>
+              </button>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- 预览 -->
+      <div class="theme-section">
+        <div class="theme-section-title"><span>实时预览</span></div>
+        <div class="theme-live-preview" id="theme-live-preview">
+          <div class="tlp-topbar">
+            <div class="tlp-logo"></div>
+            <div class="tlp-title">Treeks</div>
+            <div class="tlp-actions">
+              <div class="tlp-btn"></div>
+              <div class="tlp-btn primary"></div>
+            </div>
+          </div>
+          <div class="tlp-body">
+            <div class="tlp-sidebar">
+              <div class="tlp-nav-item active"></div>
+              <div class="tlp-nav-item"></div>
+              <div class="tlp-nav-item"></div>
+              <div class="tlp-nav-item"></div>
+            </div>
+            <div class="tlp-content">
+              <div class="tlp-card">
+                <div class="tlp-card-header"></div>
+                <div class="tlp-card-line"></div>
+                <div class="tlp-card-line short"></div>
+                <div class="tlp-card-tag"></div>
+              </div>
+              <div class="tlp-card">
+                <div class="tlp-card-header"></div>
+                <div class="tlp-card-line"></div>
+                <div class="tlp-card-line short"></div>
               </div>
             </div>
           </div>
-          <div class="theme-info">
-            <div class="theme-name">${t.name}</div>
-            <div class="theme-desc">${t.desc}</div>
-            ${current === t.id ? '<span class="badge badge-active">当前使用</span>' : `<button class="btn btn-ghost btn-sm" data-action="apply-theme" data-theme="${t.id}">使用</button>`}
-          </div>
         </div>
-      `).join('')}
+      </div>
     </div>
   `;
-  c.querySelectorAll('[data-action="apply-theme"]').forEach(btn => {
+
+  // 事件绑定
+  const autoCheckbox = document.getElementById('theme-auto-checkbox');
+  autoCheckbox?.addEventListener('change', async (e) => {
+    const auto = e.target.checked;
+    const newTheme = auto ? 'auto' : `${cur.palette}:${cur.mode}`;
+    await saveThemeSetting(newTheme);
+    loadThemeSettings();
+  });
+
+  c.querySelectorAll('.theme-mode-card').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const theme = btn.dataset.theme;
-      try {
-        await api('/api/auth/theme', { method: 'PUT', body: JSON.stringify({ theme }) });
-        state.user.theme = theme;
-        localStorage.setItem('treeks_user', JSON.stringify(state.user));
-        applyTheme(theme);
-        toast('主题已切换', 'success');
-        loadThemeSettings();
-      } catch (e) { toast(e.message, 'error'); }
+      const mode = btn.dataset.mode;
+      await saveThemeSetting(`${cur.palette}:${mode}`);
+      loadThemeSettings();
+    });
+  });
+
+  c.querySelectorAll('.theme-palette-card').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const palette = btn.dataset.palette;
+      await saveThemeSetting(`${palette}:${cur.mode}`);
+      loadThemeSettings();
     });
   });
 }
 
-function applyTheme(theme) {
-  let resolved = theme;
-  // auto 模式根据系统偏好
-  if (theme === 'auto') {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    resolved = prefersDark ? 'dark' : 'green';
+async function saveThemeSetting(theme) {
+  try {
+    await api('/api/auth/theme', { method: 'PUT', body: JSON.stringify({ theme }) });
+    if (state.user) {
+      state.user.theme = theme;
+      localStorage.setItem('treeks_user', JSON.stringify(state.user));
+    }
+    localStorage.setItem('treeks_theme', theme);
+    applyTheme(theme);
+    toast('主题已更新', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
   }
-  document.documentElement.setAttribute('data-theme', resolved);
-  localStorage.setItem('treeks_theme', theme);
+}
 
-  // 同步切换 highlight.js 主题（暗色主题使用 github-dark）
+function applyTheme(theme) {
+  const { palette, mode } = resolveCurrentThemeForValue(theme);
+  const root = document.documentElement;
+  // 双属性方案
+  root.setAttribute('data-palette', palette);
+  root.setAttribute('data-mode', mode);
+  // 兼容旧 data-theme（仍设置一个）
+  root.setAttribute('data-theme', mode === 'dark' ? 'dark' : palette);
+  // 持久化原始值（保留 auto/palette:mode 信息）
+  if (theme) localStorage.setItem('treeks_theme', theme);
+
+  // 同步 highlight.js 主题
   const hljsLink = document.getElementById('hljs-theme');
   if (hljsLink) {
-    const isDark = resolved === 'dark';
-    hljsLink.href = isDark
+    hljsLink.href = mode === 'dark'
       ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css'
       : 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css';
   }
+}
+
+// 给定 theme 值，返回生效的 { palette, mode }
+function resolveCurrentThemeForValue(theme) {
+  const parsed = parseThemeValue(theme);
+  if (parsed.auto) {
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return { palette: parsed.palette, mode: prefersDark ? 'dark' : 'light' };
+  }
+  return { palette: parsed.palette, mode: parsed.mode };
 }
 
 // 监听系统主题变化（auto 模式）
@@ -3858,17 +4199,18 @@ async function openCollaboratorModal() {
 }
 
 // ===== 多选用户弹窗（用于指定可见） =====
-function pickUsers(users, title) {
+function pickUsers(users, title, preselected = []) {
   return new Promise(resolve => {
     let resolved = false;
     const safeResolve = (v) => {
       if (!resolved) { resolved = true; resolve(v); }
     };
+    const selectedSet = new Set((preselected || []).map(String));
     const body = `
       <div class="pick-users-list">
         ${users.map(u => `
           <label class="pick-user-item">
-            <input type="checkbox" value="${u.id}">
+            <input type="checkbox" value="${u.id}" ${selectedSet.has(String(u.id)) ? 'checked' : ''}>
             ${userAvatarHtml(u, 32)}
             <span>${escapeHtml(u.nickname || u.username)} <small>@${escapeHtml(u.username)}</small></span>
           </label>
