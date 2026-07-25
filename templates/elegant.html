@@ -3,16 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <title>{{title}}</title>
+  <!-- Web 字体（Google Fonts）：跨平台保证中英文显示一致，无网时降级到系统字体 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
   <style>
     @page {
       size: A4;
       margin: 25mm 25mm 25mm 25mm;
     }
     * { box-sizing: border-box; }
+    /* 衬线字体回退链：Web 字体优先 -> 系统衬线字体 -> serif */
     html, body {
       margin: 0;
       padding: 0;
-      font-family: "New York", "Iowan Old Style", Georgia, "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+      font-family: "Noto Serif SC", "New York", "Iowan Old Style", "Songti SC", "STSong", "STSongti-SC-Regular", "Source Han Serif SC", "Source Han Serif CN", "Noto Serif CJK SC", Georgia, "Times New Roman", serif;
       color: #2c2c2c;
       font-size: 14px;
       line-height: 1.85;
@@ -144,7 +149,7 @@
       text-align: center;
       font-size: 11px;
       color: #aaa;
-      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-family: "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     }
     h1, h2, h3, h4 { page-break-after: avoid; }
     pre, blockquote, table, img { page-break-inside: avoid; }

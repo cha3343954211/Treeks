@@ -178,9 +178,17 @@ function buildMultiDiaryHtml(diaries, user, templateId) {
 <head>
   <meta charset="UTF-8">
   <title>日记合集</title>
+  <!-- Web 字体：跨平台保证中英文显示一致 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
   <style>
     @page { size: A4; margin: 18mm 16mm; }
-    body { margin: 0; padding: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Microsoft YaHei UI", "Source Han Sans CN", "Source Han Sans SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", "Heiti SC", sans-serif;
+    }
     .multi-section { page-break-after: always; }
     .multi-section:last-child { page-break-after: auto; }
   </style>
@@ -228,9 +236,24 @@ async function htmlToPdf(html) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 60000 });
-    // 给字体/图片一点额外时间
-    await page.evaluateHandle('document.fonts.ready');
+    // 使用 domcontentloaded 更快进入，再主动等待字体；
+    // 模板里通常会引用 Google Fonts 之类的 web 字体，需要更长超时。
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 90000 });
+
+    // 主动等待所有 @font-face 字体加载完成（最多 60s，避免网络抖动时永远卡住）
+    try {
+      await Promise.race([
+        page.evaluate(() => document.fonts.ready),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('font-ready-timeout')), 60000))
+      ]);
+    } catch (e) {
+      // 字体加载超时也不致命，让浏览器使用系统字体回退
+      console.warn('[ExportPDF] 等待字体加载超时，将使用系统字体回退:', e.message);
+    }
+
+    // 额外等待 200ms 让字体子集被浏览器派发
+    await new Promise(r => setTimeout(r, 200));
+
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
