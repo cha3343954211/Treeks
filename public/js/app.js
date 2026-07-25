@@ -124,8 +124,19 @@ function excerpt(text, len = 120) {
 
 function formatDate(s) {
   if (!s) return '';
-  // 兼容旧数据：统一日期分隔符（/ → -），并将空格替换为 T 以符合 ISO 解析
-  const normalized = String(s).replace(/\//g, '-').replace(' ', 'T');
+  // 兼容三种格式：
+  // 1. 带时区 ISO: '2026-07-25T15:08:45+08:00'（中间件返回，new Date 可直接解析为绝对时间）
+  // 2. 旧格式: '2026-07-25 15:08:45' 或 '2026/01/05 12:00:00'（无时区，按服务器本地时间 UTC+8 处理）
+  let normalized = String(s).replace(/\//g, '-');
+  if (!/[+-]\d{2}:\d{2}$/.test(normalized) && !normalized.endsWith('Z')) {
+    // 无时区标识：替换空格为 T，并追加服务器时区 +08:00
+    normalized = normalized.replace(' ', 'T');
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(normalized)) {
+      normalized += '+08:00';
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      normalized += 'T00:00:00+08:00';
+    }
+  }
   const d = new Date(normalized);
   if (isNaN(d)) return s;
   const now = new Date();
