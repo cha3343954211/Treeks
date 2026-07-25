@@ -243,27 +243,34 @@ let closeModal = () => {};
 
 function showModal(title, body, onConfirm, opts = {}) {
   const modal = document.getElementById('modal');
+  // 关键：先关闭上一个弹窗（此时旧 close 被调用，display 设为 none），再设置新内容
+  closeModal();
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = body;
   document.getElementById('modal-cancel').style.display = opts.hideCancel ? 'none' : '';
   document.getElementById('modal-confirm').textContent = opts.confirmText || '确定';
   document.getElementById('modal-confirm').className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
-  modal.style.display = 'flex';
   const confirmBtn = document.getElementById('modal-confirm');
   const closeBtn = document.getElementById('modal-close');
   const cancelBtn = document.getElementById('modal-cancel');
   const backdrop = modal.querySelector('.modal-backdrop');
-  closeModal();
-  const close = () => { modal.style.display = 'none'; confirmBtn.onclick = null; };
+  const close = () => {
+    modal.style.display = 'none';
+    confirmBtn.onclick = null;
+    confirmBtn.disabled = false;
+  };
   closeModal = close;
   const onConfirmHandler = async () => {
     if (onConfirm) {
+      // 防止异步期间重复点击
+      confirmBtn.disabled = true;
       try {
         const result = await onConfirm();
         // 如果 onConfirm 返回 false，不关闭模态
-        if (result === false) return;
+        if (result === false) { confirmBtn.disabled = false; return; }
       } catch (e) {
         // 出错时不关闭模态，让用户看到 toast 错误提示后手动关闭或重试
+        confirmBtn.disabled = false;
         return;
       }
     }
@@ -273,6 +280,8 @@ function showModal(title, body, onConfirm, opts = {}) {
   closeBtn.onclick = close;
   cancelBtn.onclick = close;
   backdrop.onclick = close;
+  // 最后再显示，确保所有状态就绪
+  modal.style.display = 'flex';
 }
 
 // ===== 认证 =====
@@ -2849,22 +2858,30 @@ async function loadCalendarData() {
       api(`/api/diaries/stats/heatmap?year=${calState.year}`)
     ]);
     calState.schedules = sched.items || [];
-    // 将热力图日记数据转为按日期映射
-    calState.diaries = diaries.weeks || [];
+    // 后端 weeks 是数组的数组（每个内部数组含 7 个 day 对象），扁平化为按日期映射
+    const map = {};
+    (diaries.weeks || []).forEach(week => {
+      const days = Array.isArray(week) ? week : (week.days || []);
+      days.forEach(day => {
+        if (day && day.date) map[day.date] = day;
+      });
+    });
+    calState.diaries = map;
   } catch (e) {
     calState.schedules = [];
-    calState.diaries = [];
+    calState.diaries = {};
   }
 }
 
 function getDiaryCountForDate(dateStr) {
-  // 从热力图数据中查找
-  for (const week of calState.diaries) {
-    for (const day of (week.days || [])) {
-      if (day.date === dateStr) return day.count;
-    }
-  }
-  return 0;
+  const day = calState.diaries[dateStr];
+  return day ? (day.count || 0) : 0;
+}
+
+// 获取某天的日记标题列表（最多 5 篇）
+function getDiariesForDate(dateStr) {
+  const day = calState.diaries[dateStr];
+  return day ? (day.titles || []) : [];
 }
 
 function getSchedulesForDate(dateStr) {
@@ -2899,15 +2916,23 @@ function renderCalendar() {
     const dateStr = `${calState.year}-${String(calState.month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const daySchedules = getSchedulesForDate(dateStr);
     const diaryCount = getDiaryCountForDate(dateStr);
+    const dayDiaries = getDiariesForDate(dateStr);
     const isToday = dateStr === todayStr;
     const isSelected = dateStr === calState.selectedDate;
     const hasContent = daySchedules.length > 0 || diaryCount > 0;
 
+    // 日历格子内最多显示 2 条日记标题（截断），多了用 +N 表示
+    const maxDiaryShow = 2;
+    const diaryShowCount = Math.min(dayDiaries.length, maxDiaryShow);
+    const diaryRemain = dayDiaries.length - maxDiaryShow;
+
     html += `<div class="cal-day ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''} ${hasContent ? 'has-content' : ''}" data-date="${dateStr}">
       <div class="cal-day-num">${d}</div>
       ${diaryCount > 0 ? `<div class="cal-dot cal-dot-diary" title="${diaryCount} 篇日记"></div>` : ''}
-      ${daySchedules.slice(0, 3).map(s => `<div class="cal-event" style="border-left-color:${s.color || '#4c995c'}" title="${escapeHtml(s.title)}">${escapeHtml(s.title).slice(0, 8)}${s.start_time ? ' ' + s.start_time.slice(0, 5) : ''}</div>`).join('')}
-      ${daySchedules.length > 3 ? `<div class="cal-more">+${daySchedules.length - 3}</div>` : ''}
+      ${dayDiaries.slice(0, maxDiaryShow).map(di => `<div class="cal-event cal-event-diary" title="${escapeHtml(di.title)}">${escapeHtml(di.title).slice(0, 10)}${di.title.length > 10 ? '…' : ''}</div>`).join('')}
+      ${diaryRemain > 0 ? `<div class="cal-more">+${diaryRemain} 篇</div>` : ''}
+      ${daySchedules.slice(0, 2).map(s => `<div class="cal-event" style="border-left-color:${s.color || '#4c995c'}" title="${escapeHtml(s.title)}">${escapeHtml(s.title).slice(0, 8)}${s.start_time ? ' ' + s.start_time.slice(0, 5) : ''}</div>`).join('')}
+      ${daySchedules.length > 2 ? `<div class="cal-more">+${daySchedules.length - 2} 日程</div>` : ''}
     </div>`;
   }
   html += '</div>';
@@ -2940,6 +2965,7 @@ function renderDayDetail() {
 
   const schedules = getSchedulesForDate(date);
   const diaryCount = getDiaryCountForDate(date);
+  const dayDiaries = getDiariesForDate(date);
 
   let html = '';
 
@@ -2950,7 +2976,15 @@ function renderDayDetail() {
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           日记 (${diaryCount})
         </div>
-        <a href="#" class="day-link" data-action="view-diaries" data-date="${date}">查看当天日记 →</a>
+        <div class="day-diary-list">
+          ${dayDiaries.map(di => `
+            <div class="day-diary-item" data-action="open-diary" data-id="${di.id}" title="${escapeHtml(di.title)}">
+              ${di.is_pinned ? '<span class="pin-icon">📌</span>' : ''}
+              <span class="day-diary-title">${escapeHtml(di.title)}</span>
+            </div>
+          `).join('')}
+          ${diaryCount > dayDiaries.length ? `<a href="#" class="day-link" data-action="view-diaries" data-date="${date}">查看全部 ${diaryCount} 篇 →</a>` : ''}
+        </div>
       </div>
     `;
   }
@@ -3009,6 +3043,9 @@ function renderDayDetail() {
         document.getElementById('filter-tag').value = '';
         document.getElementById('search-input').value = '';
         navigateTo('list');
+      } else if (action === 'open-diary') {
+        // 在日历详情中点击日记标题直接打开编辑
+        if (id) openEditor(id);
       } else if (action === 'toggle-schedule') {
         toggleSchedule(id);
       } else if (action === 'edit-schedule') {
@@ -3592,13 +3629,13 @@ function openComposeLetterModal(diaryId, presetRecipientId) {
       if (presetRecipientId === f.id) opt.selected = true;
       sel.appendChild(opt);
     });
-  });
+  }).catch(e => toast('加载好友列表失败: ' + e.message, 'error'));
 
   if (diaryId) {
     document.getElementById('compose-attached-info').style.display = '';
     api(`/api/diaries/${diaryId}`).then(d => {
       document.getElementById('compose-attached-text').textContent = '附带日记: ' + (d.title || '(无标题)');
-    });
+    }).catch(e => toast('加载日记信息失败', 'error'));
   }
 }
 
@@ -3676,6 +3713,23 @@ async function openCollaboratorModal() {
   `;
   showModal('协作者管理', body, null, { hideCancel: true, confirmText: '关闭' });
 
+  // 先绑定"添加"按钮事件（避免 await 期间用户点击无效）
+  const addBtn = document.getElementById('collab-add-btn');
+  if (addBtn) {
+    addBtn.addEventListener('click', async () => {
+      const userId = parseInt(document.getElementById('collab-add-user').value, 10);
+      const role = document.getElementById('collab-add-role').value;
+      if (!userId) { toast('请选择好友', 'error'); return; }
+      try {
+        await api(`/api/diaries/${id}/collaborators`, {
+          method: 'POST', body: JSON.stringify({ userId, role })
+        });
+        toast('已添加协作者', 'success');
+        openCollaboratorModal();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+
   // 加载协作者列表
   try {
     const [collab, friends] = await Promise.all([
@@ -3717,26 +3771,18 @@ async function openCollaboratorModal() {
       sel.appendChild(opt);
     });
   } catch (e) {
-    document.getElementById('collab-list').innerHTML = `<p class="search-hint">${escapeHtml(e.message)}</p>`;
+    const listEl = document.getElementById('collab-list');
+    if (listEl) listEl.innerHTML = `<p class="search-hint">${escapeHtml(e.message)}</p>`;
   }
-
-  document.getElementById('collab-add-btn').addEventListener('click', async () => {
-    const userId = parseInt(document.getElementById('collab-add-user').value, 10);
-    const role = document.getElementById('collab-add-role').value;
-    if (!userId) { toast('请选择好友', 'error'); return; }
-    try {
-      await api(`/api/diaries/${id}/collaborators`, {
-        method: 'POST', body: JSON.stringify({ userId, role })
-      });
-      toast('已添加协作者', 'success');
-      openCollaboratorModal();
-    } catch (e) { toast(e.message, 'error'); }
-  });
 }
 
 // ===== 多选用户弹窗（用于指定可见） =====
 function pickUsers(users, title) {
   return new Promise(resolve => {
+    let resolved = false;
+    const safeResolve = (v) => {
+      if (!resolved) { resolved = true; resolve(v); }
+    };
     const body = `
       <div class="pick-users-list">
         ${users.map(u => `
@@ -3750,17 +3796,17 @@ function pickUsers(users, title) {
     `;
     showModal(title || '选择用户', body, () => {
       const checked = Array.from(document.querySelectorAll('.pick-users-list input:checked')).map(c => parseInt(c.value, 10));
-      resolve(checked);
+      safeResolve(checked);
     }, { confirmText: '确定' });
-    // 自定义取消：返回 null
-    const oldClose = closeModal;
-    closeModal = () => {
-      closeModal = oldClose;
-      closeModal();
-      resolve(null);
-    };
+    // 覆盖取消路径：点击取消/关闭/遮罩时也要 resolve(null)，避免 Promise 永久挂起
+    const cancelHandler = () => { closeModal(); safeResolve(null); };
+    document.getElementById('modal-cancel').onclick = cancelHandler;
+    document.getElementById('modal-close').onclick = cancelHandler;
+    document.querySelector('#modal .modal-backdrop').onclick = cancelHandler;
   });
 }
+// 暴露到 window 供自动化测试使用（生产环境无副作用）
+if (typeof window !== 'undefined') window.pickUsers = pickUsers;
 
 // ===== WebSocket 协同编辑 =====
 let collabWs = null;

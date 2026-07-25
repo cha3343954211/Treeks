@@ -357,6 +357,28 @@ router.get('/stats/heatmap', (req, res) => {
   // 统一日期分隔符（数据库返回 2026/01/05，转为 2026-01-05 与前端 ISO 对齐）
   rows.forEach(r => { map[r.date.replace(/\//g, '-')] = r.count; });
 
+  // 查询该年所有日记的标题（用于日历显示），按日期升序、置顶优先
+  const titleRows = db.prepare(
+    `SELECT id, title, substr(created_at, 1, 10) as date, is_pinned
+     FROM diaries
+     WHERE user_id = ?
+       AND substr(created_at, 1, 4) = ?
+     ORDER BY is_pinned DESC, created_at ASC`
+  ).all(req.user.id, String(year));
+  const titlesMap = {};
+  titleRows.forEach(r => {
+    const d = r.date.replace(/\//g, '-');
+    if (!titlesMap[d]) titlesMap[d] = [];
+    // 每天最多保留 5 篇标题（足够日历和详情面板使用）
+    if (titlesMap[d].length < 5) {
+      titlesMap[d].push({
+        id: r.id,
+        title: (r.title || '无标题').slice(0, 60),
+        is_pinned: !!r.is_pinned
+      });
+    }
+  });
+
   // 生成 365 天（按周对齐，从周日到周六）
   const start = new Date(`${year}-01-01T00:00:00`);
   const end = new Date(`${year}-12-31T00:00:00`);
@@ -375,6 +397,7 @@ router.get('/stats/heatmap', (req, res) => {
       week.push({
         date: dateStr,
         count: inYear ? (map[dateStr] || 0) : 0,
+        titles: inYear ? (titlesMap[dateStr] || []) : [],
         inYear
       });
       cursor.setDate(cursor.getDate() + 1);
