@@ -3899,7 +3899,67 @@ html, body {
   border-color: rgba(76, 153, 92, 0.2);
 }
 
+/* ===== 移动端顶部栏（默认隐藏，<768px 显示） ===== */
+.mobile-topbar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+  z-index: 50;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+.mobile-brand {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--accent), #3b8a48);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.mobile-menu-btn {
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.mobile-menu-btn:hover, .mobile-menu-btn:active {
+  background: var(--bg-hover);
+}
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 60;
+  opacity: 0;
+  transition: opacity 0.25s var(--ease);
+}
+.sidebar-overlay.show {
+  display: block;
+  opacity: 1;
+}
+
 /* ===== 响应式 ===== */
+/* 平板：<= 900px - 侧边栏收窄为图标 */
 @media (max-width: 900px) {
   .main-view { grid-template-columns: 64px 1fr; }
   .sidebar { padding: 12px 8px; }
@@ -3913,14 +3973,332 @@ html, body {
   .editor-body.mode-split .editor-pane, .editor-body:not(.mode-edit):not(.mode-preview) .editor-pane { border-right: none; }
   .content-header h2 { font-size: 24px; }
 }
-@media (max-width: 600px) {
-  .topbar { flex-direction: column; align-items: stretch; padding: 14px 16px; }
+
+/* 手机：<= 768px - 侧边栏改为抽屉式 */
+@media (max-width: 768px) {
+  .main-view {
+    grid-template-columns: 1fr;
+    padding-top: 52px;
+  }
+  .mobile-topbar { display: flex; }
+
+  /* 侧边栏抽屉 */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.3s var(--ease);
+    z-index: 70;
+    padding: 18px 14px;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.15);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  /* 抽屉模式下恢复完整显示 */
+  .sidebar-header .brand,
+  .user-info,
+  .nav-item span:not(.nav-icon),
+  .nav-new span:not(:first-child) {
+    display: block;
+  }
+  .nav-item {
+    justify-content: flex-start;
+    padding: 10px 12px;
+  }
+  .nav-new { padding: 12px 14px; }
+  .user-card { justify-content: flex-start; padding: 10px; }
+
+  /* topbar */
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 14px;
+    gap: 10px;
+    position: sticky;
+    top: 52px;
+  }
   .search-box { max-width: none; }
-  .topbar-actions { flex-wrap: wrap; }
-  .content-view { padding: 18px; }
-  .editor-options { flex-direction: column; }
+  .topbar-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .topbar-actions .filter-select,
+  .topbar-actions .filter-date {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  /* 内容视图 */
+  .content-view { padding: 16px 14px; }
+  .content-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .content-header h2 { font-size: 22px; }
+  .content-header-actions { width: 100%; }
+
+  /* 编辑器头部 */
+  .editor-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+  .editor-meta { width: 100%; }
+  .editor-title-input {
+    font-size: 20px !important;
+    width: 100%;
+  }
+  .editor-options {
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+  }
   .meta-input { width: 100%; }
-  .editor-header, .editor-toolbar, .editor-footer { padding-left: 16px; padding-right: 16px; }
+
+  /* 编辑器工具栏：横向滚动 */
+  .editor-toolbar {
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .editor-toolbar::-webkit-scrollbar { display: none; }
+  .tool-group { flex-shrink: 0; }
+  .tool-divider { flex-shrink: 0; }
+  .tool-spacer { display: none; }
+  .tool-mode-toggle { flex-shrink: 0; }
+  .tool-btn { min-width: 36px; height: 36px; }
+
+  /* 编辑器底部 */
+  .editor-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+  .editor-status {
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .editor-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-start;
+  }
+  .editor-actions .filter-select {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  /* 日记卡片 */
+  .diary-card { padding: 14px; }
+  .diary-card-title { font-size: 15px; }
+  .diary-card-meta { flex-wrap: wrap; gap: 6px; font-size: 11px; }
+  .diary-card-actions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* 模态弹窗 */
+  .modal { align-items: flex-end; }
+  .modal-content {
+    width: 100%;
+    max-width: 100%;
+    max-height: 90vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    animation: slideUp 0.3s var(--ease);
+  }
+  .modal-content-wide { max-width: 100%; }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(40px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .modal-header { padding: 16px 18px 10px; }
+  .modal-header h3 { font-size: 16px; }
+  .modal-body { padding: 4px 18px 16px; font-size: 13px; }
+  .modal-footer {
+    padding: 10px 18px 16px;
+    flex-direction: column-reverse;
+    gap: 6px;
+  }
+  .modal-footer .btn { width: 100%; }
+
+  /* 统计卡片 */
+  .stats-content {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .stat-card { padding: 16px; }
+  .admin-stats-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .admin-stat { padding: 14px; }
+
+  /* 日历 */
+  .cal-day { min-height: 48px; padding: 2px; }
+  .cal-event { display: none; }
+  .cal-day-num { font-size: 11px; }
+
+  /* 主题网格 */
+  .theme-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  /* 图片网格 */
+  .image-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+  }
+
+  /* 朋友/信件网格已通过 600px 媒体查询处理 */
+  /* 但确保 768px 下也合理 */
+  .friends-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* 协作者管理弹窗：横向布局优化 */
+  .collab-add-section {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .collab-add-section .filter-select { width: 100%; }
+
+  /* 信件详情 */
+  .letter-detail-content { padding: 10px; font-size: 13px; }
+
+  /* 编辑器正文 */
+  .editor-textarea {
+    font-size: 15px;
+    line-height: 1.7;
+    padding: 14px;
+  }
+  .preview-content {
+    font-size: 15px;
+    padding: 14px;
+  }
+
+  /* 登录注册页 */
+  .auth-card {
+    padding: 22px 18px;
+    margin: 16px;
+    max-width: 100%;
+  }
+  .auth-view { padding: 60px 12px 20px; }
+  .auth-logo h1 { font-size: 26px; }
+  .auth-subtitle { font-size: 13px; }
+
+  /* 热力图 - 横向滚动 */
+  .heatmap-scroll { padding-bottom: 8px; }
+
+  /* 模式切换按钮组在小屏更紧凑 */
+  .tool-mode-toggle .mode-btn {
+    min-width: 36px;
+    height: 32px;
+  }
+
+  /* 协同在线显示 */
+  .collab-presence {
+    margin-left: auto;
+    margin-right: 0;
+  }
+
+  /* 用户卡片 */
+  .user-card { padding: 8px; }
+  .user-name { font-size: 14px; }
+  .user-handle { font-size: 11px; }
+}
+
+/* 超小屏幕：<= 414px - 进一步紧凑 */
+@media (max-width: 414px) {
+  .content-view { padding: 12px 10px; }
+  .topbar { padding: 10px; }
+  .editor-header, .editor-toolbar, .editor-footer { padding-left: 10px; padding-right: 10px; }
+  .diary-card { padding: 12px; }
+  .diary-card-title { font-size: 14px; }
+  .friend-card { padding: 12px; gap: 10px; }
+  .friend-actions .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .letter-card { padding: 12px; }
+  .modal-body { padding: 4px 14px 14px; }
+  .modal-header { padding: 14px 14px 8px; }
+  .modal-footer { padding: 8px 14px 12px; }
+  .auth-card { padding: 18px 14px; margin: 8px; }
+  .auth-logo h1 { font-size: 22px; }
+  .theme-grid { grid-template-columns: 1fr; }
+  .image-grid { grid-template-columns: 1fr 1fr; }
+  .editor-textarea { font-size: 14px; padding: 12px; }
+  .nav-badge { min-width: 16px; height: 16px; font-size: 10px; }
+  .content-header h2 { font-size: 20px; }
+}
+
+/* 移动端触摸优化 */
+@media (hover: none) and (pointer: coarse) {
+  /* 触摸设备禁用 hover 效果（避免粘性 hover） */
+  .diary-card:hover,
+  .friend-card:hover,
+  .letter-card:hover,
+  .shared-diary-card:hover,
+  .stat-card:hover {
+    transform: none;
+    box-shadow: var(--shadow);
+  }
+  .btn:hover { transform: none; }
+  .tool-btn:hover { background: transparent; color: var(--fg-secondary); }
+  .tool-btn:active { background: var(--accent-soft); color: var(--accent); }
+
+  /* 增大触摸目标 */
+  .nav-item { min-height: 44px; }
+  .btn-sm { min-height: 32px; }
+  .tool-btn { min-width: 36px; height: 36px; }
+  .modal-close { width: 32px; height: 32px; }
+  .mobile-menu-btn { width: 42px; height: 42px; }
+
+  /* 触摸点击反馈 */
+  .diary-card:active,
+  .friend-card:active,
+  .letter-card:active {
+    transform: scale(0.98);
+    transition: transform 0.1s;
+  }
+}
+
+/* 横屏模式优化 */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+  .mobile-topbar { height: 44px; }
+  .main-view { padding-top: 44px; }
+  .topbar { top: 44px; padding: 8px 12px; }
+  .topbar { flex-direction: row; flex-wrap: wrap; }
+  .content-view { padding: 12px; }
+  .modal { align-items: center; }
+  .modal-content {
+    max-height: 95vh;
+    border-radius: var(--radius-lg);
+    animation: scaleIn 0.3s var(--ease-spring);
+  }
+}
+
+/* 暗色主题：移动端顶栏适配 */
+[data-theme="dark"] .mobile-topbar {
+  background: rgba(28, 28, 30, 0.85);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"] .mobile-menu-btn { color: var(--fg); }
+[data-theme="dark"] .mobile-menu-btn:hover,
+[data-theme="dark"] .mobile-menu-btn:active {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* 选中文本颜色 */

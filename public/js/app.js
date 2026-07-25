@@ -1151,13 +1151,58 @@ function bindEvents() {
 
   // 侧边栏导航
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(btn => {
-    btn.addEventListener('click', () => navigateTo(btn.dataset.nav));
+    btn.addEventListener('click', () => {
+      navigateTo(btn.dataset.nav);
+      // 移动端：点击导航后自动收起抽屉
+      if (window.innerWidth <= 768) closeSidebarDrawer();
+    });
   });
 
   // 新建日记
   document.getElementById('btn-new-diary').addEventListener('click', () => {
     state.page = 1;
     openEditor(null);
+    if (window.innerWidth <= 768) closeSidebarDrawer();
+  });
+
+  // 移动端：抽屉式侧边栏开关
+  const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
+  const sidebarOverlay = document.getElementById('sidebar-overlay');
+  const sidebarEl = document.querySelector('.sidebar');
+  if (btnToggleSidebar) {
+    btnToggleSidebar.addEventListener('click', toggleSidebarDrawer);
+  }
+  if (sidebarOverlay) {
+    sidebarOverlay.addEventListener('click', closeSidebarDrawer);
+  }
+  // 点击遮罩或再次点击品牌区也关闭
+  function toggleSidebarDrawer() {
+    if (!sidebarEl) return;
+    const isOpen = sidebarEl.classList.toggle('open');
+    if (sidebarOverlay) sidebarOverlay.classList.toggle('show', isOpen);
+    document.body.style.overflow = isOpen ? 'hidden' : '';
+  }
+  function closeSidebarDrawer() {
+    if (!sidebarEl) return;
+    sidebarEl.classList.remove('open');
+    if (sidebarOverlay) sidebarOverlay.classList.remove('show');
+    document.body.style.overflow = '';
+  }
+  // 暴露给其他模块使用（如点击导航后关闭）
+  window.__closeSidebarDrawer = closeSidebarDrawer;
+
+  // 移动端：顶栏新建日记按钮
+  const btnNewDiaryMobile = document.getElementById('btn-new-diary-mobile');
+  if (btnNewDiaryMobile) {
+    btnNewDiaryMobile.addEventListener('click', () => {
+      state.page = 1;
+      openEditor(null);
+    });
+  }
+
+  // 窗口尺寸变化时重置抽屉状态（避免桌面端残留 open 类）
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 768) closeSidebarDrawer();
   });
 
   // 退出登录
