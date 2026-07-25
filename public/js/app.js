@@ -256,13 +256,14 @@ function showModal(title, body, onConfirm, opts = {}) {
   closeModal();
   const close = () => { modal.style.display = 'none'; confirmBtn.onclick = null; };
   closeModal = close;
-  const onConfirmHandler = () => {
+  const onConfirmHandler = async () => {
     if (onConfirm) {
-      const result = onConfirm();
-      // 如果 onConfirm 返回 false（同步），不关闭模态
-      if (result === false) return;
-      // 如果是 Promise，等待结果；出错时不关闭
-      if (result && typeof result.then === 'function') {
+      try {
+        const result = await onConfirm();
+        // 如果 onConfirm 返回 false，不关闭模态
+        if (result === false) return;
+      } catch (e) {
+        // 出错时不关闭模态，让用户看到 toast 错误提示后手动关闭或重试
         return;
       }
     }
