@@ -90,11 +90,57 @@ if (window.marked) {
 function renderMarkdown(text) {
   if (!text) return '<p style="color:#999;font-style:italic;">预览区域为空，开始书写吧...</p>';
   try {
-    const raw = marked.parse(text);
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ['target'] });
+    // 先抽取 LaTeX 公式占位，避免被 marked 当成普通文本处理（反斜杠转义、下划线等会破坏公式）
+    const placeholders = [];
+    const stash = (html) => {
+      const key = '\u0000KATEX' + placeholders.length + '\u0000';
+      placeholders.push(html);
+      return key;
+    };
+
+    // 块级公式 $$...$$ （优先匹配，避免被行内规则吞掉）
+    text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
+      try {
+        return stash(renderKatex(expr, true));
+      } catch (e) {
+        return stash('<span style="color:#c75450;">[公式错误: ' + escapeHtml(e.message) + ']</span>');
+      }
+    });
+
+    // 行内公式 $...$（不匹配跨行、不匹配空内容；避开 \$ 转义）
+    text = text.replace(/(^|[^\\])\$([^\n$]+?)\$/g, (_, pre, expr) => {
+      try {
+        return pre + stash(renderKatex(expr, false));
+      } catch (e) {
+        return pre + stash('<span style="color:#c75450;">[公式错误: ' + escapeHtml(e.message) + ']</span>');
+      }
+    });
+
+    let raw = marked.parse(text);
+
+    // 还原公式占位
+    placeholders.forEach((html, i) => {
+      raw = raw.replace('\u0000KATEX' + i + '\u0000', html);
+    });
+
+    return DOMPurify.sanitize(raw, {
+      ADD_ATTR: ['target'],
+      ADD_TAGS: ['span', 'math', 'semantics', 'annotation']
+    });
   } catch (e) {
     return '<p style="color:#c75450;">Markdown 解析错误</p>';
   }
+}
+
+// 调用 KaTeX 渲染公式
+function renderKatex(expr, displayMode) {
+  if (!window.katex) return '<code>' + escapeHtml('$' + (displayMode ? '$' : '') + expr + '$' + (displayMode ? '$' : '') + '</code>');
+  return window.katex.renderToString(expr, {
+    displayMode,
+    throwOnError: true,
+    output: 'html',
+    strict: 'ignore'
+  });
 }
 
 // 对已渲染的 HTML 进行代码高亮
