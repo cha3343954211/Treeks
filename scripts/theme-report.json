@@ -1,0 +1,63 @@
+{
+  "initialTheme": {
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "bodyColor": "rgb(29, 42, 32)",
+    "treeksTheme": "green",
+    "treeksUser": null
+  },
+  "login": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\login.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)"
+  },
+  "postLoginTheme": {
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "treeksTheme": "green",
+    "username": "Chara",
+    "isAdmin": 1
+  },
+  "diaries": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\diaries-page.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "file": "diaries-page.png"
+  },
+  "editor": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\editor-mode-split.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "mode": "editor-body mode-split"
+  },
+  "calendar": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\calendar-schedule.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "file": "calendar-schedule.png"
+  },
+  "theme": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\theme-settings.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "file": "theme-settings.png"
+  },
+  "dataManagement": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\data-management.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "file": "data-management.png"
+  },
+  "adminOverview": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\admin-overview.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "file": "admin-overview.png"
+  },
+  "systemPerformance": {
+    "path": "G:\\CodeworksG\\works\\Treeks\\docs\\screenshots\\system-performance-full.png",
+    "dataTheme": "green",
+    "bodyBg": "rgba(0, 0, 0, 0)",
+    "file": "system-performance-full.png"
+  }
+}
