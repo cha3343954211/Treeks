@@ -124,7 +124,9 @@ function excerpt(text, len = 120) {
 
 function formatDate(s) {
   if (!s) return '';
-  const d = new Date(s.replace(' ', 'T'));
+  // 兼容旧数据：统一日期分隔符（/ → -），并将空格替换为 T 以符合 ISO 解析
+  const normalized = String(s).replace(/\//g, '-').replace(' ', 'T');
+  const d = new Date(normalized);
   if (isNaN(d)) return s;
   const now = new Date();
   const diff = (now - d) / 1000;
@@ -1830,8 +1832,9 @@ async function loadAdminDashboard() {
     }).join('');
 
     const renderTrendAxis = (arr) => arr.map(d => {
-      const dObj = new Date(d.date);
-      const label = isNaN(dObj) ? d.date.slice(5) : `${dObj.getMonth() + 1}/${dObj.getDate()}`;
+      // 兼容斜杠格式并追加 T00:00:00 强制按本地时间解析（避免 YYYY-MM-DD 被当作 UTC）
+      const dObj = new Date(String(d.date).replace(/\//g, '-') + 'T00:00:00');
+      const label = isNaN(dObj) ? String(d.date).slice(5) : `${dObj.getMonth() + 1}/${dObj.getDate()}`;
       return `<div class="trend-axis-label">${label}</div>`;
     }).join('');
 
@@ -3936,20 +3939,6 @@ function renderCollabPresence(diaryId, users) {
     const name = u.nickname || u.username || '?';
     return `<div class="collab-avatar" title="${escapeHtml(name)} 在线" style="background:${avatarColor(u.id)};">${escapeHtml(name.charAt(0).toUpperCase())}</div>`;
   }).join('') + (users.length > 5 ? `<div class="collab-avatar collab-more">+${users.length - 5}</div>` : '');
-}
-
-// 日期格式化
-function formatDate(s) {
-  if (!s) return '';
-  const d = new Date(s.replace(' ', 'T'));
-  if (isNaN(d)) return s;
-  const now = new Date();
-  const diff = (now - d) / 1000;
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
-  if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
-  if (diff < 604800) return Math.floor(diff / 86400) + '天前';
-  return d.toLocaleDateString('zh-CN');
 }
 
 document.addEventListener('DOMContentLoaded', init);

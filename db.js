@@ -212,6 +212,28 @@ function initDatabase() {
     }
   }
 
+  // 数据迁移：统一日期格式（将 YYYY/MM/DD 修复为 YYYY-MM-DD）
+  // 旧版本导入的数据可能使用斜杠分隔符，导致前端解析和日期比较出错
+  const dateTables = [
+    'diaries', 'users', 'schedules', 'letters', 'friend_requests',
+    'admin_logs', 'images', 'diary_collaborators', 'settings'
+  ];
+  const dateColumns = ['created_at', 'updated_at', 'read_at'];
+  let migrated = 0;
+  for (const table of dateTables) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    for (const col of dateColumns) {
+      if (cols.includes(col)) {
+        const result = db.prepare(`UPDATE ${table} SET ${col} = REPLACE(${col}, '/', '-') WHERE ${col} LIKE '%/%'`).run();
+        if (result.changes > 0) {
+          console.log(`[DB] 日期格式迁移: ${table}.${col} 修复 ${result.changes} 条记录`);
+          migrated += result.changes;
+        }
+      }
+    }
+  }
+  if (migrated > 0) console.log(`[DB] 共修复 ${migrated} 条日期格式记录`);
+
   console.log('[DB] 数据库初始化完成');
 }
 

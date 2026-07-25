@@ -39,9 +39,9 @@ router.get('/dashboard', (req, res) => {
   const totalImageSize = db.prepare('SELECT COALESCE(SUM(size),0) as s FROM images').get().s;
   const totalStorageLimit = db.prepare('SELECT COALESCE(SUM(storage_limit),0) as s FROM users').get().s;
 
-  // 最近 7 天注册数
+  // 最近 7 天注册数（REPLACE 统一日期分隔符，兼容旧数据 YYYY/MM/DD）
   const recentUsers = db.prepare(
-    `SELECT substr(created_at,1,10) as date, COUNT(*) as count
+    `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(*) as count
      FROM users
      WHERE created_at >= datetime('now','localtime','-7 days')
      GROUP BY date ORDER BY date`
@@ -49,7 +49,7 @@ router.get('/dashboard', (req, res) => {
 
   // 最近 7 天日记数
   const recentDiaries = db.prepare(
-    `SELECT substr(created_at,1,10) as date, COUNT(*) as count
+    `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(*) as count
      FROM diaries
      WHERE created_at >= datetime('now','localtime','-7 days')
      GROUP BY date ORDER BY date`
@@ -57,7 +57,7 @@ router.get('/dashboard', (req, res) => {
 
   // 最近 14 天每日活跃用户
   const recentActive = db.prepare(
-    `SELECT substr(created_at,1,10) as date, COUNT(DISTINCT user_id) as count
+    `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(DISTINCT user_id) as count
      FROM diaries
      WHERE created_at >= datetime('now','localtime','-14 days')
      GROUP BY date ORDER BY date`
