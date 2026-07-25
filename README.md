@@ -30,6 +30,9 @@
 - **7 套主题**：森林绿（默认）、海洋蓝、薰衣草、暖橙、樱花粉、午夜黑、跟随系统
 - **即时切换**：基于 CSS 变量，切换无需刷新
 - **用户独立**：每个用户的主题偏好独立保存
+- **完整适配**：所有页面（含管理后台与系统清理）在每种主题下均有良好对比度
+
+> 以下所有截图均在默认「森林绿」白色淡绿主题下截取
 
 ![主题设置](docs/screenshots/theme-settings.png)
 
@@ -124,12 +127,6 @@ Authorization: Bearer <admin-token>
   "targets": ["root-junk", "orphan-uploads", "empty-dirs", "db-wal"]
 }
 ```
-
-### 🌙 暗色主题
-
-完整的暗色主题适配，所有页面（包括系统清理）在午夜黑主题下均有良好对比度与可读性。
-
-![黑色主题下的系统性能](docs/screenshots/dark-theme-system-performance-full.png)
 
 ---
 
