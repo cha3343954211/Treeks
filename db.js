@@ -2,7 +2,8 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, 'data');
+// 数据库目录：优先使用启动时 bootstrap 设置的环境变量，否则使用默认位置
+const DB_PATH = process.env.TREEKS_RUNTIME_DB_DIR || path.join(__dirname, 'data');
 if (!fs.existsSync(DB_PATH)) {
   fs.mkdirSync(DB_PATH, { recursive: true });
 }

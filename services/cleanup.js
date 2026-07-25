@@ -4,9 +4,13 @@
 const path = require('path');
 const fs = require('fs');
 const { db } = require('../db');
+const { getRuntimeUploadDir } = require('./storageLocation');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
-const UPLOADS_DIR = path.join(PROJECT_ROOT, 'public', 'uploads');
+// 注意：UPLOADS_DIR 在调用时动态获取，以支持运行时切换存储位置
+function getUploadsDir() {
+  return getRuntimeUploadDir();
+}
 
 // 识别为垃圾文件的根目录测试产物（仅扫描根目录，不递归）
 const ROOT_JUNK_PATTERNS = [
@@ -67,9 +71,10 @@ function scanRootJunk() {
 }
 
 // ===== 2. 扫描孤儿上传文件 =====
-// 孤儿文件：存在于 public/uploads/<uid>/ 但 images 表中没有对应记录
+// 孤儿文件：存在于 uploads/<uid>/ 但 images 表中没有对应记录
 function scanOrphanUploads() {
   const items = [];
+  const UPLOADS_DIR = getUploadsDir();
   if (!fs.existsSync(UPLOADS_DIR)) return items;
 
   // 获取所有数据库中记录的图片 (user_id + filename)
@@ -113,6 +118,7 @@ function scanOrphanUploads() {
 // 用户已被删除但目录残留（非 .gitkeep 内容）
 function scanEmptyUploadDirs() {
   const items = [];
+  const UPLOADS_DIR = getUploadsDir();
   if (!fs.existsSync(UPLOADS_DIR)) return items;
 
   // 获取所有有效用户 ID

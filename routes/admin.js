@@ -2,6 +2,7 @@ const express = require('express');
 const os = require('os');
 const { db } = require('../db');
 const { authRequired, adminRequired } = require('../middleware/auth');
+const { getRuntimeUploadDir, getRuntimeDbDir } = require('../services/storageLocation');
 
 const router = express.Router();
 
@@ -235,7 +236,7 @@ router.delete('/users/:id', (req, res) => {
   // 删除用户上传的文件
   const path = require('path');
   const fs = require('fs');
-  const userDir = path.join(__dirname, '..', 'public', 'uploads', String(id));
+  const userDir = path.join(getRuntimeUploadDir(), String(id));
   if (fs.existsSync(userDir)) {
     try { fs.rmSync(userDir, { recursive: true, force: true }); } catch (e) { console.error('删除用户目录失败', e.message); }
   }
@@ -271,7 +272,7 @@ router.get('/system', (req, res) => {
   // 磁盘使用（仅 uploads 目录）
   const fs = require('fs');
   const path = require('path');
-  const uploadsDir = path.join(__dirname, '..', 'public', 'uploads');
+  const uploadsDir = getRuntimeUploadDir();
   let uploadsSize = 0;
   let uploadsFiles = 0;
   const calcDir = (dir) => {
@@ -359,6 +360,86 @@ router.post('/system/cleanup', (req, res) => {
   } catch (e) {
     console.error('[Cleanup Error]', e);
     res.status(500).json({ error: '清理失败: ' + e.message });
+  }
+});
+
+// ===== 平台数据存储位置管理 =====
+const storageLocation = require('../services/storageLocation');
+
+// 查询当前存储位置 + 系统可选盘符 + 当前数据大小
+router.get('/storage-location', (req, res) => {
+  try {
+    const config = storageLocation.getStorageConfig();
+    const dbStats = storageLocation.dirStats(config.dbDir);
+    const uploadStats = storageLocation.dirStats(config.uploadDir);
+    const drives = storageLocation.listStorageDrives();
+    res.json({
+      current: {
+        customPath: config.customPath,
+        isCustom: config.isCustom,
+        dbDir: config.dbDir,
+        uploadDir: config.uploadDir,
+        defaultDbDir: storageLocation.DEFAULT_DB_DIR,
+        defaultUploadDir: storageLocation.DEFAULT_UPLOAD_DIR
+      },
+      stats: {
+        dbSize: dbStats.size,
+        uploadSize: uploadStats.size,
+        uploadFiles: uploadStats.files
+      },
+      drives,
+      needsRestart: config.isCustom && !process.env.TREEKS_RUNTIME_DB_DIR
+    });
+  } catch (e) {
+    console.error('[StorageLocation GET Error]', e);
+    res.status(500).json({ error: '查询存储位置失败: ' + e.message });
+  }
+});
+
+// 校验目标路径是否可用（不实际切换）
+router.post('/storage-location/validate', (req, res) => {
+  try {
+    const { targetPath } = req.body || {};
+    const result = storageLocation.validateTargetPath(targetPath);
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+    res.json({ ok: true, abs: result.abs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 切换存储位置（迁移数据 + 写入配置）
+router.post('/storage-location/switch', (req, res) => {
+  try {
+    const { targetPath, migrate = true } = req.body || {};
+    const result = storageLocation.switchStorageLocation(targetPath, { migrate });
+    logAction(req.user.id, 'switch_storage_location', targetPath, result);
+    res.json({
+      message: '存储位置已切换，需要重启服务才能生效',
+      result,
+      needsRestart: true
+    });
+  } catch (e) {
+    console.error('[StorageLocation Switch Error]', e);
+    if (e.code === 'INVALID_PATH') {
+      return res.status(400).json({ error: e.message });
+    }
+    res.status(500).json({ error: '切换存储位置失败: ' + e.message });
+  }
+});
+
+// 恢复默认存储位置
+router.post('/storage-location/reset', (req, res) => {
+  try {
+    const result = storageLocation.resetStorageLocation();
+    logAction(req.user.id, 'reset_storage_location', null, result);
+    res.json({
+      message: result.message,
+      result,
+      needsRestart: result.reset
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

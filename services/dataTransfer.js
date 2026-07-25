@@ -4,8 +4,12 @@
 const path = require('path');
 const fs = require('fs');
 const { db } = require('../db');
+const { getRuntimeUploadDir } = require('./storageLocation');
 
-const UPLOADS_DIR = path.join(__dirname, '..', 'public', 'uploads');
+// 使用运行时配置的上传目录
+function getUploadsDir() {
+  return getRuntimeUploadDir();
+}
 const { ZipArchive } = require('archiver');
 
 const FORMAT_VERSION = '1.0';
@@ -132,8 +136,8 @@ function buildExportZip(data, includeImages = false) {
     let added = 0;
     let missing = 0;
     for (const img of data.images) {
-      // 图片存储路径：public/uploads/<user_id>/<filename>
-      const localPath = path.join(UPLOADS_DIR, String(img.user_id), img.filename);
+      // 图片存储路径：<uploads_dir>/<user_id>/<filename>
+      const localPath = path.join(getUploadsDir(), String(img.user_id), img.filename);
       if (fs.existsSync(localPath)) {
         archive.file(localPath, { name: `images/${img.user_id}/${img.filename}` });
         added++;

@@ -1,9 +1,13 @@
 const path = require('path');
 const fs = require('fs');
 const { db } = require('../db');
+const { getRuntimeUploadDir } = require('./storageLocation');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
-const UPLOADS_DIR = path.join(__dirname, '..', 'public', 'uploads');
+// 使用运行时配置的上传目录
+function getUploadsDir() {
+  return getRuntimeUploadDir();
+}
 
 // 简易模板渲染（不引入 handlebars，自行实现 {{var}} / {{#if}} / {{#each}}）
 function renderTemplate(tpl, data) {
@@ -74,10 +78,10 @@ function getTemplateContent(templateId) {
 // 把相对/绝对 URL 转换为本地文件路径，便于 puppeteer 加载本地图片
 function resolveImageUrl(src, baseUrl) {
   if (!src) return null;
-  // /uploads/xxx.png
+  // /uploads/<uid>/<filename>
   if (src.startsWith('/uploads/')) {
-    const filename = path.basename(src);
-    const localPath = path.join(UPLOADS_DIR, filename);
+    const relPath = src.slice('/uploads/'.length);
+    const localPath = path.join(getUploadsDir(), relPath);
     if (fs.existsSync(localPath)) return localPath;
   }
   // http(s)://...

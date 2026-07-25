@@ -4,6 +4,11 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+
+// 启动前引导：读取自定义存储位置并设置 env 变量（必须在 db 加载前执行）
+const { bootstrapStorageConfig, getRuntimeUploadDir } = require('./services/storageLocation');
+const storageBootstrap = bootstrapStorageConfig();
+
 const { initDatabase } = require('./db');
 
 // 初始化数据库
@@ -13,8 +18,8 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
-// 确保上传目录存在
-const uploadDir = path.join(__dirname, process.env.UPLOAD_DIR || 'public/uploads');
+// 确保上传目录存在（使用运行时配置的路径）
+const uploadDir = getRuntimeUploadDir();
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -41,8 +46,8 @@ app.use('/api/letters', require('./routes/letters'));
 // WebSocket 协同编辑
 require('./services/collab').setupWebSocket(server);
 
-// 静态文件访问上传的图片
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+// 静态文件访问上传的图片（使用运行时配置的上传目录）
+app.use('/uploads', express.static(getRuntimeUploadDir()));
 
 // 健康检查
 app.get('/api/health', (req, res) => {
@@ -68,5 +73,12 @@ app.use((err, req, res, next) => {
 server.listen(PORT, () => {
   console.log(`\n🌲 Treeks 日记应用已启动`);
   console.log(`   本地访问: http://localhost:${PORT}`);
-  console.log(`   上传目录: ${uploadDir}\n`);
+  console.log(`   数据库目录: ${storageBootstrap.dbDir}`);
+  console.log(`   上传目录: ${uploadDir}`);
+  if (storageBootstrap.customPath) {
+    console.log(`   自定义存储位置: ${storageBootstrap.customPath}`);
+  } else {
+    console.log(`   存储模式: 默认位置`);
+  }
+  console.log('');
 });

@@ -187,6 +187,8 @@ function setupPreviewDblClick() {
   preview.addEventListener('dblclick', (e) => {
     const body = document.querySelector('.editor-body');
     if (!body || !body.classList.contains('mode-preview')) return; // 仅 preview 模式
+    // 标注模式下不允许双击进入编辑
+    if (brushState.tool !== 'none') return;
     // 找到点击位置对应的 markdown 行：通过预览内元素的位置比例反推
     const textarea = document.getElementById('editor-textarea');
     const previewPane = document.querySelector('.preview-pane');
@@ -210,6 +212,9 @@ function setupPreviewDblClick() {
     if (editBtn) editBtn.classList.add('active');
     body.classList.remove('mode-preview');
     body.classList.add('mode-edit');
+    // 退出预览模式全屏
+    const viewEditor = document.getElementById('view-editor');
+    if (viewEditor) viewEditor.classList.remove('preview-fullscreen');
 
     // 聚焦并定位光标
     requestAnimationFrame(() => {
@@ -222,6 +227,808 @@ function setupPreviewDblClick() {
       } catch (err) {}
     });
   });
+}
+
+// ===== FAB 管理器：统一拖拽、位置持久化、默认避让 =====
+const FabManager = (() => {
+  const POS_PREFIX = 'treeks:fab-pos:';
+  const registry = []; // 已注册的 FAB 列表 [{ fab, id, onClick }]
+
+  // 读取持久化的位置
+  function loadPos(id) {
+    try {
+      const raw = localStorage.getItem(POS_PREFIX + id);
+      if (!raw) return null;
+      const parts = raw.split(',');
+      if (parts.length !== 2) return null;
+      const left = parseFloat(parts[0]);
+      const top = parseFloat(parts[1]);
+      if (isNaN(left) || isNaN(top)) return null;
+      return { left, top };
+    } catch (e) { return null; }
+  }
+
+  // 持久化位置
+  function savePos(id, left, top) {
+    try { localStorage.setItem(POS_PREFIX + id, left + ',' + top); } catch (e) {}
+  }
+
+  // 清除持久化位置（重置到默认）
+  function clearPos(id) {
+    try { localStorage.removeItem(POS_PREFIX + id); } catch (e) {}
+  }
+
+  // 注册一个 FAB
+  function register(fab, id, onClick) {
+    if (!fab) return;
+    registry.push({ fab, id, onClick });
+
+    // 恢复持久化位置
+    const saved = loadPos(id);
+    if (saved) {
+      // 限制在视口内（防止窗口缩小后位置不可见）
+      const fabSize = fab.offsetWidth || 44;
+      const left = Math.max(4, Math.min(window.innerWidth - fabSize - 4, saved.left));
+      const top = Math.max(4, Math.min(window.innerHeight - fabSize - 4, saved.top));
+      fab.style.left = left + 'px';
+      fab.style.top = top + 'px';
+    }
+
+    // 绑定拖拽逻辑
+    setupDrag(fab, () => {
+      savePos(id, parseFloat(fab.style.left) || 0, parseFloat(fab.style.top) || 0);
+      onClick && onClick();
+    });
+  }
+
+  // 内部拖拽实现（短按触发 onClick，长按拖动改变位置）
+  function setupDrag(fab, onPointerUp) {
+    let dragState = {
+      active: false,
+      moved: false,
+      startX: 0,
+      startY: 0,
+      originLeft: 0,
+      originTop: 0
+    };
+
+    fab.addEventListener('pointerdown', (e) => {
+      dragState.active = true;
+      dragState.moved = false;
+      dragState.startX = e.clientX;
+      dragState.startY = e.clientY;
+      // 读取当前位置：优先用 left，若为 auto（说明用 right 定位）则从 right 反算
+      const cs = getComputedStyle(fab);
+      let originLeft = parseFloat(cs.left);
+      if (isNaN(originLeft)) {
+        const rightVal = parseFloat(cs.right) || 0;
+        const fabSize = fab.offsetWidth || 44;
+        originLeft = window.innerWidth - rightVal - fabSize;
+      }
+      dragState.originLeft = originLeft;
+      dragState.originTop = parseFloat(cs.top) || 0;
+      fab.setPointerCapture && fab.setPointerCapture(e.pointerId);
+    });
+
+    fab.addEventListener('pointermove', (e) => {
+      if (!dragState.active) return;
+      const dx = e.clientX - dragState.startX;
+      const dy = e.clientY - dragState.startY;
+      // 移动超过 4px 视为拖拽
+      if (!dragState.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+        dragState.moved = true;
+        fab.classList.add('dragging');
+        // 拖拽开始时切到 fixed 定位 + 显式 left/top
+        fab.style.left = dragState.originLeft + 'px';
+        fab.style.top = dragState.originTop + 'px';
+        // 清除 right 定位，避免与 left 冲突
+        fab.style.right = 'auto';
+      }
+      if (dragState.moved) {
+        let newLeft = dragState.originLeft + dx;
+        let newTop = dragState.originTop + dy;
+        // 限制在视口内
+        const fabSize = fab.offsetWidth || 44;
+        newLeft = Math.max(4, Math.min(window.innerWidth - fabSize - 4, newLeft));
+        newTop = Math.max(4, Math.min(window.innerHeight - fabSize - 4, newTop));
+        fab.style.left = newLeft + 'px';
+        fab.style.top = newTop + 'px';
+      }
+    });
+
+    const endDrag = (e) => {
+      if (!dragState.active) return;
+      dragState.active = false;
+      fab.classList.remove('dragging');
+      if (fab.releasePointerCapture && e && e.pointerId) {
+        try { fab.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+      // 未拖动则视为点击
+      if (!dragState.moved) {
+        onPointerUp && onPointerUp();
+      } else {
+        // 拖拽结束也触发回调（用于保存位置）
+        onPointerUp && onPointerUp();
+      }
+    };
+
+    fab.addEventListener('pointerup', endDrag);
+    fab.addEventListener('pointercancel', endDrag);
+  }
+
+  // 窗口尺寸变化时，重新限制所有 FAB 位置在视口内
+  window.addEventListener('resize', () => {
+    registry.forEach(({ fab, id }) => {
+      const cs = getComputedStyle(fab);
+      let left = parseFloat(cs.left);
+      if (isNaN(left)) return; // 未拖拽过，使用 CSS 默认位置，无需调整
+      const top = parseFloat(cs.top) || 0;
+      const fabSize = fab.offsetWidth || 44;
+      const newLeft = Math.max(4, Math.min(window.innerWidth - fabSize - 4, left));
+      const newTop = Math.max(4, Math.min(window.innerHeight - fabSize - 4, top));
+      fab.style.left = newLeft + 'px';
+      fab.style.top = newTop + 'px';
+      savePos(id, newLeft, newTop);
+    });
+  });
+
+  return { register, loadPos, savePos, clearPos };
+})();
+
+// ===== 预览模式笔刷标注功能 =====
+// 笔刷状态
+const brushState = {
+  tool: 'none',           // 'none' | 'highlight' | 'pen' | 'annotate' | 'eraser'
+  color: '#ffeb3b',       // 当前颜色
+  size: 6,                // 笔刷粗细
+  drawing: false,         // 是否正在绘制
+  currentPath: null,      // 当前绘制的 SVG 元素
+  points: [],             // 当前路径的点
+  startPoint: null,       // 讲解笔起点
+  annotateTempEl: null,   // 讲解笔临时元素（预览线段）
+  paths: [],              // 已绘制的所有路径 [{ id, type, color, size, points }]
+  undoStack: [],          // 撤销栈（已删除的路径，用于 redo，目前只支持撤销）
+  diaryId: null           // 当前日记 ID（用于保存到 localStorage）
+};
+
+const ANNOTATION_STORAGE_PREFIX = 'treeks_annotations_';
+
+// 获取标注数据的 localStorage key
+function annotationStorageKey(diaryId) {
+  if (!diaryId) return null;
+  return ANNOTATION_STORAGE_PREFIX + diaryId;
+}
+
+// 从 localStorage 加载标注
+function loadAnnotations(diaryId) {
+  if (!diaryId) return [];
+  const key = annotationStorageKey(diaryId);
+  if (!key) return [];
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.warn('[Annotation] 加载失败:', e.message);
+    return [];
+  }
+}
+
+// 保存标注到 localStorage
+function saveAnnotationsToStorage(diaryId, paths) {
+  if (!diaryId) return false;
+  const key = annotationStorageKey(diaryId);
+  if (!key) return false;
+  try {
+    localStorage.setItem(key, JSON.stringify(paths));
+    return true;
+  } catch (e) {
+    console.error('[Annotation] 保存失败:', e.message);
+    return false;
+  }
+}
+
+// 将十六进制颜色转为 rgba
+function hexToRgba(hex, alpha) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// 获取 SVG 坐标系下的鼠标位置
+function getSvgPoint(evt) {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return { x: 0, y: 0 };
+  const rect = svg.getBoundingClientRect();
+  return {
+    x: evt.clientX - rect.left,
+    y: evt.clientY - rect.top
+  };
+}
+
+// 创建 SVG 元素辅助函数
+function svgEl(tag, attrs) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  if (attrs) {
+    for (const k in attrs) {
+      el.setAttribute(k, attrs[k]);
+    }
+  }
+  return el;
+}
+
+// 根据笔刷类型创建路径元素
+function createBrushElement(tool, color, size, points) {
+  if (!points || points.length === 0) return null;
+
+  if (tool === 'annotate') {
+    // 讲解笔：起点到终点的箭头线段
+    if (points.length < 2) return null;
+    const start = points[0];
+    const end = points[points.length - 1];
+    const g = svgEl('g', {
+      'data-brush': 'annotate',
+      'data-color': color,
+      'data-size': size,
+      'stroke': color,
+      'stroke-width': size,
+      'stroke-linecap': 'round',
+      'fill': 'none'
+    });
+    const line = svgEl('line', {
+      x1: start.x, y1: start.y,
+      x2: end.x, y2: end.y
+    });
+    g.appendChild(line);
+    // 箭头头部
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    const arrowLen = Math.max(8, size * 2.5);
+    const arrowAngle = Math.PI / 6;
+    const x1 = end.x - arrowLen * Math.cos(angle - arrowAngle);
+    const y1 = end.y - arrowLen * Math.sin(angle - arrowAngle);
+    const x2 = end.x - arrowLen * Math.cos(angle + arrowAngle);
+    const y2 = end.y - arrowLen * Math.sin(angle + arrowAngle);
+    const arrow = svgEl('polyline', {
+      points: `${x1},${y1} ${end.x},${end.y} ${x2},${y2}`,
+      'stroke-linejoin': 'round'
+    });
+    g.appendChild(arrow);
+    return g;
+  }
+
+  // 荧光笔 / 钢笔：用 polyline 绘制平滑路径
+  const isHighlight = tool === 'highlight';
+  const strokeColor = isHighlight ? hexToRgba(color, 0.45) : color;
+  const strokeWidth = isHighlight ? Math.max(size, 8) * 2 : size;
+  const d = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const path = svgEl('polyline', {
+    points: d,
+    fill: 'none',
+    stroke: strokeColor,
+    'stroke-width': strokeWidth,
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    'data-brush': tool,
+    'data-color': color,
+    'data-size': size
+  });
+  if (isHighlight) {
+    path.setAttribute('opacity', '0.55');
+    path.setAttribute('stroke-linecap', 'butt');
+    path.setAttribute('stroke-linejoin', 'miter');
+  }
+  return path;
+}
+
+// 渲染所有路径到 SVG 层
+function renderAllAnnotations() {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+  // 清空现有内容（保留属性）
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  for (const p of brushState.paths) {
+    const el = createBrushElement(p.type, p.color, p.size, p.points);
+    if (el) {
+      el.setAttribute('data-anno-id', p.id);
+      svg.appendChild(el);
+    }
+  }
+}
+
+// 重新计算 SVG viewBox（适配内容尺寸）
+function resizeAnnotationLayer() {
+  const svg = document.getElementById('annotation-layer');
+  const wrapper = document.getElementById('preview-content-wrapper');
+  if (!svg || !wrapper) return;
+  const rect = wrapper.getBoundingClientRect();
+  svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+}
+
+// 设置当前笔刷工具
+function setBrushTool(tool) {
+  brushState.tool = tool;
+  const svg = document.getElementById('annotation-layer');
+  const previewPane = document.querySelector('.preview-pane');
+  if (!svg || !previewPane) return;
+
+  // 更新按钮激活状态
+  document.querySelectorAll('.brush-btn[data-brush]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.brush === tool);
+  });
+
+  if (tool === 'none') {
+    svg.classList.remove('active', 'eraser-mode');
+    previewPane.classList.remove('annotate-active');
+  } else if (tool === 'eraser') {
+    svg.classList.add('active', 'eraser-mode');
+    previewPane.classList.add('annotate-active');
+  } else {
+    svg.classList.add('active');
+    svg.classList.remove('eraser-mode');
+    previewPane.classList.add('annotate-active');
+  }
+}
+
+// 设置笔刷颜色
+function setBrushColor(color) {
+  brushState.color = color;
+  const swatch = document.getElementById('brush-color-swatch');
+  const input = document.getElementById('brush-color-input');
+  if (swatch) swatch.style.background = color;
+  if (input) input.value = color;
+}
+
+// 设置笔刷粗细
+function setBrushSize(size) {
+  brushState.size = parseInt(size, 10) || 6;
+  const valueEl = document.getElementById('brush-size-value');
+  if (valueEl) valueEl.textContent = brushState.size;
+}
+
+// 撤销上一步
+function undoAnnotation() {
+  if (brushState.paths.length === 0) {
+    toast('没有可撤销的标记', 'error');
+    return;
+  }
+  brushState.paths.pop();
+  renderAllAnnotations();
+}
+
+// 清除所有标记
+function clearAllAnnotations() {
+  if (brushState.paths.length === 0) {
+    toast('当前没有标记', 'error');
+    return;
+  }
+  if (!confirm('确认清除全部标记？此操作不可撤销。')) return;
+  brushState.paths = [];
+  renderAllAnnotations();
+  toast('已清除全部标记', 'success');
+}
+
+// 保存标注到 localStorage
+function saveAnnotationsForCurrentDiary() {
+  if (!brushState.diaryId) {
+    toast('请先保存日记再保存标记', 'error');
+    return;
+  }
+  const ok = saveAnnotationsToStorage(brushState.diaryId, brushState.paths);
+  if (ok) {
+    toast(`已保存 ${brushState.paths.length} 条标记`, 'success');
+  } else {
+    toast('保存失败', 'error');
+  }
+}
+
+// 找到点击位置命中的标注（用于橡皮）
+function findHitAnnotation(x, y) {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return null;
+  // 倒序遍历（顶层优先）
+  for (let i = brushState.paths.length - 1; i >= 0; i--) {
+    const p = brushState.paths[i];
+    const el = svg.querySelector(`[data-anno-id="${p.id}"]`);
+    if (!el) continue;
+    // 使用 SVG 的 isPointInFill / 检测 bbox
+    const hit = checkPathHit(p, x, y);
+    if (hit) return p;
+  }
+  return null;
+}
+
+// 简单命中检测：判断点是否在路径附近
+function checkPathHit(path, x, y) {
+  const threshold = Math.max(path.size + 4, 8);
+  if (path.type === 'annotate' && path.points.length >= 2) {
+    // 线段命中检测
+    const start = path.points[0];
+    const end = path.points[path.points.length - 1];
+    return distancePointToSegment(x, y, start.x, start.y, end.x, end.y) <= threshold;
+  }
+  // polyline 命中：检查每个线段
+  for (let i = 0; i < path.points.length - 1; i++) {
+    const a = path.points[i];
+    const b = path.points[i + 1];
+    if (distancePointToSegment(x, y, a.x, a.y, b.x, b.y) <= threshold) return true;
+  }
+  return false;
+}
+
+// 点到线段距离
+function distancePointToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = x1 + t * dx;
+  const cy = y1 + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+// 笔刷栏拖拽逻辑（仿 GoodNotes）
+function setupBrushDrag() {
+  const handle = document.getElementById('brush-drag-handle');
+  const toolbar = document.getElementById('brush-toolbar');
+  if (!handle || !toolbar) return;
+
+  let dragState = {
+    active: false,
+    startX: 0,
+    startY: 0,
+    originLeft: 0,
+    originTop: 0,
+    moved: false
+  };
+
+  handle.addEventListener('pointerdown', (e) => {
+    // 折叠状态不允许拖拽
+    if (toolbar.classList.contains('collapsed')) return;
+    dragState.active = true;
+    dragState.moved = false;
+    dragState.startX = e.clientX;
+    dragState.startY = e.clientY;
+
+    const rect = toolbar.getBoundingClientRect();
+    const parent = toolbar.offsetParent || document.body;
+    const parentRect = parent.getBoundingClientRect();
+    dragState.originLeft = rect.left - parentRect.left;
+    dragState.originTop = rect.top - parentRect.top;
+
+    // 切换到浮动状态
+    toolbar.classList.add('floating', 'dragging');
+    toolbar.style.left = dragState.originLeft + 'px';
+    toolbar.style.top = dragState.originTop + 'px';
+
+    handle.setPointerCapture && handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragState.active) return;
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragState.moved = true;
+
+    let newLeft = dragState.originLeft + dx;
+    let newTop = dragState.originTop + dy;
+
+    // 限制在父容器内
+    const parent = toolbar.offsetParent;
+    if (parent) {
+      const parentRect = parent.getBoundingClientRect();
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const maxLeft = parentRect.width - toolbarRect.width - 4;
+      const maxTop = parentRect.height - toolbarRect.height - 4;
+      newLeft = Math.max(4, Math.min(maxLeft, newLeft));
+      newTop = Math.max(4, Math.min(maxTop, newTop));
+    }
+    toolbar.style.left = newLeft + 'px';
+    toolbar.style.top = newTop + 'px';
+  });
+
+  const endDrag = (e) => {
+    if (!dragState.active) return;
+    dragState.active = false;
+    toolbar.classList.remove('dragging');
+    // 如果只是点击未拖动，恢复为非浮动状态
+    if (!dragState.moved) {
+      toolbar.classList.remove('floating');
+      toolbar.style.left = '';
+      toolbar.style.top = '';
+    }
+    if (handle.releasePointerCapture && e && e.pointerId) {
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+  };
+
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+}
+
+// 初始化笔刷功能（事件绑定）
+function setupBrushAnnotations() {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+
+  // 笔刷工具切换
+  document.querySelectorAll('.brush-btn[data-brush]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tool = btn.dataset.brush;
+      if (tool === 'undo') {
+        undoAnnotation();
+        return;
+      }
+      if (tool === 'clear') {
+        clearAllAnnotations();
+        return;
+      }
+      setBrushTool(tool === brushState.tool ? 'none' : tool);
+    });
+  });
+
+  // 折叠/展开笔刷栏（FAB 支持拖拽 + 位置持久化 + 淡入淡出动画）
+  const collapseBtn = document.getElementById('btn-collapse-brush');
+  const fabBtn = document.getElementById('brush-fab');
+  const toolbar = document.getElementById('brush-toolbar');
+  if (collapseBtn && fabBtn && toolbar) {
+    collapseBtn.addEventListener('click', () => {
+      // 先淡出笔刷栏，再隐藏并显示 FAB
+      toolbar.classList.add('fading-out');
+      setTimeout(() => {
+        toolbar.classList.add('collapsed');
+        toolbar.style.display = 'none';
+        toolbar.classList.remove('fading-out');
+        fabBtn.style.display = 'flex';
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => fabBtn.classList.add('visible'));
+        });
+      }, 200);
+    });
+    // 通过 FabManager 注册（支持拖拽 + 位置持久化）
+    FabManager.register(fabBtn, 'brush', () => {
+      // 点击回调：展开笔刷栏
+      fabBtn.classList.remove('visible');
+      toolbar.classList.remove('collapsed');
+      // 先保持 fading-out 状态并显示，再下一帧移除 fading-out 触发淡入动画
+      toolbar.classList.add('fading-out');
+      toolbar.style.display = 'flex';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => toolbar.classList.remove('fading-out'));
+      });
+      setTimeout(() => {
+        if (!fabBtn.classList.contains('visible')) fabBtn.style.display = 'none';
+      }, 380);
+    });
+  }
+
+  // 拖拽笔刷栏
+  setupBrushDrag();
+
+  // 色盘按钮：显示/隐藏色盘
+  const colorBtn = document.getElementById('brush-color-btn');
+  const palette = document.getElementById('brush-color-palette');
+  if (colorBtn && palette) {
+    colorBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      palette.style.display = palette.style.display === 'none' ? 'grid' : 'none';
+    });
+    // 点击其他地方关闭色盘
+    document.addEventListener('click', (e) => {
+      if (!palette.contains(e.target) && e.target !== colorBtn) {
+        palette.style.display = 'none';
+      }
+    });
+    // 预设色块
+    palette.querySelectorAll('.palette-swatch').forEach(sw => {
+      sw.addEventListener('click', () => {
+        setBrushColor(sw.dataset.color);
+        palette.style.display = 'none';
+      });
+    });
+    // 自定义取色器
+    const customInput = document.getElementById('brush-color-custom');
+    if (customInput) {
+      customInput.addEventListener('input', (e) => {
+        setBrushColor(e.target.value);
+      });
+      customInput.addEventListener('change', () => {
+        palette.style.display = 'none';
+      });
+    }
+  }
+
+  // 隐藏的原生 color input（兼容旧逻辑，可被色盘按钮触发）
+  const colorInput = document.getElementById('brush-color-input');
+  if (colorInput) {
+    colorInput.addEventListener('input', (e) => setBrushColor(e.target.value));
+  }
+
+  // 粗细滑块
+  const sizeInput = document.getElementById('brush-size-input');
+  if (sizeInput) {
+    sizeInput.addEventListener('input', (e) => setBrushSize(e.target.value));
+  }
+
+  // 保存按钮
+  const saveBtn = document.getElementById('btn-save-annotations');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', saveAnnotationsForCurrentDiary);
+  }
+
+  // SVG 绘制事件
+  svg.addEventListener('pointerdown', onBrushPointerDown);
+  svg.addEventListener('pointermove', onBrushPointerMove);
+  svg.addEventListener('pointerup', onBrushPointerUp);
+  svg.addEventListener('pointerleave', onBrushPointerUp);
+  // 防止触摸滚动
+  svg.addEventListener('touchstart', (e) => {
+    if (brushState.tool !== 'none') e.preventDefault();
+  }, { passive: false });
+  svg.addEventListener('touchmove', (e) => {
+    if (brushState.tool !== 'none') e.preventDefault();
+  }, { passive: false });
+
+  // 窗口尺寸变化时重新计算 SVG viewBox
+  window.addEventListener('resize', () => {
+    if (document.getElementById('editor-view') && document.getElementById('editor-view').style.display !== 'none') {
+      resizeAnnotationLayer();
+    }
+  });
+}
+
+// 鼠标按下：开始绘制
+function onBrushPointerDown(e) {
+  if (brushState.tool === 'none') return;
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+
+  const pt = getSvgPoint(e);
+
+  if (brushState.tool === 'eraser') {
+    // 橡皮：删除命中的标注
+    const hit = findHitAnnotation(pt.x, pt.y);
+    if (hit) {
+      brushState.paths = brushState.paths.filter(p => p.id !== hit.id);
+      renderAllAnnotations();
+      toast('已删除一条标记', 'success');
+    }
+    return;
+  }
+
+  brushState.drawing = true;
+  brushState.points = [pt];
+  brushState.startPoint = pt;
+  svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
+
+  // 创建临时绘制元素
+  if (brushState.tool !== 'annotate') {
+    // 荧光笔/钢笔：实时绘制
+    const el = createBrushElement(brushState.tool, brushState.color, brushState.size, brushState.points);
+    if (el) {
+      el.setAttribute('data-temp', 'true');
+      svg.appendChild(el);
+      brushState.currentPath = el;
+    }
+  } else {
+    // 讲解笔：先画临时线段，松开时确定
+    const g = svgEl('g', { 'data-temp': 'true' });
+    const line = svgEl('line', {
+      x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y,
+      stroke: brushState.color,
+      'stroke-width': brushState.size,
+      'stroke-linecap': 'round',
+      'stroke-dasharray': '4 4',
+      opacity: 0.7
+    });
+    g.appendChild(line);
+    svg.appendChild(g);
+    brushState.currentPath = g;
+  }
+}
+
+// 鼠标移动：实时更新绘制
+function onBrushPointerMove(e) {
+  if (!brushState.drawing) return;
+  const pt = getSvgPoint(e);
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+
+  if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
+    brushState.points.push(pt);
+    if (brushState.currentPath) {
+      const d = brushState.points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+      brushState.currentPath.setAttribute('points', d);
+    }
+  } else if (brushState.tool === 'annotate') {
+    // 更新临时线段
+    if (brushState.currentPath) {
+      const line = brushState.currentPath.querySelector('line');
+      if (line) {
+        line.setAttribute('x2', pt.x);
+        line.setAttribute('y2', pt.y);
+      }
+    }
+    brushState.points = [brushState.startPoint, pt];
+  }
+}
+
+// 鼠标松开：完成绘制
+function onBrushPointerUp(e) {
+  if (!brushState.drawing) return;
+  brushState.drawing = false;
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+
+  // 移除临时元素
+  if (brushState.currentPath && brushState.currentPath.parentNode) {
+    brushState.currentPath.parentNode.removeChild(brushState.currentPath);
+  }
+  brushState.currentPath = null;
+
+  // 至少需要 2 个点才创建标注
+  if (brushState.points.length < 2) {
+    brushState.points = [];
+    brushState.startPoint = null;
+    return;
+  }
+
+  // 创建正式标注
+  const anno = {
+    id: 'anno_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    type: brushState.tool,
+    color: brushState.color,
+    size: brushState.size,
+    points: brushState.points.slice(),
+    createdAt: Date.now()
+  };
+  brushState.paths.push(anno);
+  brushState.points = [];
+  brushState.startPoint = null;
+  renderAllAnnotations();
+}
+
+// 在切换到预览模式时显示笔刷工具栏
+function updateBrushToolbarVisibility() {
+  const body = document.querySelector('.editor-body');
+  const brushToolbar = document.getElementById('brush-toolbar');
+  const fabBtn = document.getElementById('brush-fab');
+  if (!body || !brushToolbar) return;
+  // 仅在预览模式（mode-preview）下显示笔刷工具栏
+  if (body.classList.contains('mode-preview')) {
+    // 如果之前折叠了，保持折叠状态（显示 fab），否则显示工具栏
+    if (!brushToolbar.classList.contains('collapsed')) {
+      brushToolbar.style.display = 'flex';
+      brushToolbar.classList.remove('fading-out');
+    }
+    resizeAnnotationLayer();
+  } else {
+    brushToolbar.style.display = 'none';
+    brushToolbar.classList.remove('fading-out');
+    if (fabBtn) {
+      fabBtn.classList.remove('visible');
+      fabBtn.style.display = 'none';
+    }
+    // 退出标注模式
+    setBrushTool('none');
+  }
+}
+
+// 初始化当前日记的标注数据（在打开日记时调用）
+function initAnnotationsForDiary(diaryId) {
+  brushState.diaryId = diaryId;
+  brushState.paths = diaryId ? loadAnnotations(diaryId) : [];
+  setBrushTool('none');
+  renderAllAnnotations();
+  // 等待预览渲染完成后重新计算 SVG 尺寸
+  setTimeout(resizeAnnotationLayer, 100);
 }
 
 function escapeHtml(s) {
@@ -706,6 +1513,18 @@ async function openEditor(id) {
   state.editingId = id || null;
   showView('editor');
 
+  // 重置编辑器模式为 split（默认），清除预览模式全屏状态
+  const editorBody = document.querySelector('.editor-body');
+  if (editorBody) {
+    editorBody.classList.remove('mode-preview', 'mode-edit');
+    editorBody.classList.add('mode-split');
+  }
+  const viewEditorEl = document.getElementById('view-editor');
+  if (viewEditorEl) viewEditorEl.classList.remove('preview-fullscreen');
+  document.querySelectorAll('#editor-mode-toggle .mode-btn').forEach(b => b.classList.remove('active'));
+  const splitBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="split"]');
+  if (splitBtn) splitBtn.classList.add('active');
+
   const titleInput = document.getElementById('editor-title');
   const textarea = document.getElementById('editor-textarea');
   const moodInput = document.getElementById('editor-mood');
@@ -769,6 +1588,8 @@ async function openEditor(id) {
   }
   updatePreview();
   updateWordCount();
+  // 初始化当前日记的笔刷标注数据
+  initAnnotationsForDiary(id || null);
 }
 
 // 渲染"指定可见用户"徽标（在可见性下拉框旁展示当前已选用户）
@@ -847,6 +1668,8 @@ function updatePreview() {
   const preview = document.getElementById('editor-preview');
   preview.innerHTML = renderMarkdown(text);
   highlightCodeIn(preview);
+  // 预览内容变化后，标注层尺寸也需重新计算
+  setTimeout(resizeAnnotationLayer, 50);
 }
 
 function updateWordCount() {
@@ -1394,7 +2217,7 @@ function bindEvents() {
     sidebarOverlay.addEventListener('click', closeSidebarDrawer);
   }
 
-  // 桌面端：侧栏收起/展开
+  // 桌面端：侧栏收起/展开（sidebar-expand-btn 通过 FabManager 支持拖拽 + 位置持久化）
   const mainView = document.getElementById('main-view');
   const btnCollapseSidebar = document.getElementById('btn-collapse-sidebar');
   const btnExpandSidebar = document.getElementById('btn-expand-sidebar');
@@ -1405,17 +2228,37 @@ function bindEvents() {
     }
     mainView.classList.toggle('sidebar-collapsed', collapse);
     try { localStorage.setItem('treeks:sidebar-collapsed', collapse ? '1' : '0'); } catch (e) {}
+    // 收起时触发 sidebar-expand-btn 的淡入动画
+    if (collapse && btnExpandSidebar) {
+      btnExpandSidebar.style.display = 'flex';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => btnExpandSidebar.classList.add('visible'));
+      });
+    } else if (!collapse && btnExpandSidebar) {
+      btnExpandSidebar.classList.remove('visible');
+      setTimeout(() => {
+        if (!btnExpandSidebar.classList.contains('visible')) btnExpandSidebar.style.display = 'none';
+      }, 380);
+    }
   };
   if (btnCollapseSidebar) {
     btnCollapseSidebar.addEventListener('click', () => toggleDesktopSidebar(true));
   }
+  // 通过 FabManager 注册（支持拖拽 + 位置持久化 + 短按展开）
   if (btnExpandSidebar) {
-    btnExpandSidebar.addEventListener('click', () => toggleDesktopSidebar(false));
+    FabManager.register(btnExpandSidebar, 'sidebar', () => toggleDesktopSidebar(false));
   }
   // 恢复上次状态
   try {
     if (localStorage.getItem('treeks:sidebar-collapsed') === '1') {
       mainView.classList.add('sidebar-collapsed');
+      // 若初始为收起状态，需显示 sidebar-expand-btn（无动画）
+      if (btnExpandSidebar) {
+        btnExpandSidebar.style.display = 'flex';
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => btnExpandSidebar.classList.add('visible'));
+        });
+      }
     }
   } catch (e) {}
   window.__toggleDesktopSidebar = toggleDesktopSidebar;
@@ -1585,11 +2428,41 @@ function bindEvents() {
       if (mode === 'edit') body.classList.add('mode-edit');
       else if (mode === 'preview') body.classList.add('mode-preview');
       else body.classList.add('mode-split');
+      // 预览模式全屏：隐藏顶栏三栏（topbar/editor-header/editor-toolbar），仅保留笔刷栏
+      const viewEditor = document.getElementById('view-editor');
+      if (viewEditor) {
+        const isPreview = mode === 'preview';
+        const wasFullscreen = viewEditor.classList.contains('preview-fullscreen');
+        viewEditor.classList.toggle('preview-fullscreen', isPreview);
+        // 进入全屏预览时显示提示
+        if (isPreview && !wasFullscreen) {
+          setTimeout(() => {
+            if (viewEditor.classList.contains('preview-fullscreen')) {
+              toast('按 ESC 退出全屏预览', '');
+            }
+          }, 350);
+        }
+      }
       // 切换到预览或分屏时刷新预览
       if (mode === 'preview' || mode === 'split') {
         updatePreview();
       }
+      // 显示/隐藏笔刷工具栏（仅预览模式可见）
+      updateBrushToolbarVisibility();
     });
+  });
+
+  // ===== 全屏预览模式：ESC 退出 =====
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const viewEditor = document.getElementById('view-editor');
+    if (!viewEditor || !viewEditor.classList.contains('preview-fullscreen')) return;
+    // 防止与其它模态框 ESC 关闭冲突
+    if (document.querySelector('.modal.show:not(.preview-only)')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const splitBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="split"]');
+    if (splitBtn) splitBtn.click();
   });
 
   // ===== 编辑/预览滚动跟随（split 模式下双向同步）=====
@@ -1597,6 +2470,9 @@ function bindEvents() {
 
   // ===== 预览模式双击进入编辑 =====
   setupPreviewDblClick();
+
+  // ===== 预览模式笔刷标注 =====
+  setupBrushAnnotations();
 
   // 编辑器实时预览
   const textarea = document.getElementById('editor-textarea');
@@ -2804,6 +3680,8 @@ async function loadAdminData() {
 
     c.innerHTML = `
       <div class="data-mgmt-section">
+        <div id="storage-location-card"></div>
+
         <div class="data-mgmt-card data-export-card">
           <div class="data-mgmt-icon export-icon">
             <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -2871,6 +3749,7 @@ async function loadAdminData() {
               <li>导入用户不会自动获得管理员权限（防止提权）。</li>
               <li>ZIP 导出会打包所有图片文件，JSON 导出仅包含图片元数据。</li>
               <li>建议定期导出 JSON 作为平台备份。</li>
+              <li>切换存储位置后需重启服务才能生效，原数据会保留作为备份。</li>
             </ul>
           </div>
         </div>
@@ -2929,8 +3808,235 @@ async function loadAdminData() {
       }
       e.target.value = '';
     };
+
+    // 加载存储位置卡片
+    loadStorageLocationCard();
   } catch (e) {
     c.innerHTML = `<div class="empty-state"><div class="empty-state-illustration">${ILLUSTRATIONS.emptyFilter}</div><h3>加载失败</h3><p>${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+// ===== 存储位置管理（管理员） =====
+async function loadStorageLocationCard() {
+  const c = document.getElementById('storage-location-card');
+  if (!c) return;
+  c.innerHTML = '<p style="color:var(--fg-muted);padding:12px;">加载存储位置信息...</p>';
+  try {
+    const data = await api('/api/admin/storage-location');
+    const cur = data.current;
+    const st = data.stats;
+    const totalSize = (st.dbSize || 0) + (st.uploadSize || 0);
+
+    const driveBadges = (data.drives || []).map(d => {
+      const sysTag = d.system ? '<span class="storage-drive-sys">系统</span>' : '';
+      return `<button class="storage-drive-pill" data-path="${escapeHtml(d.path)}" title="${escapeHtml(d.path)}">${escapeHtml(d.label)}${sysTag}</button>`;
+    }).join('');
+
+    const needsRestartBanner = data.needsRestart
+      ? `<div class="storage-restart-banner">
+           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+           <span>已切换存储位置，需重启服务才能生效</span>
+         </div>`
+      : '';
+
+    const modeBadge = cur.isCustom
+      ? `<span class="storage-mode-badge custom">自定义位置</span>`
+      : `<span class="storage-mode-badge default">默认位置</span>`;
+
+    c.innerHTML = `
+      <div class="data-mgmt-card data-storage-card">
+        <div class="data-mgmt-icon storage-icon">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>
+        </div>
+        <div class="data-mgmt-body">
+          <div class="data-mgmt-title-row">
+            <div class="data-mgmt-title">平台数据存储位置</div>
+            ${modeBadge}
+          </div>
+          <div class="data-mgmt-desc">选择平台数据（数据库 + 上传文件）的存储位置，可用于将数据迁移到其他盘符或挂载点。切换后需重启服务生效。</div>
+
+          ${needsRestartBanner}
+
+          <div class="storage-info-grid">
+            <div class="storage-info-item">
+              <div class="storage-info-label">当前数据库目录</div>
+              <div class="storage-info-value" title="${escapeHtml(cur.dbDir)}">${escapeHtml(cur.dbDir)}</div>
+            </div>
+            <div class="storage-info-item">
+              <div class="storage-info-label">当前上传目录</div>
+              <div class="storage-info-value" title="${escapeHtml(cur.uploadDir)}">${escapeHtml(cur.uploadDir)}</div>
+            </div>
+            <div class="storage-info-item">
+              <div class="storage-info-label">数据库大小</div>
+              <div class="storage-info-value">${formatBytes(st.dbSize)}</div>
+            </div>
+            <div class="storage-info-item">
+              <div class="storage-info-label">上传文件大小</div>
+              <div class="storage-info-value">${formatBytes(st.uploadSize)} <span class="storage-info-sub">(${st.uploadFiles || 0} 个文件)</span></div>
+            </div>
+            <div class="storage-info-item storage-info-total">
+              <div class="storage-info-label">总占用</div>
+              <div class="storage-info-value">${formatBytes(totalSize)}</div>
+            </div>
+          </div>
+
+          <div class="storage-default-hint">
+            默认位置：${escapeHtml(cur.defaultDbDir)} + ${escapeHtml(cur.defaultUploadDir)}
+          </div>
+
+          ${driveBadges ? `<div class="storage-drives-row">
+            <div class="storage-drives-label">快速选择：</div>
+            <div class="storage-drives-list">${driveBadges}</div>
+          </div>` : ''}
+
+          <div class="storage-switch-form">
+            <div class="storage-input-row">
+              <input type="text" id="storage-target-path" class="storage-input" placeholder="输入目标路径，例如 D:\\treeks-data 或 /mnt/data/treeks">
+              <button class="btn btn-secondary" id="btn-validate-storage-path">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                校验
+              </button>
+            </div>
+            <label class="data-checkbox">
+              <input type="checkbox" id="storage-migrate" checked>
+              <span>迁移现有数据到新位置（推荐）</span>
+            </label>
+            <div class="data-mgmt-actions">
+              <button class="btn btn-primary" id="btn-switch-storage">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                切换存储位置
+              </button>
+              ${cur.isCustom ? `<button class="btn btn-ghost" id="btn-reset-storage">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                恢复默认位置
+              </button>` : ''}
+            </div>
+            <div class="storage-validate-result" id="storage-validate-result" style="display:none;"></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // 绑定快速选择盘符
+    c.querySelectorAll('.storage-drive-pill').forEach(btn => {
+      btn.onclick = () => {
+        const p = btn.dataset.path;
+        const input = document.getElementById('storage-target-path');
+        if (input) {
+          // 默认在盘符下加 treeks-data 子目录，避免直接污染盘根
+          const sep = p.includes('/') && !p.includes('\\') ? '/' : '\\';
+          const candidate = p.endsWith(sep) ? p + 'treeks-data' : p + sep + 'treeks-data';
+          input.value = candidate;
+        }
+      };
+    });
+
+    // 校验路径
+    const validateBtn = document.getElementById('btn-validate-storage-path');
+    if (validateBtn) {
+      validateBtn.onclick = async () => {
+        const targetPath = document.getElementById('storage-target-path').value.trim();
+        const resultEl = document.getElementById('storage-validate-result');
+        if (!targetPath) {
+          resultEl.style.display = 'block';
+          resultEl.className = 'storage-validate-result error';
+          resultEl.innerHTML = '请输入目标路径';
+          return;
+        }
+        resultEl.style.display = 'block';
+        resultEl.className = 'storage-validate-result loading';
+        resultEl.innerHTML = '<span class="data-spinner"></span> 校验中...';
+        try {
+          const res = await fetch('/api/admin/storage-location/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.token },
+            body: JSON.stringify({ targetPath })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            resultEl.className = 'storage-validate-result error';
+            resultEl.innerHTML = `<span>${escapeHtml(data.error || '校验失败')}</span>`;
+          } else {
+            resultEl.className = 'storage-validate-result success';
+            resultEl.innerHTML = `<span>路径可用：${escapeHtml(data.abs)}</span>`;
+          }
+        } catch (err) {
+          resultEl.className = 'storage-validate-result error';
+          resultEl.innerHTML = escapeHtml(err.message);
+        }
+      };
+    }
+
+    // 切换存储位置
+    const switchBtn = document.getElementById('btn-switch-storage');
+    if (switchBtn) {
+      switchBtn.onclick = async () => {
+        const targetPath = document.getElementById('storage-target-path').value.trim();
+        if (!targetPath) {
+          toast('请输入目标路径', 'error');
+          return;
+        }
+        const migrate = document.getElementById('storage-migrate').checked;
+        if (!confirm(`确认将平台数据切换到以下位置？\n\n${targetPath}\n\n${migrate ? '✓ 将迁移现有数据' : '✗ 不迁移数据（仅切换配置）'}\n\n切换后需重启服务才能生效。`)) {
+          return;
+        }
+        switchBtn.disabled = true;
+        switchBtn.innerHTML = '<span class="data-spinner"></span> 切换中...';
+        try {
+          const res = await fetch('/api/admin/storage-location/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.token },
+            body: JSON.stringify({ targetPath, migrate })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || '切换失败');
+          const r = data.result;
+          toast('存储位置已切换，请重启服务生效', 'success');
+          // 显示结果详情
+          loadStorageLocationCard();
+          alert(
+            `存储位置切换成功！\n\n` +
+            `目标位置: ${r.targetPath}\n` +
+            `数据库目录: ${r.newDbDir}\n` +
+            `上传目录: ${r.newUploadDir}\n\n` +
+            `迁移情况:\n` +
+            `- 数据库: ${r.migrated.db ? '✓ 已迁移 (' + formatBytes(r.migrated.dbSize) + ')' : '✗ 未迁移'}\n` +
+            `- 上传文件: ${r.migrated.uploads ? '✓ 已迁移 (' + formatBytes(r.migrated.uploadSize) + ', ' + r.migrated.uploadFiles + ' 个文件)' : '✗ 未迁移'}\n\n` +
+            `请重启服务以应用新的存储位置。`
+          );
+        } catch (err) {
+          toast(err.message, 'error');
+          switchBtn.disabled = false;
+          switchBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> 切换存储位置';
+        }
+      };
+    }
+
+    // 恢复默认
+    const resetBtn = document.getElementById('btn-reset-storage');
+    if (resetBtn) {
+      resetBtn.onclick = async () => {
+        if (!confirm('确认恢复为默认存储位置？\n\n注意：已迁移到自定义位置的数据不会被删除，需手动处理。\n\n重启服务后生效。')) {
+          return;
+        }
+        resetBtn.disabled = true;
+        try {
+          const res = await fetch('/api/admin/storage-location/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.token }
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || '恢复失败');
+          toast('已恢复默认存储位置，请重启服务生效', 'success');
+          loadStorageLocationCard();
+        } catch (err) {
+          toast(err.message, 'error');
+          resetBtn.disabled = false;
+        }
+      };
+    }
+  } catch (e) {
+    c.innerHTML = `<div class="data-mgmt-card data-storage-card"><div class="data-mgmt-body"><div class="data-mgmt-title">平台数据存储位置</div><p style="color:var(--fg-muted);font-size:13px;">加载失败：${escapeHtml(e.message)}</p></div></div>`;
   }
 }
 

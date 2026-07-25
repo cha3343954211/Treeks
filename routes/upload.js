@@ -5,13 +5,14 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { db } = require('../db');
 const { authRequired } = require('../middleware/auth');
+const { getRuntimeUploadDir } = require('../services/storageLocation');
 
 const router = express.Router();
 
-// 用户专属上传目录
+// 用户专属上传目录（使用运行时配置的上传目录）
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const userDir = path.join(__dirname, '..', 'public', 'uploads', String(req.user.id));
+    const userDir = path.join(getRuntimeUploadDir(), String(req.user.id));
     if (!fs.existsSync(userDir)) {
       fs.mkdirSync(userDir, { recursive: true });
     }
@@ -142,7 +143,7 @@ router.delete('/images/:id', (req, res) => {
     .get(req.params.id, req.user.id);
   if (!row) return res.status(404).json({ error: '图片不存在' });
 
-  const filePath = path.join(__dirname, '..', 'public', 'uploads', String(req.user.id), row.filename);
+  const filePath = path.join(getRuntimeUploadDir(), String(req.user.id), row.filename);
   if (fs.existsSync(filePath)) {
     try { fs.unlinkSync(filePath); } catch (e) { console.error('删除文件失败', e.message); }
   }
