@@ -704,6 +704,9 @@ async function saveDiary() {
       });
       state.editingId = result.id;
       document.getElementById('btn-delete-diary').style.display = '';
+      // 新建日记保存后，显示协作者和发送信件按钮（与 openEditor 编辑已有日记时一致）
+      document.getElementById('btn-collaborators').style.display = '';
+      document.getElementById('btn-send-letter').style.display = '';
       toast('已创建', 'success');
     }
     setSaveStatus('已保存 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), 'saved');
@@ -1298,8 +1301,15 @@ function bindEvents() {
   document.getElementById('btn-collaborators').addEventListener('click', openCollaboratorModal);
 
   // 发送信件（从编辑器）
-  document.getElementById('btn-send-letter').addEventListener('click', () => {
-    if (!state.editingId) { toast('请先保存日记', 'error'); return; }
+  document.getElementById('btn-send-letter').addEventListener('click', async () => {
+    if (!state.editingId) {
+      const title = document.getElementById('editor-title').value.trim();
+      const content = document.getElementById('editor-textarea').value;
+      if (!content.trim() && !title) { toast('请先输入日记内容', 'error'); return; }
+      toast('正在保存日记...', '');
+      await saveDiary();
+      if (!state.editingId) return;
+    }
     openComposeLetterModal(state.editingId);
   });
 
@@ -3695,7 +3705,18 @@ function renderSharedList(items, tab) {
 
 // ===== 协作者管理弹窗 =====
 async function openCollaboratorModal() {
-  if (!state.editingId) { toast('请先保存日记', 'error'); return; }
+  if (!state.editingId) {
+    // 编辑器有内容时自动保存后再打开协作者管理
+    const title = document.getElementById('editor-title').value.trim();
+    const content = document.getElementById('editor-textarea').value;
+    if (!content.trim() && !title) {
+      toast('请先输入日记内容', 'error');
+      return;
+    }
+    toast('正在保存日记...', '');
+    await saveDiary();
+    if (!state.editingId) return; // 保存失败
+  }
   const id = state.editingId;
   const body = `
     <div id="collab-list" class="collab-list">加载中...</div>

@@ -16,6 +16,14 @@ function stringifyTags(tagsArr) {
   return JSON.stringify(tagsArr || []);
 }
 
+// 本地日期字符串（YYYY-MM-DD），避免 toISOString 返回 UTC 日期与日记 created_at（localtime）错位
+function localDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // 判断用户是否可读某篇日记
 function canReadDiary(diary, userId) {
   if (!diary) return false;
@@ -392,7 +400,7 @@ router.get('/stats/heatmap', (req, res) => {
   while (cursor <= end) {
     const week = [];
     for (let d = 0; d < 7; d++) {
-      const dateStr = cursor.toISOString().slice(0, 10);
+      const dateStr = localDateStr(cursor);
       const inYear = cursor.getFullYear() === year;
       week.push({
         date: dateStr,
@@ -424,12 +432,12 @@ router.get('/stats/heatmap', (req, res) => {
     longestStreak = Math.max(longestStreak, currentStreak);
   }
   // 当前连续（从今天往回数）
-  const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const today = localDateStr(new Date());
+  const yesterday = localDateStr(new Date(Date.now() - 86400000));
   const startFrom = map[today] ? today : (map[yesterday] ? yesterday : null);
   if (startFrom) {
-    const cur = new Date(startFrom);
-    while (map[cur.toISOString().slice(0, 10)]) {
+    const cur = new Date(startFrom + 'T00:00:00');
+    while (map[localDateStr(cur)]) {
       lastStreak++;
       cur.setDate(cur.getDate() - 1);
     }
