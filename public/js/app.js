@@ -583,6 +583,10 @@ function confirmDelete(id) {
 
 // ===== 编辑器 =====
 async function openEditor(id) {
+  // 离开当前协同房间，避免新建日记时编辑内容被误同步到旧日记导致数据覆盖
+  if (collabCurrentDiaryId && collabCurrentDiaryId !== id) {
+    collabLeave(collabCurrentDiaryId);
+  }
   state.editingId = id || null;
   showView('editor');
 
@@ -3928,6 +3932,8 @@ function collabLeave(diaryId) {
 
 function collabSendEdit(field, value) {
   if (!collabCurrentDiaryId) return;
+  // 防护：仅当协同房间与当前编辑的日记一致时才发送，避免误覆盖
+  if (collabCurrentDiaryId !== state.editingId) return;
   clearTimeout(collabDebounceTimer);
   collabDebounceTimer = setTimeout(() => {
     const msg = { type: 'edit', diaryId: collabCurrentDiaryId, field };
