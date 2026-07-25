@@ -1295,41 +1295,36 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   flex-wrap: nowrap;
-  position: sticky;
-  top: 12px;
-  z-index: 6;
-  margin: 12px auto;
-  width: max-content;
-  max-width: calc(100% - 24px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-  transition: box-shadow 0.2s var(--ease), opacity 0.22s var(--ease), transform 0.22s var(--ease);
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s var(--ease), opacity 0.22s var(--ease);
   overflow: visible;
 }
 /* 折叠淡出状态（与 display:none 配合，实现淡入淡出动画）*/
 .brush-toolbar.fading-out {
   opacity: 0;
-  transform: scale(0.85);
   pointer-events: none;
 }
 .brush-toolbar:hover {
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
 }
-/* 浮动状态（拖拽后）*/
+/* 浮动状态（拖拽后）—— fixed 定位贴在视口，不随页面滚动 */
 .brush-toolbar.floating {
-  position: absolute;
-  margin: 0;
-  top: 12px;
-  left: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  transform: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
 .brush-toolbar.dragging {
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
   transition: none;
   cursor: grabbing;
   z-index: 100;

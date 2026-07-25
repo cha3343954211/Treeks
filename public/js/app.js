@@ -539,14 +539,18 @@ function renderAllAnnotations() {
   }
 }
 
-// 重新计算 SVG viewBox（适配内容尺寸）
+// 重新计算 SVG 尺寸（不使用 viewBox，坐标 1:1 映射到像素，避免偏移）
 function resizeAnnotationLayer() {
   const svg = document.getElementById('annotation-layer');
   const wrapper = document.getElementById('preview-content-wrapper');
   if (!svg || !wrapper) return;
   const rect = wrapper.getBoundingClientRect();
-  svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
-  svg.setAttribute('preserveAspectRatio', 'none');
+  // 显式设置 width/height，确保 SVG 坐标系与像素 1:1 对应
+  svg.setAttribute('width', rect.width);
+  svg.setAttribute('height', rect.height);
+  // 移除 viewBox，避免缩放导致的坐标偏移
+  svg.removeAttribute('viewBox');
+  svg.removeAttribute('preserveAspectRatio');
 }
 
 // 设置当前笔刷工具
@@ -673,7 +677,7 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
-// 笔刷栏拖拽逻辑（仿 GoodNotes）
+// 笔刷栏拖拽逻辑（仿 GoodNotes，fixed 定位贴视口，可拖到任意位置不回弹）
 function setupBrushDrag() {
   const handle = document.getElementById('brush-drag-handle');
   const toolbar = document.getElementById('brush-toolbar');
@@ -696,13 +700,12 @@ function setupBrushDrag() {
     dragState.startX = e.clientX;
     dragState.startY = e.clientY;
 
+    // 使用视口坐标（fixed 定位）
     const rect = toolbar.getBoundingClientRect();
-    const parent = toolbar.offsetParent || document.body;
-    const parentRect = parent.getBoundingClientRect();
-    dragState.originLeft = rect.left - parentRect.left;
-    dragState.originTop = rect.top - parentRect.top;
+    dragState.originLeft = rect.left;
+    dragState.originTop = rect.top;
 
-    // 切换到浮动状态
+    // 切换到浮动状态：取消居中 transform，改用 left/top 定位
     toolbar.classList.add('floating', 'dragging');
     toolbar.style.left = dragState.originLeft + 'px';
     toolbar.style.top = dragState.originTop + 'px';
@@ -720,16 +723,12 @@ function setupBrushDrag() {
     let newLeft = dragState.originLeft + dx;
     let newTop = dragState.originTop + dy;
 
-    // 限制在父容器内
-    const parent = toolbar.offsetParent;
-    if (parent) {
-      const parentRect = parent.getBoundingClientRect();
-      const toolbarRect = toolbar.getBoundingClientRect();
-      const maxLeft = parentRect.width - toolbarRect.width - 4;
-      const maxTop = parentRect.height - toolbarRect.height - 4;
-      newLeft = Math.max(4, Math.min(maxLeft, newLeft));
-      newTop = Math.max(4, Math.min(maxTop, newTop));
-    }
+    // 限制在视口范围内（允许贴边，但不要完全拖出屏幕）
+    const tw = toolbar.offsetWidth;
+    const th = toolbar.offsetHeight;
+    // 允许部分露出屏幕外，但至少保留一部分可见
+    newLeft = Math.max(-tw + 60, Math.min(window.innerWidth - 60, newLeft));
+    newTop = Math.max(4, Math.min(window.innerHeight - 40, newTop));
     toolbar.style.left = newLeft + 'px';
     toolbar.style.top = newTop + 'px';
   });
@@ -738,7 +737,8 @@ function setupBrushDrag() {
     if (!dragState.active) return;
     dragState.active = false;
     toolbar.classList.remove('dragging');
-    // 如果只是点击未拖动，恢复为非浮动状态
+    // 拖动后保持在当前位置（fixed 定位），不回弹
+    // 仅点击未拖动时恢复居中默认位置
     if (!dragState.moved) {
       toolbar.classList.remove('floating');
       toolbar.style.left = '';
@@ -876,12 +876,21 @@ function setupBrushAnnotations() {
     if (brushState.tool !== 'none') e.preventDefault();
   }, { passive: false });
 
-  // 窗口尺寸变化时重新计算 SVG viewBox
+  // 窗口尺寸变化时重新计算 SVG 尺寸
   window.addEventListener('resize', () => {
     if (document.getElementById('editor-view') && document.getElementById('editor-view').style.display !== 'none') {
       resizeAnnotationLayer();
     }
   });
+
+  // 监听预览内容尺寸变化（图片加载、内容更新等），保持 SVG 与内容同步
+  const wrapper = document.getElementById('preview-content-wrapper');
+  if (wrapper && window.ResizeObserver) {
+    const ro = new ResizeObserver(() => {
+      resizeAnnotationLayer();
+    });
+    ro.observe(wrapper);
+  }
 }
 
 // 鼠标按下：开始绘制
