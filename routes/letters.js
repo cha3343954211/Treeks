@@ -88,7 +88,7 @@ router.get('/:id', (req, res) => {
 
   // 收件人查看时标记已读
   if (letter.recipient_id === req.user.id && !letter.is_read) {
-    db.prepare("UPDATE letters SET is_read = 1, read_at = datetime('now', 'localtime') WHERE id = ?").run(lid);
+    db.prepare("UPDATE letters SET is_read = 1, read_at = datetime('now') WHERE id = ?").run(lid);
   }
 
   res.json({

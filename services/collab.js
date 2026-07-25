@@ -107,12 +107,12 @@ function handleEdit(ws, data) {
   const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
   if (!diary) return;
   if (field === 'title' && title !== undefined) {
-    db.prepare("UPDATE diaries SET title = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(title, diaryId);
+    db.prepare("UPDATE diaries SET title = ?, updated_at = datetime('now') WHERE id = ?").run(title, diaryId);
   } else if (content !== undefined) {
-    db.prepare("UPDATE diaries SET content = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(content, diaryId);
+    db.prepare("UPDATE diaries SET content = ?, updated_at = datetime('now') WHERE id = ?").run(content, diaryId);
   } else {
     // 全量更新
-    db.prepare("UPDATE diaries SET title = COALESCE(?, title), content = COALESCE(?, content), updated_at = datetime('now', 'localtime') WHERE id = ?")
+    db.prepare("UPDATE diaries SET title = COALESCE(?, title), content = COALESCE(?, content), updated_at = datetime('now') WHERE id = ?")
       .run(title ?? null, content ?? null, diaryId);
   }
 

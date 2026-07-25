@@ -43,7 +43,7 @@ router.get('/dashboard', (req, res) => {
   const recentUsers = db.prepare(
     `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(*) as count
      FROM users
-     WHERE created_at >= datetime('now','localtime','-7 days')
+     WHERE created_at >= datetime('now','-7 days')
      GROUP BY date ORDER BY date`
   ).all();
 
@@ -51,7 +51,7 @@ router.get('/dashboard', (req, res) => {
   const recentDiaries = db.prepare(
     `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(*) as count
      FROM diaries
-     WHERE created_at >= datetime('now','localtime','-7 days')
+     WHERE created_at >= datetime('now','-7 days')
      GROUP BY date ORDER BY date`
   ).all();
 
@@ -59,7 +59,7 @@ router.get('/dashboard', (req, res) => {
   const recentActive = db.prepare(
     `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(DISTINCT user_id) as count
      FROM diaries
-     WHERE created_at >= datetime('now','localtime','-14 days')
+     WHERE created_at >= datetime('now','-14 days')
      GROUP BY date ORDER BY date`
   ).all();
 

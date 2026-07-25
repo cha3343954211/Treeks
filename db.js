@@ -24,7 +24,7 @@ function initDatabase() {
       status TEXT DEFAULT 'active',
       storage_limit INTEGER DEFAULT 104857600,
       theme TEXT DEFAULT 'green',
-      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+      created_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS diaries (
@@ -37,8 +37,8 @@ function initDatabase() {
       tags TEXT,
       is_pinned INTEGER DEFAULT 0,
       is_public INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
-      updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -53,7 +53,7 @@ function initDatabase() {
       original_name TEXT,
       size INTEGER,
       url TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -62,7 +62,7 @@ function initDatabase() {
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT,
-      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+      updated_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS admin_logs (
@@ -71,7 +71,7 @@ function initDatabase() {
       action TEXT NOT NULL,
       target TEXT,
       detail TEXT,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -87,8 +87,8 @@ function initDatabase() {
       end_time TEXT,
       color TEXT DEFAULT '#4c995c',
       is_done INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
-      updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -100,7 +100,7 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       friend_id INTEGER NOT NULL,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(user_id, friend_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE
@@ -116,8 +116,8 @@ function initDatabase() {
       to_user_id INTEGER NOT NULL,
       message TEXT,
       status TEXT DEFAULT 'pending',
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
-      updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -131,7 +131,7 @@ function initDatabase() {
       diary_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
       role TEXT DEFAULT 'editor',
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(diary_id, user_id),
       FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -145,7 +145,7 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       diary_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(diary_id, user_id),
       FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -162,7 +162,7 @@ function initDatabase() {
       subject TEXT DEFAULT '',
       content TEXT DEFAULT '',
       is_read INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      created_at TEXT DEFAULT (datetime('now')),
       read_at TEXT,
       FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -213,7 +213,6 @@ function initDatabase() {
   }
 
   // 数据迁移：统一日期格式（将 YYYY/MM/DD 修复为 YYYY-MM-DD）
-  // 旧版本导入的数据可能使用斜杠分隔符，导致前端解析和日期比较出错
   const dateTables = [
     'diaries', 'users', 'schedules', 'letters', 'friend_requests',
     'admin_logs', 'images', 'diary_collaborators', 'settings'
@@ -233,6 +232,31 @@ function initDatabase() {
     }
   }
   if (migrated > 0) console.log(`[DB] 共修复 ${migrated} 条日期格式记录`);
+
+  // 数据迁移：将旧的本地时间转换为 UTC 时间
+  // 旧版本使用 datetime('now', 'localtime') 存储服务器本地时间，现在统一改为 UTC
+  // 检查是否已执行过此迁移（通过检查是否存在 timezone_migration 标记）
+  const migrationDone = db.prepare("SELECT 1 FROM settings WHERE key = 'timezone_migration'").get();
+  if (!migrationDone) {
+    let tzMigrated = 0;
+    for (const table of dateTables) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+      for (const col of dateColumns) {
+        if (cols.includes(col)) {
+          // 将本地时间转换为 UTC（减去 8 小时，假设旧数据是在 UTC+8 创建的）
+          // datetime(col, '-8 hours') 将本地时间转换为 UTC
+          const result = db.prepare(`UPDATE ${table} SET ${col} = datetime(${col}, '-8 hours') WHERE ${col} IS NOT NULL AND ${col} != ''`).run();
+          if (result.changes > 0) {
+            console.log(`[DB] UTC 转换迁移: ${table}.${col} 转换 ${result.changes} 条记录`);
+            tzMigrated += result.changes;
+          }
+        }
+      }
+    }
+    if (tzMigrated > 0) console.log(`[DB] 共转换 ${tzMigrated} 条记录为 UTC 时间`);
+    db.prepare("INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('timezone_migration', 'done', datetime('now'))").run();
+    console.log('[DB] 时区迁移标记已设置');
+  }
 
   console.log('[DB] 数据库初始化完成');
 }

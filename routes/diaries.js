@@ -211,7 +211,7 @@ router.put('/:id', (req, res) => {
        is_pinned = COALESCE(?, is_pinned),
        is_public = COALESCE(?, is_public),
        visibility = ?,
-       updated_at = datetime('now', 'localtime')
+       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     title !== undefined ? title : null,
@@ -478,7 +478,7 @@ router.get('/stats/summary', (req, res) => {
   const recentDays = db.prepare(
     `SELECT substr(created_at, 1, 10) as date, COUNT(*) as count
      FROM diaries WHERE user_id = ?
-     AND created_at >= datetime('now', 'localtime', '-7 days')
+     AND created_at >= datetime('now', '-7 days')
      GROUP BY date ORDER BY date DESC`
   ).all(req.user.id);
 

@@ -35,7 +35,7 @@ router.post('/requests', (req, res) => {
   ).get(toId, req.user.id);
   if (reversePending) {
     const addFriend = db.prepare('INSERT OR IGNORE INTO friends (user_id, friend_id) VALUES (?, ?)');
-    const now = db.prepare("UPDATE friend_requests SET status = 'accepted', updated_at = datetime('now', 'localtime') WHERE id = ?");
+    const now = db.prepare("UPDATE friend_requests SET status = 'accepted', updated_at = datetime('now') WHERE id = ?");
     const tx = db.transaction(() => {
       addFriend.run(req.user.id, toId);
       addFriend.run(toId, req.user.id);
@@ -87,7 +87,7 @@ router.post('/requests/:id/accept', (req, res) => {
   if (reqRow.status !== 'pending') return res.status(400).json({ error: '该请求已处理' });
 
   const addFriend = db.prepare('INSERT OR IGNORE INTO friends (user_id, friend_id) VALUES (?, ?)');
-  const updateReq = db.prepare("UPDATE friend_requests SET status = 'accepted', updated_at = datetime('now', 'localtime') WHERE id = ?");
+  const updateReq = db.prepare("UPDATE friend_requests SET status = 'accepted', updated_at = datetime('now') WHERE id = ?");
   const tx = db.transaction(() => {
     addFriend.run(reqRow.from_user_id, reqRow.to_user_id);
     addFriend.run(reqRow.to_user_id, reqRow.from_user_id);
@@ -104,7 +104,7 @@ router.post('/requests/:id/reject', (req, res) => {
   if (reqRow.to_user_id !== req.user.id) return res.status(403).json({ error: '无权操作此请求' });
   if (reqRow.status !== 'pending') return res.status(400).json({ error: '该请求已处理' });
 
-  db.prepare("UPDATE friend_requests SET status = 'rejected', updated_at = datetime('now', 'localtime') WHERE id = ?")
+  db.prepare("UPDATE friend_requests SET status = 'rejected', updated_at = datetime('now') WHERE id = ?")
     .run(reqRow.id);
   res.json({ message: '已拒绝好友请求' });
 });
