@@ -378,16 +378,20 @@ const FabManager = (() => {
 // ===== 预览模式笔刷标注功能 =====
 // 笔刷状态
 const brushState = {
-  tool: 'none',           // 'none' | 'highlight' | 'pen' | 'annotate' | 'eraser'
+  tool: 'none',           // 'none' | 'highlight' | 'pen' | 'annotate' | 'text' | 'rect' | 'ellipse' | 'eraser'
   color: '#ffeb3b',       // 当前颜色
   size: 6,                // 笔刷粗细
+  opacity: 1,             // 不透明度 0-1（荧光笔自动切换为 0.45）
   drawing: false,         // 是否正在绘制
   currentPath: null,      // 当前绘制的 SVG 元素
   points: [],             // 当前路径的点
-  startPoint: null,       // 讲解笔起点
-  annotateTempEl: null,   // 讲解笔临时元素（预览线段）
-  paths: [],              // 已绘制的所有路径 [{ id, type, color, size, points }]
-  undoStack: [],          // 撤销栈（已删除的路径，用于 redo，目前只支持撤销）
+  startPoint: null,       // 讲解笔 / 矩形 / 椭圆起点
+  annotateTempEl: null,   // 临时元素（预览线段/形状）
+  paths: [],              // 已绘制的所有路径 [{ id, type, color, size, points, opacity, text }]
+  undoStack: [],          // 撤销栈（用于 redo）
+  textInput: null,        // 当前文本输入框（HTML element）
+  draggingAnno: null,     // 正在拖动的标注 id（文本拖动用）
+  dragOffset: null,       // 拖动偏移量
   diaryId: null           // 当前日记 ID（用于保存到 localStorage）
 };
 
@@ -462,11 +466,14 @@ function svgEl(tag, attrs) {
 }
 
 // 根据笔刷类型创建路径元素
-function createBrushElement(tool, color, size, points) {
+// type: 'highlight' | 'pen' | 'annotate' | 'text' | 'rect' | 'ellipse'
+// opacity: 0-1（可选，默认 1）；text: 文本内容（仅 type='text' 使用）
+function createBrushElement(type, color, size, points, opacity, text) {
   if (!points || points.length === 0) return null;
+  const op = (opacity === undefined || opacity === null || isNaN(opacity)) ? 1 : Math.max(0, Math.min(1, opacity));
 
-  if (tool === 'annotate') {
-    // 讲解笔：起点到终点的箭头线段
+  if (type === 'annotate') {
+    // 讲解笔：起点到终点的箭头线段（改进的填充三角形箭头）
     if (points.length < 2) return null;
     const start = points[0];
     const end = points[points.length - 1];
@@ -474,35 +481,110 @@ function createBrushElement(tool, color, size, points) {
       'data-brush': 'annotate',
       'data-color': color,
       'data-size': size,
-      'stroke': color,
-      'stroke-width': size,
-      'stroke-linecap': 'round',
-      'fill': 'none'
+      'opacity': op
     });
+    // 主线段（终点稍向后退，避免穿透箭头）
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    const arrowLen = Math.max(10, size * 3);
+    const lineEndX = end.x - arrowLen * 0.55 * Math.cos(angle);
+    const lineEndY = end.y - arrowLen * 0.55 * Math.sin(angle);
     const line = svgEl('line', {
       x1: start.x, y1: start.y,
-      x2: end.x, y2: end.y
+      x2: lineEndX, y2: lineEndY,
+      stroke: color,
+      'stroke-width': size,
+      'stroke-linecap': 'round',
+      fill: 'none'
     });
     g.appendChild(line);
-    // 箭头头部
-    const angle = Math.atan2(end.y - start.y, end.x - start.x);
-    const arrowLen = Math.max(8, size * 2.5);
-    const arrowAngle = Math.PI / 6;
-    const x1 = end.x - arrowLen * Math.cos(angle - arrowAngle);
-    const y1 = end.y - arrowLen * Math.sin(angle - arrowAngle);
-    const x2 = end.x - arrowLen * Math.cos(angle + arrowAngle);
-    const y2 = end.y - arrowLen * Math.sin(angle + arrowAngle);
-    const arrow = svgEl('polyline', {
-      points: `${x1},${y1} ${end.x},${end.y} ${x2},${y2}`,
+    // 填充三角形箭头（更美观）
+    const arrowHalfWidth = Math.max(6, size * 1.8);
+    const arrowAngle = Math.PI / 7;
+    const baseX = end.x - arrowLen * Math.cos(angle);
+    const baseY = end.y - arrowLen * Math.sin(angle);
+    const x1 = baseX - arrowHalfWidth * Math.cos(angle - arrowAngle);
+    const y1 = baseY - arrowHalfWidth * Math.sin(angle - arrowAngle);
+    const x2 = baseX - arrowHalfWidth * Math.cos(angle + arrowAngle);
+    const y2 = baseY - arrowHalfWidth * Math.sin(angle + arrowAngle);
+    const arrow = svgEl('polygon', {
+      points: `${end.x},${end.y} ${x1},${y1} ${x2},${y2}`,
+      fill: color,
+      stroke: color,
+      'stroke-width': Math.max(1, size * 0.3),
       'stroke-linejoin': 'round'
     });
     g.appendChild(arrow);
     return g;
   }
 
+  if (type === 'text') {
+    // 文本标注：用 SVG <text>，字体大小与笔刷粗细关联
+    const p = points[0];
+    const fontSize = Math.max(12, size * 2.5);
+    const textEl = svgEl('text', {
+      x: p.x,
+      y: p.y,
+      'font-size': fontSize,
+      'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif',
+      'font-weight': '600',
+      fill: color,
+      'fill-opacity': op,
+      'data-brush': 'text',
+      'data-color': color,
+      'data-size': size
+    });
+    // 使用 textContent 避免 XSS；空字符串也允许（橡皮命中即可删除）
+    textEl.textContent = text || '';
+    return textEl;
+  }
+
+  if (type === 'rect') {
+    if (points.length < 2) return null;
+    const a = points[0];
+    const b = points[points.length - 1];
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.max(1, Math.abs(b.x - a.x));
+    const h = Math.max(1, Math.abs(b.y - a.y));
+    return svgEl('rect', {
+      x: x, y: y, width: w, height: h,
+      rx: Math.max(2, size * 0.3),
+      ry: Math.max(2, size * 0.3),
+      fill: hexToRgba(color, op * 0.18),
+      stroke: color,
+      'stroke-width': Math.max(2, size * 0.6),
+      'stroke-opacity': op,
+      'stroke-linejoin': 'round',
+      'data-brush': 'rect',
+      'data-color': color,
+      'data-size': size
+    });
+  }
+
+  if (type === 'ellipse') {
+    if (points.length < 2) return null;
+    const a = points[0];
+    const b = points[points.length - 1];
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    const rx = Math.max(1, Math.abs(b.x - a.x) / 2);
+    const ry = Math.max(1, Math.abs(b.y - a.y) / 2);
+    return svgEl('ellipse', {
+      cx: cx, cy: cy, rx: rx, ry: ry,
+      fill: hexToRgba(color, op * 0.18),
+      stroke: color,
+      'stroke-width': Math.max(2, size * 0.6),
+      'stroke-opacity': op,
+      'data-brush': 'ellipse',
+      'data-color': color,
+      'data-size': size
+    });
+  }
+
   // 荧光笔 / 钢笔：用 polyline 绘制平滑路径
-  const isHighlight = tool === 'highlight';
-  const strokeColor = isHighlight ? hexToRgba(color, 0.45) : color;
+  const isHighlight = type === 'highlight';
+  const baseAlpha = isHighlight ? 0.45 : 1;
+  const strokeColor = isHighlight ? hexToRgba(color, baseAlpha) : color;
   const strokeWidth = isHighlight ? Math.max(size, 8) * 2 : size;
   const d = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
   const path = svgEl('polyline', {
@@ -510,16 +592,17 @@ function createBrushElement(tool, color, size, points) {
     fill: 'none',
     stroke: strokeColor,
     'stroke-width': strokeWidth,
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-    'data-brush': tool,
+    'stroke-linecap': isHighlight ? 'butt' : 'round',
+    'stroke-linejoin': isHighlight ? 'miter' : 'round',
+    'stroke-opacity': op,
+    'data-brush': type,
     'data-color': color,
     'data-size': size
   });
   if (isHighlight) {
-    path.setAttribute('opacity', '0.55');
-    path.setAttribute('stroke-linecap', 'butt');
-    path.setAttribute('stroke-linejoin', 'miter');
+    // 改进的荧光笔：浅色模式下用 mix-blend-mode 让多次叠加更自然（暗色模式跳过避免不可见）
+    const isDark = document.documentElement.getAttribute('data-mode') === 'dark';
+    if (!isDark) path.style.mixBlendMode = 'multiply';
   }
   return path;
 }
@@ -531,7 +614,7 @@ function renderAllAnnotations() {
   // 清空现有内容（保留属性）
   while (svg.firstChild) svg.removeChild(svg.firstChild);
   for (const p of brushState.paths) {
-    const el = createBrushElement(p.type, p.color, p.size, p.points);
+    const el = createBrushElement(p.type, p.color, p.size, p.points, p.opacity, p.text);
     if (el) {
       el.setAttribute('data-anno-id', p.id);
       svg.appendChild(el);
@@ -565,16 +648,35 @@ function setBrushTool(tool) {
     btn.classList.toggle('active', btn.dataset.brush === tool);
   });
 
+  // 荧光笔自动切换为半透明；其他绘制工具恢复不透明（用户手动调整后保持不变）
+  if (tool === 'highlight' && brushState.opacity === 1) {
+    setBrushOpacity(0.45);
+  } else if (tool !== 'highlight' && tool !== 'none' && brushState.opacity === 0.45) {
+    setBrushOpacity(1);
+  }
+
+  // 重置光标类
+  svg.classList.remove('eraser-mode', 'text-mode', 'shape-mode');
   if (tool === 'none') {
-    svg.classList.remove('active', 'eraser-mode');
+    svg.classList.remove('active');
     previewPane.classList.remove('annotate-active');
   } else if (tool === 'eraser') {
     svg.classList.add('active', 'eraser-mode');
     previewPane.classList.add('annotate-active');
+  } else if (tool === 'text') {
+    svg.classList.add('active', 'text-mode');
+    previewPane.classList.add('annotate-active');
+  } else if (tool === 'rect' || tool === 'ellipse') {
+    svg.classList.add('active', 'shape-mode');
+    previewPane.classList.add('annotate-active');
   } else {
     svg.classList.add('active');
-    svg.classList.remove('eraser-mode');
     previewPane.classList.add('annotate-active');
+  }
+
+  // 切换工具时提交未完成的文本输入
+  if (tool !== 'text' && brushState.textInput) {
+    commitTextInput();
   }
 }
 
@@ -594,14 +696,38 @@ function setBrushSize(size) {
   if (valueEl) valueEl.textContent = brushState.size;
 }
 
-// 撤销上一步
+// 设置笔刷不透明度（0-1）
+function setBrushOpacity(op) {
+  brushState.opacity = Math.max(0, Math.min(1, parseFloat(op) || 0));
+  const slider = document.getElementById('brush-opacity-input');
+  const valueEl = document.getElementById('brush-opacity-value');
+  const pct = Math.round(brushState.opacity * 100);
+  if (slider) slider.value = pct;
+  if (valueEl) valueEl.textContent = pct + '%';
+}
+
+// 撤销上一步（推入 undoStack 以便重做）
 function undoAnnotation() {
   if (brushState.paths.length === 0) {
     toast('没有可撤销的标记', 'error');
     return;
   }
-  brushState.paths.pop();
+  const removed = brushState.paths.pop();
+  brushState.undoStack.push(removed);
   renderAllAnnotations();
+  toast('已撤销，可点重做恢复', 'info');
+}
+
+// 重做（从 undoStack 取回）
+function redoAnnotation() {
+  if (brushState.undoStack.length === 0) {
+    toast('没有可重做的标记', 'error');
+    return;
+  }
+  const restored = brushState.undoStack.pop();
+  brushState.paths.push(restored);
+  renderAllAnnotations();
+  toast('已重做', 'info');
 }
 
 // 清除所有标记
@@ -610,8 +736,9 @@ function clearAllAnnotations() {
     toast('当前没有标记', 'error');
     return;
   }
-  if (!confirm('确认清除全部标记？此操作不可撤销。')) return;
+  if (!confirm('确认清除全部标记？此操作不可恢复。')) return;
   brushState.paths = [];
+  brushState.undoStack = [];
   renderAllAnnotations();
   toast('已清除全部标记', 'success');
 }
@@ -630,6 +757,61 @@ function saveAnnotationsForCurrentDiary() {
   }
 }
 
+// 导出标注数据为 JSON 文件（服务端持久化的可选方案：用户可手动导出/导入）
+function exportAnnotations() {
+  if (brushState.paths.length === 0) {
+    toast('没有标记可导出', 'error');
+    return;
+  }
+  const data = {
+    version: 1,
+    diaryId: brushState.diaryId,
+    exportedAt: new Date().toISOString(),
+    paths: brushState.paths
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `treeks_annotations_${brushState.diaryId || 'export'}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`已导出 ${brushState.paths.length} 条标记`, 'success');
+}
+
+// 导入标注数据（替换当前标注；清空 undoStack）
+function importAnnotations(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      const paths = Array.isArray(data) ? data : (data && data.paths);
+      if (!Array.isArray(paths)) throw new Error('文件格式不正确');
+      // 规范化每条标注
+      brushState.paths = paths.map(p => ({
+        id: p.id || ('anno_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7)),
+        type: p.type,
+        color: p.color || '#ffeb3b',
+        size: Number(p.size) || 6,
+        points: Array.isArray(p.points) ? p.points : [],
+        opacity: p.opacity !== undefined ? Number(p.opacity) : 1,
+        text: p.text || '',
+        createdAt: p.createdAt || Date.now()
+      }));
+      brushState.undoStack = [];
+      renderAllAnnotations();
+      toast(`已导入 ${brushState.paths.length} 条标记`, 'success');
+    } catch (err) {
+      toast('导入失败：' + (err.message || '未知错误'), 'error');
+    }
+  };
+  reader.onerror = () => toast('读取文件失败', 'error');
+  reader.readAsText(file);
+}
+
 // 找到点击位置命中的标注（用于橡皮）
 function findHitAnnotation(x, y) {
   const svg = document.getElementById('annotation-layer');
@@ -646,14 +828,43 @@ function findHitAnnotation(x, y) {
   return null;
 }
 
-// 简单命中检测：判断点是否在路径附近
+// 简单命中检测：判断点是否在路径附近（支持 polyline/annotate/text/rect/ellipse）
 function checkPathHit(path, x, y) {
   const threshold = Math.max(path.size + 4, 8);
   if (path.type === 'annotate' && path.points.length >= 2) {
-    // 线段命中检测
+    // 箭头线段命中检测（含箭头末端的容差）
     const start = path.points[0];
     const end = path.points[path.points.length - 1];
-    return distancePointToSegment(x, y, start.x, start.y, end.x, end.y) <= threshold;
+    return distancePointToSegment(x, y, start.x, start.y, end.x, end.y) <= threshold + 6;
+  }
+  if (path.type === 'text' && path.points.length >= 1) {
+    // 文本包围盒检测
+    const p = path.points[0];
+    const fontSize = Math.max(12, path.size * 2.5);
+    const charW = fontSize * 0.6;
+    const textW = Math.max(charW * 2, (path.text || '').length * charW);
+    const textH = fontSize * 1.3;
+    return x >= p.x - 4 && x <= p.x + textW + 4 &&
+           y >= p.y - textH + 2 && y <= p.y + 6;
+  }
+  if (path.type === 'rect' && path.points.length >= 2) {
+    // 矩形包围盒检测（含边线容差）
+    const a = path.points[0];
+    const b = path.points[path.points.length - 1];
+    const x1 = Math.min(a.x, b.x), x2 = Math.max(a.x, b.x);
+    const y1 = Math.min(a.y, b.y), y2 = Math.max(a.y, b.y);
+    return x >= x1 - threshold && x <= x2 + threshold &&
+           y >= y1 - threshold && y <= y2 + threshold;
+  }
+  if (path.type === 'ellipse' && path.points.length >= 2) {
+    // 椭圆内部命中检测
+    const a = path.points[0];
+    const b = path.points[path.points.length - 1];
+    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    const rx = Math.abs(b.x - a.x) / 2, ry = Math.abs(b.y - a.y) / 2;
+    if (rx <= 0 || ry <= 0) return false;
+    const dx = (x - cx) / rx, dy = (y - cy) / ry;
+    return dx * dx + dy * dy <= 1.15;
   }
   // polyline 命中：检查每个线段
   for (let i = 0; i < path.points.length - 1; i++) {
@@ -857,6 +1068,22 @@ function setupBrushAnnotations() {
     sizeInput.addEventListener('input', (e) => setBrushSize(e.target.value));
   }
 
+  // 不透明度滑块
+  const opacityInput = document.getElementById('brush-opacity-input');
+  if (opacityInput) {
+    opacityInput.addEventListener('input', (e) => setBrushOpacity(e.target.value / 100));
+  }
+
+  // 导入文件输入
+  const importInput = document.getElementById('brush-import-input');
+  if (importInput) {
+    importInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) importAnnotations(file);
+      e.target.value = ''; // 允许重复导入同一文件
+    });
+  }
+
   // 保存按钮
   const saveBtn = document.getElementById('btn-save-annotations');
   if (saveBtn) {
@@ -891,6 +1118,94 @@ function setupBrushAnnotations() {
     });
     ro.observe(wrapper);
   }
+
+  // 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做
+  document.addEventListener('keydown', (e) => {
+    const toolbar = document.getElementById('brush-toolbar');
+    // 仅在笔刷工具栏可见（预览模式）下响应
+    if (!toolbar || toolbar.style.display === 'none') return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undoAnnotation();
+    } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+      e.preventDefault();
+      redoAnnotation();
+    }
+  });
+}
+
+// 显示文本输入框（用于文本标注工具）
+function showTextInput(x, y) {
+  // 先提交已有输入
+  if (brushState.textInput) commitTextInput();
+
+  const wrapper = document.getElementById('preview-content-wrapper');
+  if (!wrapper) return;
+
+  const fontSize = Math.max(12, brushState.size * 2.5);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'brush-text-input';
+  input.style.left = x + 'px';
+  input.style.top = (y - fontSize) + 'px';
+  input.style.fontSize = fontSize + 'px';
+  input.style.color = brushState.color;
+  input.style.opacity = brushState.opacity;
+  input.dataset.x = x;
+  input.dataset.y = y;
+  input.placeholder = '输入文字后按 Enter…';
+  input.maxLength = 200;
+
+  wrapper.appendChild(input);
+  brushState.textInput = input;
+
+  requestAnimationFrame(() => input.focus());
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitTextInput();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      input.value = '';
+      commitTextInput();
+    }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => {
+    // 延迟提交，避免与 Enter 重复触发
+    setTimeout(() => {
+      if (brushState.textInput === input) commitTextInput();
+    }, 120);
+  });
+}
+
+// 提交文本输入：把输入内容存为 text 标注
+function commitTextInput() {
+  const input = brushState.textInput;
+  if (!input) return;
+  const text = (input.value || '').trim();
+  const x = parseFloat(input.dataset.x);
+  const y = parseFloat(input.dataset.y);
+  if (text && !isNaN(x) && !isNaN(y)) {
+    const anno = {
+      id: 'anno_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      type: 'text',
+      color: brushState.color,
+      size: brushState.size,
+      points: [{ x, y }],
+      opacity: brushState.opacity,
+      text: text,
+      createdAt: Date.now()
+    };
+    brushState.paths.push(anno);
+    brushState.undoStack = []; // 新动作清空 redo 栈
+    renderAllAnnotations();
+  }
+  if (input.parentNode) input.parentNode.removeChild(input);
+  brushState.textInput = null;
 }
 
 // 鼠标按下：开始绘制
@@ -905,9 +1220,23 @@ function onBrushPointerDown(e) {
     // 橡皮：删除命中的标注
     const hit = findHitAnnotation(pt.x, pt.y);
     if (hit) {
+      brushState.undoStack.push(hit); // 支持重做
       brushState.paths = brushState.paths.filter(p => p.id !== hit.id);
       renderAllAnnotations();
       toast('已删除一条标记', 'success');
+    }
+    return;
+  }
+
+  // 文本工具：点击空白处创建输入框，点击已有文本则进入拖动
+  if (brushState.tool === 'text') {
+    const hit = findHitAnnotation(pt.x, pt.y);
+    if (hit && hit.type === 'text') {
+      brushState.draggingAnno = hit.id;
+      brushState.dragOffset = { x: pt.x - hit.points[0].x, y: pt.y - hit.points[0].y };
+      svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
+    } else {
+      showTextInput(pt.x, pt.y);
     }
     return;
   }
@@ -918,15 +1247,15 @@ function onBrushPointerDown(e) {
   svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
 
   // 创建临时绘制元素
-  if (brushState.tool !== 'annotate') {
+  if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
     // 荧光笔/钢笔：实时绘制
-    const el = createBrushElement(brushState.tool, brushState.color, brushState.size, brushState.points);
+    const el = createBrushElement(brushState.tool, brushState.color, brushState.size, brushState.points, brushState.opacity);
     if (el) {
       el.setAttribute('data-temp', 'true');
       svg.appendChild(el);
       brushState.currentPath = el;
     }
-  } else {
+  } else if (brushState.tool === 'annotate') {
     // 讲解笔：先画临时线段，松开时确定
     const g = svgEl('g', { 'data-temp': 'true' });
     const line = svgEl('line', {
@@ -934,19 +1263,41 @@ function onBrushPointerDown(e) {
       stroke: brushState.color,
       'stroke-width': brushState.size,
       'stroke-linecap': 'round',
-      'stroke-dasharray': '4 4',
+      'stroke-dasharray': '6 4',
       opacity: 0.7
     });
     g.appendChild(line);
     svg.appendChild(g);
     brushState.currentPath = g;
+  } else if (brushState.tool === 'rect' || brushState.tool === 'ellipse') {
+    // 矩形 / 椭圆：起点 + 拖动
+    const el = createBrushElement(brushState.tool, brushState.color, brushState.size, [pt, pt], brushState.opacity);
+    if (el) {
+      el.setAttribute('data-temp', 'true');
+      svg.appendChild(el);
+      brushState.currentPath = el;
+    }
   }
 }
 
 // 鼠标移动：实时更新绘制
 function onBrushPointerMove(e) {
-  if (!brushState.drawing) return;
   const pt = getSvgPoint(e);
+
+  // 文本拖动
+  if (brushState.tool === 'text' && brushState.draggingAnno) {
+    const anno = brushState.paths.find(p => p.id === brushState.draggingAnno);
+    if (anno && anno.points[0]) {
+      anno.points[0] = {
+        x: pt.x - brushState.dragOffset.x,
+        y: pt.y - brushState.dragOffset.y
+      };
+      renderAllAnnotations();
+    }
+    return;
+  }
+
+  if (!brushState.drawing) return;
   const svg = document.getElementById('annotation-layer');
   if (!svg) return;
 
@@ -966,11 +1317,42 @@ function onBrushPointerMove(e) {
       }
     }
     brushState.points = [brushState.startPoint, pt];
+  } else if (brushState.tool === 'rect' && brushState.currentPath) {
+    // 矩形：直接更新属性
+    const sp = brushState.startPoint;
+    const x = Math.min(sp.x, pt.x);
+    const y = Math.min(sp.y, pt.y);
+    const w = Math.max(1, Math.abs(pt.x - sp.x));
+    const h = Math.max(1, Math.abs(pt.y - sp.y));
+    brushState.currentPath.setAttribute('x', x);
+    brushState.currentPath.setAttribute('y', y);
+    brushState.currentPath.setAttribute('width', w);
+    brushState.currentPath.setAttribute('height', h);
+    brushState.points = [sp, pt];
+  } else if (brushState.tool === 'ellipse' && brushState.currentPath) {
+    // 椭圆：直接更新属性
+    const sp = brushState.startPoint;
+    const cx = (sp.x + pt.x) / 2;
+    const cy = (sp.y + pt.y) / 2;
+    const rx = Math.max(1, Math.abs(pt.x - sp.x) / 2);
+    const ry = Math.max(1, Math.abs(pt.y - sp.y) / 2);
+    brushState.currentPath.setAttribute('cx', cx);
+    brushState.currentPath.setAttribute('cy', cy);
+    brushState.currentPath.setAttribute('rx', rx);
+    brushState.currentPath.setAttribute('ry', ry);
+    brushState.points = [sp, pt];
   }
 }
 
 // 鼠标松开：完成绘制
 function onBrushPointerUp(e) {
+  // 文本拖动结束
+  if (brushState.tool === 'text' && brushState.draggingAnno) {
+    brushState.draggingAnno = null;
+    brushState.dragOffset = null;
+    return;
+  }
+
   if (!brushState.drawing) return;
   brushState.drawing = false;
   const svg = document.getElementById('annotation-layer');
@@ -995,10 +1377,12 @@ function onBrushPointerUp(e) {
     type: brushState.tool,
     color: brushState.color,
     size: brushState.size,
+    opacity: brushState.opacity,
     points: brushState.points.slice(),
     createdAt: Date.now()
   };
   brushState.paths.push(anno);
+  brushState.undoStack = []; // 新动作清空 redo 栈
   brushState.points = [];
   brushState.startPoint = null;
   renderAllAnnotations();
@@ -1034,6 +1418,13 @@ function updateBrushToolbarVisibility() {
 function initAnnotationsForDiary(diaryId) {
   brushState.diaryId = diaryId;
   brushState.paths = diaryId ? loadAnnotations(diaryId) : [];
+  brushState.undoStack = []; // 重置 redo 栈
+  // 兼容旧数据：补齐 opacity 字段
+  brushState.paths = brushState.paths.map(p => ({
+    opacity: 1,
+    text: '',
+    ...p
+  }));
   setBrushTool('none');
   renderAllAnnotations();
   // 等待预览渲染完成后重新计算 SVG 尺寸
@@ -1094,7 +1485,10 @@ const state = {
   exportContext: { ids: [], source: 'list' },
   // 编辑器：当前指定可见用户列表（避免每次保存时重新选择）
   visibleTo: [],
-  visibleToUsers: [] // 缓存用户信息（id/username/nickname/avatar）用于展示
+  visibleToUsers: [], // 缓存用户信息（id/username/nickname/avatar）用于展示
+  // 文件夹相关
+  folders: [],          // 后端返回的文件夹列表（含 diary_count）
+  currentFolder: 'all', // 当前选中：'all' | null(默认文件夹) | <数字ID>
 };
 
 // 触发文件下载：使用 fetch + Blob，避免 ORB / 导航中止问题
@@ -1263,7 +1657,23 @@ function renderUserCard() {
   const name = state.user.nickname || state.user.username;
   document.getElementById('user-name').textContent = name;
   document.getElementById('user-handle').textContent = '@' + state.user.username;
-  document.getElementById('user-avatar').textContent = name.charAt(0).toUpperCase();
+  const avatarEl = document.getElementById('user-avatar');
+  if (state.user.avatar) {
+    avatarEl.textContent = '';
+    avatarEl.classList.add('avatar-with-img');
+    let img = avatarEl.querySelector('img');
+    if (!img) {
+      img = document.createElement('img');
+      img.alt = name;
+      avatarEl.appendChild(img);
+    }
+    if (img.src !== state.user.avatar && !img.src.endsWith(state.user.avatar)) {
+      img.src = state.user.avatar;
+    }
+  } else {
+    avatarEl.classList.remove('avatar-with-img');
+    avatarEl.textContent = name.charAt(0).toUpperCase();
+  }
   if (state.user.bio) {
     document.getElementById('user-handle').textContent = state.user.bio;
   }
@@ -1282,6 +1692,10 @@ function showView(name) {
   document.querySelectorAll('.content-view').forEach(v => v.classList.remove('active'));
   const view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
+  // 离开好友页面时停止定时刷新
+  if (name !== 'friends' && typeof clearFriendsRefreshTimer === 'function') {
+    clearFriendsRefreshTimer();
+  }
 }
 
 function navigateTo(nav) {
@@ -1303,11 +1717,14 @@ function navigateTo(nav) {
     document.getElementById('filter-date').value = '';
     document.getElementById('clear-search').style.display = 'none';
     document.getElementById('list-title').textContent = '全部日记';
+    state.currentFolder = 'all';
     showView('list');
+    loadFolders();
     loadDiaries();
   } else if (nav === 'pinned') {
     document.getElementById('list-title').textContent = '置顶日记';
     showView('list');
+    loadFolders();
     loadDiaries({ pinned: true });
   } else if (nav === 'stats') {
     showView('stats');
@@ -1352,6 +1769,316 @@ function navigateTo(nav) {
   }
 }
 
+// ===== 文件夹管理 =====
+const FOLDER_COLORS = [
+  '#4c995c', '#5b8def', '#f0a732', '#e9618c',
+  '#9b6cd9', '#3bb4c4', '#e6783a', '#6f7785'
+];
+
+// 加载文件夹列表（含日记数量）
+async function loadFolders() {
+  try {
+    const folders = await api('/api/diaries/folders');
+    state.folders = Array.isArray(folders) ? folders : (folders.items || []);
+    renderFolders();
+  } catch (e) {
+    // 静默失败，不打扰用户
+    console.warn('加载文件夹失败:', e.message);
+  }
+}
+
+// 渲染文件夹侧边栏（"全部" + "默认文件夹" + 用户文件夹）
+function renderFolders() {
+  const list = document.getElementById('folder-list');
+  if (!list) return;
+
+  // "全部"计数：优先用后端在 folders[0].total_diaries 中返回的总数；
+  // 否则若当前正在查看"全部"，使用 state.total；都没有则留空
+  let totalAll = '';
+  const foldersArr = state.folders || [];
+  if (foldersArr.length && typeof foldersArr[0].total_diaries === 'number') {
+    totalAll = foldersArr[0].total_diaries;
+  } else if (state.currentFolder === 'all' && typeof state.total === 'number') {
+    totalAll = state.total;
+  }
+
+  // "默认文件夹"计数：依赖后端在 folders[0].default_diary_count 中返回，否则留空
+  let defaultCount = '';
+  if (foldersArr.length && typeof foldersArr[0].default_diary_count === 'number') {
+    defaultCount = foldersArr[0].default_diary_count;
+  }
+
+  const allActive = state.currentFolder === 'all';
+  const defaultActive = state.currentFolder === null;
+
+  const userFoldersHtml = foldersArr.map(f => {
+    const fid = f.id;
+    const active = state.currentFolder === fid;
+    const color = f.color || '#4c995c';
+    return `
+      <div class="folder-item ${active ? 'active' : ''}" data-folder-id="${fid}" title="${escapeHtml(f.name)}">
+        <span class="folder-color-bar" style="background:${escapeHtml(color)};"></span>
+        <span class="folder-item-name">${escapeHtml(f.name)}</span>
+        <span class="folder-item-count">${f.diary_count != null ? f.diary_count : ''}</span>
+        <span class="folder-item-actions">
+          <button class="folder-item-action" data-action="rename" data-folder-id="${fid}" data-folder-name="${escapeHtml(f.name)}" data-folder-color="${escapeHtml(color || '')}" title="重命名">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+          </button>
+          <button class="folder-item-action danger" data-action="delete" data-folder-id="${fid}" data-folder-name="${escapeHtml(f.name)}" title="删除">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        </span>
+      </div>
+    `;
+  }).join('');
+
+  list.innerHTML = `
+    <div class="folder-item ${allActive ? 'active' : ''}" data-folder-id="all" title="所有文件夹的日记">
+      <span class="folder-color-bar all"></span>
+      <span class="folder-item-name">全部</span>
+      <span class="folder-item-count">${totalAll}</span>
+    </div>
+    <div class="folder-item ${defaultActive ? 'active' : ''}" data-folder-id="default" title="未分配文件夹的日记">
+      <span class="folder-color-bar default"></span>
+      <span class="folder-item-name">默认文件夹</span>
+      <span class="folder-item-count">${defaultCount}</span>
+    </div>
+    ${userFoldersHtml}
+  `;
+
+  // 绑定点击切换
+  list.querySelectorAll('.folder-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      // 点击操作按钮不触发切换
+      if (e.target.closest('.folder-item-action')) return;
+      const fid = item.dataset.folderId;
+      selectFolder(fid);
+    });
+  });
+  // 绑定重命名/删除按钮
+  list.querySelectorAll('.folder-item-action').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      const fid = parseInt(btn.dataset.folderId, 10);
+      const name = btn.dataset.folderName || '';
+      const color = btn.dataset.folderColor || '';
+      if (action === 'rename') {
+        openFolderForm({ id: fid, name, color });
+      } else if (action === 'delete') {
+        confirmDeleteFolder(fid, name);
+      }
+    });
+  });
+}
+
+// 切换当前文件夹
+function selectFolder(folderIdStr) {
+  let fid;
+  if (folderIdStr === 'all') {
+    fid = 'all';
+  } else if (folderIdStr === 'default') {
+    fid = null;
+  } else {
+    fid = parseInt(folderIdStr, 10);
+    if (isNaN(fid)) return;
+  }
+  state.currentFolder = fid;
+  state.page = 1;
+  // 更新列表标题（textContent 自动转义，无需 escapeHtml）
+  let title = '全部日记';
+  if (fid === null) title = '默认文件夹';
+  else if (fid !== 'all') {
+    const f = (state.folders || []).find(x => x.id === fid);
+    if (f) title = f.name;
+  }
+  const titleEl = document.getElementById('list-title');
+  if (titleEl) titleEl.textContent = title;
+  // 重新渲染激活态（避免等待 loadDiaries）
+  renderFolders();
+  loadDiaries();
+}
+
+// 打开文件夹新建/编辑弹窗
+// mode: {id?, name, color} - 有 id 为编辑，无 id 为新建
+function openFolderForm(opts = {}) {
+  const isEdit = !!opts.id;
+  const name = opts.name || '';
+  const color = opts.color || FOLDER_COLORS[0];
+  const title = isEdit ? '重命名文件夹' : '新建文件夹';
+  const confirmText = isEdit ? '保存' : '创建';
+
+  const body = `
+    <div class="folder-form">
+      <div class="form-group">
+        <label>文件夹名称</label>
+        <input type="text" id="folder-form-name" class="form-input" value="${escapeHtml(name)}" placeholder="输入文件夹名称" maxlength="30" autofocus>
+      </div>
+      <div class="form-group">
+        <label>颜色</label>
+        <div class="folder-color-picker" id="folder-color-picker">
+          ${FOLDER_COLORS.map(c => `
+            <button type="button" class="folder-color-swatch ${c === color ? 'selected' : ''}" data-color="${c}" style="background:${c};" title="${c}"></button>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+
+  let selectedColor = color;
+  showModal(title, body, async () => {
+    const input = document.getElementById('folder-form-name');
+    const newName = (input?.value || '').trim();
+    if (!newName) {
+      toast('请输入文件夹名称', 'error');
+      return false;
+    }
+    try {
+      if (isEdit) {
+        await api(`/api/diaries/folders/${opts.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ name: newName, color: selectedColor })
+        });
+        toast('已更新', 'success');
+      } else {
+        const created = await api('/api/diaries/folders', {
+          method: 'POST',
+          body: JSON.stringify({ name: newName, color: selectedColor })
+        });
+        toast('已创建', 'success');
+        // 若调用方提供了 onCreated 回调（如"移动到新文件夹"流程），调用之
+        if (typeof opts.onCreated === 'function' && created && created.id) {
+          await loadFolders();
+          await opts.onCreated(created.id);
+          return;
+        }
+      }
+      await loadFolders();
+      // 若当前正在查看的文件夹被重命名，更新标题
+      if (state.currentFolder === opts.id) {
+        const titleEl = document.getElementById('list-title');
+        if (titleEl) titleEl.textContent = newName;
+      }
+    } catch (e) {
+      toast(e.message, 'error');
+      return false;
+    }
+  }, { confirmText });
+
+  // 颜色选择
+  setTimeout(() => {
+    const picker = document.getElementById('folder-color-picker');
+    if (picker) {
+      picker.querySelectorAll('.folder-color-swatch').forEach(sw => {
+        sw.addEventListener('click', () => {
+          picker.querySelectorAll('.folder-color-swatch').forEach(s => s.classList.remove('selected'));
+          sw.classList.add('selected');
+          selectedColor = sw.dataset.color;
+        });
+      });
+    }
+    const input = document.getElementById('folder-form-name');
+    if (input) {
+      input.focus();
+      input.select();
+      // 回车提交
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          document.getElementById('modal-confirm').click();
+        }
+      });
+    }
+  }, 50);
+}
+
+// 确认删除文件夹
+function confirmDeleteFolder(id, name) {
+  showModal(
+    '删除文件夹',
+    `<p>确定要删除文件夹 <strong>${escapeHtml(name)}</strong> 吗？</p>
+     <p style="color:var(--fg-muted);font-size:13px;margin-top:8px;">文件夹内的日记将自动移动到"默认文件夹"，不会被删除。</p>`,
+    async () => {
+      try {
+        await api(`/api/diaries/folders/${id}`, { method: 'DELETE' });
+        toast('已删除文件夹', 'success');
+        // 若当前正在查看被删除的文件夹，回到"全部"
+        if (state.currentFolder === id) {
+          state.currentFolder = 'all';
+          const titleEl = document.getElementById('list-title');
+          if (titleEl) titleEl.textContent = '全部日记';
+        }
+        await loadFolders();
+        await loadDiaries();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    },
+    { danger: true, confirmText: '删除' }
+  );
+}
+
+// 移动日记到指定文件夹
+// folderId: null(默认) | <数字> | 'new'(新建)
+async function moveDiaryToFolder(diaryId, folderId) {
+  if (folderId === 'new') {
+    // 先新建文件夹，再移动
+    openFolderForm({
+      onCreated: async (newFolderId) => {
+        try {
+          await api(`/api/diaries/${diaryId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ folder_id: newFolderId })
+          });
+          toast('已移动到新文件夹', 'success');
+          await loadFolders();
+          await loadDiaries();
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+      }
+    });
+    return;
+  }
+  const target = folderId === null ? null : parseInt(folderId, 10);
+  if (isNaN(target) && folderId !== null) return;
+  try {
+    await api(`/api/diaries/${diaryId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ folder_id: target })
+    });
+    toast('已移动', 'success');
+    await loadFolders();
+    await loadDiaries();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+// 渲染编辑器中的文件夹下拉选择
+function renderEditorFolderSelect(selectedFolderId) {
+  const sel = document.getElementById('editor-folder');
+  if (!sel) return;
+  const current = (selectedFolderId === undefined) ? state.currentFolder : selectedFolderId;
+  // current 可能是 'all' / null / <数字>。编辑器中 'all' 视为默认文件夹
+  let selectedVal = '';
+  if (current !== 'all' && current != null) {
+    selectedVal = String(current);
+  }
+  let html = `<option value="">默认文件夹</option>`;
+  (state.folders || []).forEach(f => {
+    html += `<option value="${f.id}" ${String(f.id) === selectedVal ? 'selected' : ''}>${escapeHtml(f.name)}</option>`;
+  });
+  sel.innerHTML = html;
+  if (selectedVal) sel.value = selectedVal;
+  else sel.value = '';
+}
+
+// 关闭所有"移动到"下拉菜单（用于全局点击关闭）
+function closeAllMoveFolderMenus() {
+  document.querySelectorAll('.move-folder-menu').forEach(m => m.remove());
+}
+
 // ===== 加载日记列表 =====
 async function loadDiaries(opts = {}) {
   const params = new URLSearchParams();
@@ -1361,12 +2088,29 @@ async function loadDiaries(opts = {}) {
   params.set('page', state.page);
   params.set('limit', 15);
 
+  // 文件夹过滤：'all' = 全部；null = 默认文件夹；<数字> = 指定文件夹
+  // pinned 视图不传 folder_id（保留原行为）
+  if (!opts.pinned) {
+    if (state.currentFolder === 'all') {
+      params.set('folder_id', 'all');
+    } else if (state.currentFolder === null) {
+      params.set('folder_id', 'null');
+    } else if (state.currentFolder) {
+      params.set('folder_id', state.currentFolder);
+    }
+  }
+
   try {
     const data = await api('/api/diaries?' + params.toString());
     state.diaries = data.items;
     state.pages = data.pages;
     state.total = data.total;
     renderDiaryList(data, opts);
+    // 更新文件夹侧边栏的"全部"计数（仅当当前查看"全部"时）
+    if (state.currentFolder === 'all') {
+      const allItem = document.querySelector('.folder-item[data-folder-id="all"] .folder-item-count');
+      if (allItem) allItem.textContent = state.total != null ? state.total : '';
+    }
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -1419,6 +2163,11 @@ function renderDiaryList(data, opts = {}) {
         <button class="action-btn pin-btn" data-id="${d.id}" title="${d.is_pinned ? '取消置顶' : '置顶'}">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="${d.is_pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L8 6v6L4 16h6v6l2-2 2 2v-6h6l-4-4V6l-4-4z"/></svg>
         </button>
+        <div class="move-folder-wrap">
+          <button class="action-btn move-folder-btn" data-id="${d.id}" data-folder-id="${d.folder_id == null ? '' : d.folder_id}" title="移动到文件夹">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </button>
+        </div>
         <button class="action-btn edit-btn" data-id="${d.id}" title="编辑">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
         </button>
@@ -1465,9 +2214,92 @@ function renderDiaryList(data, opts = {}) {
     e.stopPropagation();
     openExportModal([parseInt(b.dataset.id, 10)]);
   }));
+  list.querySelectorAll('.move-folder-btn').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    openMoveFolderMenu(b);
+  }));
   list.querySelectorAll('.batch-checkbox').forEach(cb => cb.addEventListener('change', updateBatchCount));
 
   renderPagination(data);
+}
+
+// 打开"移动到文件夹"下拉菜单
+function openMoveFolderMenu(btn) {
+  const wrap = btn.parentElement; // .move-folder-wrap
+  // 若当前按钮下已有菜单，则切换关闭
+  const existing = wrap ? wrap.querySelector('.move-folder-menu') : null;
+  closeAllMoveFolderMenus();
+  if (existing) return; // 切换关闭
+  const diaryId = parseInt(btn.dataset.id, 10);
+  const currentFolderId = btn.dataset.folderId; // '' 表示默认文件夹
+  if (!wrap || isNaN(diaryId)) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'move-folder-menu';
+
+  // 默认文件夹项
+  const isDefault = currentFolderId === '';
+  menu.innerHTML = `
+    <div class="move-folder-menu-item ${isDefault ? 'current' : ''}" data-target-folder="">
+      <span class="move-folder-menu-color" style="background:linear-gradient(180deg, var(--fg-tertiary), var(--fg-muted));"></span>
+      <span>默认文件夹${isDefault ? ' ·' : ''}</span>
+    </div>
+    ${(state.folders || []).map(f => {
+      const isCurrent = String(f.id) === String(currentFolderId);
+      const color = f.color || '#4c995c';
+      return `
+        <div class="move-folder-menu-item ${isCurrent ? 'current' : ''}" data-target-folder="${f.id}">
+          <span class="move-folder-menu-color" style="background:${escapeHtml(color)};"></span>
+          <span>${escapeHtml(f.name)}${isCurrent ? ' ·' : ''}</span>
+        </div>
+      `;
+    }).join('')}
+    <div class="move-folder-menu-item create-new" data-target-folder="new">
+      <span class="move-folder-menu-color" style="background:var(--accent);"></span>
+      <span>+ 新建文件夹…</span>
+    </div>
+  `;
+
+  wrap.appendChild(menu);
+
+  // 绑定菜单项点击
+  menu.querySelectorAll('.move-folder-menu-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const target = item.dataset.targetFolder;
+      let targetId;
+      if (target === 'new') {
+        targetId = 'new';
+      } else if (target === '') {
+        targetId = null;
+      } else {
+        targetId = parseInt(target, 10);
+        if (isNaN(targetId)) return;
+      }
+      // 若选择的是当前所在文件夹，无需移动
+      if (targetId !== 'new') {
+        const same = (targetId === null && currentFolderId === '') ||
+                     (String(targetId) === String(currentFolderId));
+        if (same) {
+          closeAllMoveFolderMenus();
+          return;
+        }
+      }
+      closeAllMoveFolderMenus();
+      moveDiaryToFolder(diaryId, targetId);
+    });
+  });
+
+  // 点击外部关闭
+  setTimeout(() => {
+    const onDocClick = (ev) => {
+      if (!menu.contains(ev.target) && ev.target !== btn) {
+        menu.remove();
+        document.removeEventListener('click', onDocClick);
+      }
+    };
+    document.addEventListener('click', onDocClick);
+  }, 0);
 }
 
 function renderPagination(data) {
@@ -1567,6 +2399,8 @@ async function openEditor(id) {
       state.visibleTo = Array.isArray(d.visibleTo) ? d.visibleTo : [];
       state.visibleToUsers = Array.isArray(d.visibleToUsers) ? d.visibleToUsers : [];
       renderVisibleToBadge();
+      // 文件夹选择：若日记已有所属文件夹则预选
+      renderEditorFolderSelect(d.folder_id != null ? d.folder_id : null);
       setSaveStatus('已加载', 'saved');
       state.currentDiary = d;
       // 连接 WebSocket 协同
@@ -1592,6 +2426,8 @@ async function openEditor(id) {
     state.visibleTo = [];
     state.visibleToUsers = [];
     renderVisibleToBadge();
+    // 新建日记：默认文件夹选择为当前查看的文件夹（若为某个具体文件夹）
+    renderEditorFolderSelect(state.currentFolder);
     setSaveStatus('草稿', 'draft');
     state.currentDiary = null;
   }
@@ -1698,6 +2534,14 @@ async function saveDiary() {
   const visibility = document.getElementById('editor-visibility').value;
   const is_public = visibility === 'public' ? 1 : 0;
 
+  // 文件夹选择：'' = 默认文件夹(null)；<数字> = 指定文件夹
+  const folderSelect = document.getElementById('editor-folder');
+  let folderId = null;
+  if (folderSelect && folderSelect.value) {
+    const v = parseInt(folderSelect.value, 10);
+    if (!isNaN(v)) folderId = v;
+  }
+
   if (!content.trim() && !title) {
     toast('请输入日记标题或内容', 'error');
     return;
@@ -1714,7 +2558,7 @@ async function saveDiary() {
     visibleTo = state.visibleTo;
   }
 
-  const body = { title, content, mood, weather, tags, is_pinned, is_public, visibility };
+  const body = { title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id: folderId };
   if (visibleTo) body.visibleTo = visibleTo;
   const saveBtn = document.getElementById('btn-save-diary');
   saveBtn.disabled = true;
@@ -1740,6 +2584,8 @@ async function saveDiary() {
       toast('已创建', 'success');
     }
     setSaveStatus('已保存 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), 'saved');
+    // 文件夹数量可能变化（新建/移动日记），后台刷新
+    if (state.folders.length) loadFolders();
   } catch (e) {
     toast(e.message, 'error');
     setSaveStatus('保存失败', 'draft');
@@ -2120,10 +2966,345 @@ function loadProfileView() {
   document.getElementById('profile-username').value = state.user.username;
   document.getElementById('profile-nickname').value = state.user.nickname || '';
   document.getElementById('profile-bio').value = state.user.bio || '';
+  renderProfileAvatarPreview();
   loadUserStorage();
   // 顺带加载主题设置与我的数据（已并入个人设置页）
   if (typeof loadThemeSettings === 'function') loadThemeSettings();
   if (typeof loadMyData === 'function') loadMyData();
+}
+
+// 渲染个人设置页的头像预览（含图片或首字母）
+function renderProfileAvatarPreview() {
+  const el = document.getElementById('profile-avatar-preview');
+  if (!el || !state.user) return;
+  const name = state.user.nickname || state.user.username || '?';
+  if (state.user.avatar) {
+    el.innerHTML = `<img src="${escapeHtml(state.user.avatar)}" alt="${escapeHtml(name)}">`;
+  } else {
+    el.textContent = name.charAt(0).toUpperCase();
+  }
+  const removeBtn = document.getElementById('btn-remove-avatar');
+  if (removeBtn) removeBtn.style.display = state.user.avatar ? '' : 'none';
+}
+
+// ===== 头像选择 / 裁切 / 上传 =====
+let avatarCropState = null;
+let avatarFileInput = null;
+
+function openAvatarSourceModal() {
+  document.getElementById('avatar-source-modal').style.display = 'flex';
+}
+function closeAvatarSourceModal() {
+  document.getElementById('avatar-source-modal').style.display = 'none';
+}
+
+function openAvatarPicker() {
+  closeAvatarSourceModal();
+  const grid = document.getElementById('avatar-picker-grid');
+  grid.innerHTML = '<div class="avatar-picker-empty">加载中...</div>';
+  document.getElementById('avatar-picker-modal').style.display = 'flex';
+  api('/api/upload/images').then(data => {
+    if (!data.items || !data.items.length) {
+      grid.innerHTML = '<div class="avatar-picker-empty">暂无图片，请先在日记中上传，或直接上传新图片。</div>';
+      return;
+    }
+    grid.innerHTML = data.items.map(img => `
+      <div class="avatar-picker-item" data-url="${escapeHtml(img.url)}">
+        <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.original_name || '')}" loading="lazy">
+      </div>
+    `).join('');
+    grid.querySelectorAll('.avatar-picker-item').forEach(item => {
+      item.addEventListener('click', () => openAvatarCrop(item.dataset.url));
+    });
+  }).catch(err => {
+    grid.innerHTML = `<div class="avatar-picker-empty">加载失败：${escapeHtml(err.message)}</div>`;
+  });
+}
+function closeAvatarPicker() {
+  document.getElementById('avatar-picker-modal').style.display = 'none';
+}
+
+function triggerAvatarFileUpload() {
+  if (!avatarFileInput) {
+    avatarFileInput = document.createElement('input');
+    avatarFileInput.type = 'file';
+    avatarFileInput.accept = 'image/*';
+    avatarFileInput.style.display = 'none';
+    avatarFileInput.addEventListener('change', () => {
+      const file = avatarFileInput.files && avatarFileInput.files[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      openAvatarCrop(url);
+      avatarFileInput.value = '';
+    });
+    document.body.appendChild(avatarFileInput);
+  }
+  avatarFileInput.click();
+}
+
+function openAvatarCrop(imageUrl) {
+  closeAvatarPicker();
+  closeAvatarSourceModal();
+  const modal = document.getElementById('avatar-crop-modal');
+  const imgEl = document.getElementById('avatar-crop-image');
+  const container = document.getElementById('avatar-crop-container');
+  const slider = document.getElementById('avatar-crop-zoom-slider');
+  modal.style.display = 'flex';
+  // 强制布局，确保 getBoundingClientRect 拿到正确尺寸
+  void container.offsetWidth;
+  imgEl.style.opacity = '0';
+  imgEl.style.transform = 'translate(0,0) scale(1)';
+  avatarCropState = null;
+  imgEl.onload = () => {
+    imgEl.style.opacity = '1';
+    const rect = container.getBoundingClientRect();
+    const containerSize = rect.width || 280;
+    const naturalW = imgEl.naturalWidth;
+    const naturalH = imgEl.naturalHeight;
+    if (!naturalW || !naturalH) {
+      toast('图片加载失败', 'error');
+      closeAvatarCrop();
+      return;
+    }
+    const baseScale = containerSize / Math.min(naturalW, naturalH);
+    const minScale = baseScale;
+    const maxScale = Math.max(baseScale * 6, 4);
+    const scale = baseScale;
+    const x = (containerSize - naturalW * scale) / 2;
+    const y = (containerSize - naturalH * scale) / 2;
+    avatarCropState = {
+      img: imgEl,
+      container,
+      containerSize,
+      naturalW, naturalH,
+      baseScale, minScale, maxScale,
+      scale, x, y,
+      pointers: new Map(),
+      dragStart: null,
+      pinchStart: null
+    };
+    slider.min = minScale;
+    slider.max = maxScale;
+    slider.step = 0.01;
+    slider.value = scale;
+    renderAvatarCrop();
+  };
+  imgEl.onerror = () => {
+    toast('图片加载失败', 'error');
+    closeAvatarCrop();
+  };
+  imgEl.src = imageUrl;
+}
+
+function closeAvatarCrop() {
+  const modal = document.getElementById('avatar-crop-modal');
+  if (modal) modal.style.display = 'none';
+  if (avatarCropState) {
+    avatarCropState.pointers.clear();
+    avatarCropState = null;
+  }
+}
+
+function renderAvatarCrop() {
+  if (!avatarCropState) return;
+  const { img, scale, x, y } = avatarCropState;
+  img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+}
+
+function clampAvatarCropPos(x, y) {
+  if (!avatarCropState) return { x: 0, y: 0 };
+  const { containerSize, naturalW, naturalH, scale } = avatarCropState;
+  const dispW = naturalW * scale;
+  const dispH = naturalH * scale;
+  const maxX = Math.min(0, containerSize - dispW);
+  const maxY = Math.min(0, containerSize - dispH);
+  return {
+    x: Math.max(maxX, Math.min(0, x)),
+    y: Math.max(maxY, Math.min(0, y))
+  };
+}
+
+function setAvatarCropScale(newScale, centerCx, centerCy) {
+  if (!avatarCropState) return;
+  const { scale, x, y, containerSize, minScale, maxScale } = avatarCropState;
+  const ns = Math.max(minScale, Math.min(maxScale, newScale));
+  if (ns === scale) return;
+  const cx = (centerCx === undefined) ? containerSize / 2 : centerCx;
+  const cy = (centerCy === undefined) ? containerSize / 2 : centerCy;
+  // 让容器内 (cx, cy) 对应的图片点在新缩放下保持不动
+  const imgX = (cx - x) / scale;
+  const imgY = (cy - y) / scale;
+  const nx = cx - imgX * ns;
+  const ny = cy - imgY * ns;
+  const clamped = clampAvatarCropPos(nx, ny);
+  avatarCropState.scale = ns;
+  avatarCropState.x = clamped.x;
+  avatarCropState.y = clamped.y;
+  const slider = document.getElementById('avatar-crop-zoom-slider');
+  if (slider) slider.value = ns;
+  renderAvatarCrop();
+}
+
+async function cropAndUploadAvatar() {
+  if (!avatarCropState) return;
+  const { img, naturalW, naturalH, scale, x, y, containerSize } = avatarCropState;
+  // 容器可视区域映射到原图坐标
+  const sx = Math.max(0, -x / scale);
+  const sy = Math.max(0, -y / scale);
+  const sWidth = Math.min(naturalW - sx, containerSize / scale);
+  const sHeight = Math.min(naturalH - sy, containerSize / scale);
+  if (sWidth <= 0 || sHeight <= 0) {
+    toast('裁切区域无效', 'error');
+    return;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, 256, 256);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) {
+    toast('裁切失败', 'error');
+    return;
+  }
+  const confirmBtn = document.getElementById('avatar-crop-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = '上传中...';
+  try {
+    const uploadData = await apiUpload(new File([blob], 'avatar.png', { type: 'image/png' }));
+    const data = await api('/api/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify({ avatar: uploadData.url })
+    });
+    state.user = data.user;
+    localStorage.setItem('treeks_user', JSON.stringify(data.user));
+    renderUserCard();
+    renderProfileAvatarPreview();
+    toast('头像已更新', 'success');
+    closeAvatarCrop();
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '确认裁切并上传';
+  }
+}
+
+async function removeAvatar() {
+  try {
+    const data = await api('/api/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify({ avatar: '' })
+    });
+    state.user = data.user;
+    localStorage.setItem('treeks_user', JSON.stringify(data.user));
+    renderUserCard();
+    renderProfileAvatarPreview();
+    toast('已移除头像', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function bindAvatarCropInteraction() {
+  const container = document.getElementById('avatar-crop-container');
+  const slider = document.getElementById('avatar-crop-zoom-slider');
+  const zoomIn = document.getElementById('avatar-crop-zoom-in');
+  const zoomOut = document.getElementById('avatar-crop-zoom-out');
+  const confirmBtn = document.getElementById('avatar-crop-confirm');
+
+  // 拖动 + 双指缩放（Pointer Events，同时支持鼠标和触摸）
+  container.addEventListener('pointerdown', e => {
+    if (!avatarCropState) return;
+    try { container.setPointerCapture(e.pointerId); } catch (_) {}
+    avatarCropState.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (avatarCropState.pointers.size === 1) {
+      avatarCropState.dragStart = {
+        startClientX: e.clientX, startClientY: e.clientY,
+        startImgX: avatarCropState.x, startImgY: avatarCropState.y
+      };
+      avatarCropState.pinchStart = null;
+    } else if (avatarCropState.pointers.size === 2) {
+      const pts = Array.from(avatarCropState.pointers.values());
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      avatarCropState.pinchStart = {
+        dist: Math.hypot(dx, dy) || 1,
+        scale: avatarCropState.scale
+      };
+      avatarCropState.dragStart = null;
+    }
+  });
+  container.addEventListener('pointermove', e => {
+    if (!avatarCropState) return;
+    if (!avatarCropState.pointers.has(e.pointerId)) return;
+    avatarCropState.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const rect = container.getBoundingClientRect();
+    if (avatarCropState.pinchStart && avatarCropState.pointers.size >= 2) {
+      const pts = Array.from(avatarCropState.pointers.values()).slice(0, 2);
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      const newDist = Math.hypot(dx, dy) || 1;
+      const ratio = newDist / avatarCropState.pinchStart.dist;
+      const newScale = avatarCropState.pinchStart.scale * ratio;
+      const midClientX = (pts[0].x + pts[1].x) / 2;
+      const midClientY = (pts[0].y + pts[1].y) / 2;
+      setAvatarCropScale(newScale, midClientX - rect.left, midClientY - rect.top);
+    } else if (avatarCropState.dragStart) {
+      const ds = avatarCropState.dragStart;
+      const nx = ds.startImgX + (e.clientX - ds.startClientX);
+      const ny = ds.startImgY + (e.clientY - ds.startClientY);
+      const clamped = clampAvatarCropPos(nx, ny);
+      avatarCropState.x = clamped.x;
+      avatarCropState.y = clamped.y;
+      renderAvatarCrop();
+    }
+  });
+  const releasePointer = e => {
+    if (!avatarCropState) return;
+    avatarCropState.pointers.delete(e.pointerId);
+    if (avatarCropState.pointers.size < 2) avatarCropState.pinchStart = null;
+    if (avatarCropState.pointers.size === 0) avatarCropState.dragStart = null;
+  };
+  container.addEventListener('pointerup', releasePointer);
+  container.addEventListener('pointercancel', releasePointer);
+
+  // 滚轮缩放（桌面端）
+  container.addEventListener('wheel', e => {
+    if (!avatarCropState) return;
+    e.preventDefault();
+    const rect = container.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const factor = Math.exp(-e.deltaY * 0.0025);
+    setAvatarCropScale(avatarCropState.scale * factor, cx, cy);
+  }, { passive: false });
+
+  // 缩放滑块与按钮
+  slider.addEventListener('input', () => {
+    if (!avatarCropState) return;
+    setAvatarCropScale(parseFloat(slider.value));
+  });
+  zoomIn.addEventListener('click', () => {
+    if (avatarCropState) setAvatarCropScale(avatarCropState.scale * 1.2);
+  });
+  zoomOut.addEventListener('click', () => {
+    if (avatarCropState) setAvatarCropScale(avatarCropState.scale / 1.2);
+  });
+
+  confirmBtn.addEventListener('click', cropAndUploadAvatar);
+
+  // 关闭按钮（data-close 属性）
+  document.querySelectorAll('[data-close]').forEach(el => {
+    el.addEventListener('click', () => {
+      const which = el.dataset.close;
+      if (which === 'avatar-source') closeAvatarSourceModal();
+      else if (which === 'avatar-picker') closeAvatarPicker();
+      else if (which === 'avatar-crop') closeAvatarCrop();
+    });
+  });
 }
 
 async function loadUserStorage() {
@@ -2356,6 +3537,19 @@ function bindEvents() {
     loadDiaries();
   });
 
+  // 新建文件夹按钮
+  const btnAddFolder = document.getElementById('btn-add-folder');
+  if (btnAddFolder) {
+    btnAddFolder.addEventListener('click', () => openFolderForm({}));
+  }
+
+  // 全局点击关闭"移动到文件夹"下拉菜单（处理菜单外部点击）
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.move-folder-wrap') && !e.target.closest('.move-folder-menu')) {
+      closeAllMoveFolderMenus();
+    }
+  });
+
   // 编辑器
   document.getElementById('btn-back-list').addEventListener('click', () => {
     if (state.editingId) collabLeave(state.editingId);
@@ -2416,7 +3610,13 @@ function bindEvents() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('[data-shared-tab]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      loadSharedList(btn.dataset.sharedTab);
+      const tab = btn.dataset.sharedTab;
+      sharedState.tab = tab;
+      if (tab === 'blocked') {
+        loadBlockedUsers();
+      } else {
+        loadSharedList(tab);
+      }
     });
   });
 
@@ -2592,6 +3792,20 @@ function bindEvents() {
       toast('资料已更新', 'success');
     } catch (err) { toast(err.message, 'error'); }
   });
+
+  // 头像设置：更换 / 移除 / 来源选择 / 裁切交互
+  document.getElementById('btn-change-avatar').addEventListener('click', openAvatarSourceModal);
+  document.getElementById('avatar-source-pick').addEventListener('click', openAvatarPicker);
+  document.getElementById('avatar-source-upload').addEventListener('click', () => {
+    closeAvatarSourceModal();
+    triggerAvatarFileUpload();
+  });
+  document.getElementById('btn-remove-avatar').addEventListener('click', () => {
+    showModal('移除头像', '确定要移除当前头像吗？将恢复为首字母头像。', async () => {
+      await removeAvatar();
+    }, { danger: true, confirmText: '移除' });
+  });
+  bindAvatarCropInteraction();
 
   // 修改密码
   document.getElementById('password-form').addEventListener('submit', async e => {
@@ -4817,6 +6031,13 @@ async function updateNavBadges() {
 }
 
 // ===== 好友页面 =====
+let friendsRefreshTimer = null;
+function clearFriendsRefreshTimer() {
+  if (friendsRefreshTimer) {
+    clearInterval(friendsRefreshTimer);
+    friendsRefreshTimer = null;
+  }
+}
 async function loadFriendsView() {
   const c = document.getElementById('friends-content');
   c.innerHTML = '<div class="loading-state">加载中...</div>';
@@ -4827,6 +6048,15 @@ async function loadFriendsView() {
       api('/api/friends/requests/sent')
     ]);
     renderFriendsView(friends.items || [], requests.items || [], sentReqs.items || []);
+    // 定时刷新在线状态（30 秒），仅在好友视图激活时生效
+    clearFriendsRefreshTimer();
+    friendsRefreshTimer = setInterval(() => {
+      if (state.currentView === 'friends' && document.getElementById('view-friends')?.classList.contains('active')) {
+        loadFriendsView();
+      } else {
+        clearFriendsRefreshTimer();
+      }
+    }, 30000);
   } catch (e) {
     c.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message)}</p></div>`;
   }
@@ -4882,11 +6112,16 @@ function renderFriendsView(friends, requests, sentReqs) {
   if (friends.length) {
     html += '<div class="friends-grid">';
     friends.forEach(f => {
+      const online = !!f.is_online;
       html += `<div class="friend-card">
-        ${userAvatarHtml(f, 44)}
+        <div class="friend-avatar-wrap">
+          ${userAvatarHtml(f, 44)}
+          <span class="friend-status-dot ${online ? 'online' : 'offline'}" title="${online ? '在线' : '离线'}"></span>
+        </div>
         <div class="friend-info">
           <div class="friend-name">${escapeHtml(f.nickname || f.username)}</div>
           <div class="friend-handle">@${escapeHtml(f.username)}</div>
+          <div class="friend-presence ${online ? 'is-online' : 'is-offline'}">${online ? '在线' : '离线'}</div>
           ${f.bio ? `<div class="friend-bio">${escapeHtml(f.bio)}</div>` : ''}
         </div>
         <div class="friend-actions">
@@ -5187,6 +6422,9 @@ function renderSharedList(items, tab) {
     const preview = (d.content || '').replace(/[#*`>\-\[\]]/g, '').slice(0, 120);
     const visLabel = { public: '公开', friends: '好友可见', specific: '指定可见' }[d.visibility] || '';
     return `<div class="diary-card shared-diary-card" data-open-shared="${d.id}">
+      <button class="shared-block-btn" data-block-author="${d.author_id}" data-author-name="${escapeHtml(author.nickname || author.username)}" title="屏蔽该作者" aria-label="屏蔽该作者">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+      </button>
       <div class="diary-card-header">
         ${userAvatarHtml(author, 28)}
         <span class="diary-author">${escapeHtml(author.nickname || author.username)}</span>
@@ -5201,8 +6439,104 @@ function renderSharedList(items, tab) {
   }).join('') + '</div>';
 
   c.querySelectorAll('[data-open-shared]').forEach(card => {
-    card.addEventListener('click', () => openEditor(parseInt(card.dataset.openShared, 10)));
+    card.addEventListener('click', (e) => {
+      // 屏蔽按钮的点击不触发打开日记
+      if (e.target.closest('[data-block-author]')) return;
+      openEditor(parseInt(card.dataset.openShared, 10));
+    });
   });
+  c.querySelectorAll('[data-block-author]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const userId = parseInt(btn.dataset.blockAuthor, 10);
+      const name = btn.dataset.authorName || '该作者';
+      blockAuthor(userId, name);
+    });
+  });
+}
+
+// 屏蔽作者：二次确认后调用 API，刷新当前共享列表
+function blockAuthor(userId, name) {
+  showModal(
+    '屏蔽用户',
+    `<p>确定要屏蔽 <strong>${escapeHtml(name)}</strong> 吗？</p><p style="color:var(--fg-muted);font-size:13px;margin-top:8px;">屏蔽后，该用户的笔记将不再出现在共享列表中。你可以在"已屏蔽用户"中取消屏蔽。</p>`,
+    async () => {
+      try {
+        await api('/api/diaries/blocked-users', {
+          method: 'POST',
+          body: JSON.stringify({ blockedUserId: userId })
+        });
+        toast(`已屏蔽 ${name}`, 'success');
+        // 屏蔽后刷新当前标签：'blocked' 标签用 loadBlockedUsers，其他用 loadSharedList
+        if (sharedState.tab === 'blocked') {
+          loadBlockedUsers();
+        } else {
+          loadSharedList(sharedState.tab);
+        }
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    },
+    { danger: true, confirmText: '屏蔽' }
+  );
+}
+
+// 已屏蔽用户列表
+async function loadBlockedUsers() {
+  const c = document.getElementById('shared-content');
+  c.innerHTML = '<div class="loading-state">加载中...</div>';
+  try {
+    const data = await api('/api/diaries/blocked-users');
+    renderBlockedUsers(data.items || []);
+  } catch (e) {
+    c.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderBlockedUsers(items) {
+  const c = document.getElementById('shared-content');
+  if (!items.length) {
+    c.innerHTML = `<div class="empty-state"><p>暂未屏蔽任何用户</p></div>`;
+    return;
+  }
+  c.innerHTML = '<div class="friends-grid blocked-users-grid">' + items.map(u => {
+    return `<div class="friend-card blocked-user-card">
+      ${userAvatarHtml({ id: u.id, username: u.username, nickname: u.nickname, avatar: u.avatar }, 44)}
+      <div class="friend-info">
+        <div class="friend-name">${escapeHtml(u.nickname || u.username)}</div>
+        <div class="friend-handle">@${escapeHtml(u.username)}</div>
+        ${u.blocked_at ? `<div class="friend-status">已于 ${formatDate(u.blocked_at)} 屏蔽</div>` : ''}
+      </div>
+      <div class="friend-actions">
+        <button class="btn btn-ghost btn-sm" data-unblock-user="${u.id}">取消屏蔽</button>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+
+  c.querySelectorAll('[data-unblock-user]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const uid = parseInt(btn.dataset.unblockUser, 10);
+      unblockUser(uid);
+    });
+  });
+}
+
+// 取消屏蔽
+function unblockUser(userId) {
+  showModal(
+    '取消屏蔽',
+    '<p>确定要取消屏蔽该用户吗？取消后，其笔记将重新出现在共享列表中。</p>',
+    async () => {
+      try {
+        await api(`/api/diaries/blocked-users/${userId}`, { method: 'DELETE' });
+        toast('已取消屏蔽', 'success');
+        loadBlockedUsers();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    },
+    { confirmText: '取消屏蔽' }
+  );
 }
 
 // ===== 协作者管理弹窗 =====

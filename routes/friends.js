@@ -1,6 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { authRequired } = require('../middleware/auth');
+const { isUserOnline } = require('../services/collab');
 
 const router = express.Router();
 router.use(authRequired);
@@ -118,7 +119,8 @@ router.get('/', (req, res) => {
      WHERE f.user_id = ?
      ORDER BY u.nickname, u.username`
   ).all(req.user.id);
-  res.json({ items: rows, total: rows.length });
+  const items = rows.map(r => ({ ...r, is_online: isUserOnline(r.id) }));
+  res.json({ items, total: items.length });
 });
 
 // 删除好友（双向）

@@ -47,6 +47,19 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_diaries_created_at ON diaries(created_at);
     CREATE INDEX IF NOT EXISTS idx_diaries_tags ON diaries(tags);
 
+    -- 日记文件夹
+    CREATE TABLE IF NOT EXISTS folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT DEFAULT '#4c995c',
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_folders_user_id ON folders(user_id);
+
     CREATE TABLE IF NOT EXISTS images (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -172,6 +185,20 @@ function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_letters_recipient ON letters(recipient_id, is_read);
     CREATE INDEX IF NOT EXISTS idx_letters_sender ON letters(sender_id);
+
+    -- 用户屏蔽关系（屏蔽某作者后，其笔记不再出现在共享列表中）
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      blocked_user_id INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (blocked_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, blocked_user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_blocks_user_id ON user_blocks(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_user_id);
   `);
 
   // 兼容旧库：补字段
@@ -188,6 +215,8 @@ function initDatabase() {
   addColumnIfMissing('users', 'theme', "TEXT DEFAULT 'green'");
   // 日记可见性：private / public / friends / specific
   addColumnIfMissing('diaries', 'visibility', "TEXT DEFAULT 'private'");
+  // 日记所属文件夹（NULL 表示在默认/根目录）
+  addColumnIfMissing('diaries', 'folder_id', 'INTEGER DEFAULT NULL');
 
   // 默认设置
   const defaultSettings = {

@@ -60,12 +60,92 @@ function syncVisibleTo(diaryId, userIds) {
   }
 }
 
-// 获取日记列表（支持分页、搜索、标签过滤、日期过滤）
+// ===== 文件夹 CRUD =====
+// 注意：这些路由必须放在 GET /:id 之前，否则 /folders 会被 /:id 匹配
+
+// 获取当前用户的文件夹列表（含每个文件夹的日记数量）
+router.get('/folders', (req, res) => {
+  const rows = db.prepare(
+    `SELECT f.*,
+       (SELECT COUNT(*) FROM diaries d WHERE d.folder_id = f.id AND d.user_id = f.user_id) AS diary_count
+     FROM folders f
+     WHERE f.user_id = ?
+     ORDER BY f.sort_order ASC, f.name ASC`
+  ).all(req.user.id);
+  res.json({ items: rows });
+});
+
+// 创建文件夹
+router.post('/folders', (req, res) => {
+  const { name, color, sort_order } = req.body || {};
+  const trimmed = (name || '').trim();
+  if (!trimmed) return res.status(400).json({ error: '文件夹名称不能为空' });
+  if (trimmed.length > 50) return res.status(400).json({ error: '文件夹名称过长' });
+
+  const result = db.prepare(
+    `INSERT INTO folders (user_id, name, color, sort_order)
+     VALUES (?, ?, ?, ?)`
+  ).run(
+    req.user.id,
+    trimmed,
+    (color || '#4c995c').slice(0, 20),
+    Number.isInteger(sort_order) ? sort_order : 0
+  );
+  const row = db.prepare('SELECT * FROM folders WHERE id = ?').get(result.lastInsertRowid);
+  res.status(201).json(row);
+});
+
+// 重命名 / 修改颜色 / 调整排序
+router.put('/folders/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const existing = db.prepare('SELECT * FROM folders WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!existing) return res.status(404).json({ error: '文件夹不存在或无权修改' });
+
+  const { name, color, sort_order } = req.body || {};
+  const newName = name !== undefined ? String(name).trim() : null;
+  if (newName === '') return res.status(400).json({ error: '文件夹名称不能为空' });
+  if (newName && newName.length > 50) return res.status(400).json({ error: '文件夹名称过长' });
+
+  db.prepare(
+    `UPDATE folders SET
+       name = COALESCE(?, name),
+       color = COALESCE(?, color),
+       sort_order = COALESCE(?, sort_order)
+     WHERE id = ? AND user_id = ?`
+  ).run(
+    newName,
+    color !== undefined ? String(color).slice(0, 20) : null,
+    Number.isInteger(sort_order) ? sort_order : null,
+    id,
+    req.user.id
+  );
+
+  const row = db.prepare('SELECT * FROM folders WHERE id = ?').get(id);
+  res.json(row);
+});
+
+// 删除文件夹：其中的日记移到默认文件夹（folder_id 设为 NULL），不删除日记
+router.delete('/folders/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const existing = db.prepare('SELECT * FROM folders WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!existing) return res.status(404).json({ error: '文件夹不存在或无权删除' });
+
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE diaries SET folder_id = NULL WHERE folder_id = ? AND user_id = ?')
+      .run(id, req.user.id);
+    db.prepare('DELETE FROM folders WHERE id = ? AND user_id = ?').run(id, req.user.id);
+  });
+  tx();
+  res.json({ message: '文件夹已删除，其中的日记已移至默认文件夹' });
+});
+
+// 获取日记列表（支持分页、搜索、标签过滤、日期过滤、文件夹过滤）
 router.get('/', (req, res) => {
   const {
     keyword,
     tag,
     date,
+    folder_id,
     page = 1,
     limit = 20,
     order = 'desc'
@@ -77,6 +157,30 @@ router.get('/', (req, res) => {
 
   let where = 'WHERE user_id = ?';
   const params = [req.user.id];
+
+  // folder_id 过滤：
+  //   - 未传 / folder_id=null / folder_id=NULL → 默认文件夹（folder_id IS NULL）
+  //   - folder_id=all → 全部日记（不加过滤）
+  //   - folder_id=<数字> → 指定文件夹
+  if (folder_id !== undefined && String(folder_id).toLowerCase() !== 'all') {
+    const v = String(folder_id).toLowerCase();
+    if (v === 'null' || v === '') {
+      where += ' AND folder_id IS NULL';
+    } else {
+      const fid = parseInt(folder_id, 10);
+      if (Number.isInteger(fid) && fid > 0) {
+        where += ' AND folder_id = ?';
+        params.push(fid);
+      } else {
+        // 非法值，按默认文件夹处理
+        where += ' AND folder_id IS NULL';
+      }
+    }
+  } else if (folder_id === undefined) {
+    // 默认行为：只显示默认文件夹
+    where += ' AND folder_id IS NULL';
+  }
+  // folder_id === 'all' → 不加过滤
 
   if (keyword) {
     where += ' AND (title LIKE ? OR content LIKE ?)';
@@ -96,7 +200,7 @@ router.get('/', (req, res) => {
 
   const total = db.prepare(`SELECT COUNT(*) as count FROM diaries ${where}`).get(...params).count;
   const rows = db.prepare(
-    `SELECT id, title, content, mood, weather, tags, is_pinned, is_public, visibility, created_at, updated_at
+    `SELECT id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id, created_at, updated_at
      FROM diaries ${where} ${orderClause} LIMIT ? OFFSET ?`
   ).all(...params, limitNum, offset);
 
@@ -159,11 +263,22 @@ router.get('/:id', (req, res) => {
 
 // 创建日记
 router.post('/', (req, res) => {
-  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators } = req.body || {};
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators, folder_id } = req.body || {};
   const vis = ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : 'private';
+
+  // 校验 folder_id：必须属于当前用户，否则置为 NULL（默认文件夹）
+  let folderId = null;
+  if (folder_id !== undefined && folder_id !== null) {
+    const fid = parseInt(folder_id, 10);
+    if (Number.isInteger(fid) && fid > 0) {
+      const owned = db.prepare('SELECT 1 FROM folders WHERE id = ? AND user_id = ?').get(fid, req.user.id);
+      if (owned) folderId = fid;
+    }
+  }
+
   const result = db.prepare(
-    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     req.user.id,
     (title || '').trim(),
@@ -173,7 +288,8 @@ router.post('/', (req, res) => {
     stringifyTags(tags),
     is_pinned ? 1 : 0,
     is_public ? 1 : 0,
-    vis
+    vis,
+    folderId
   );
   const newId = result.lastInsertRowid;
 
@@ -209,11 +325,33 @@ router.put('/:id', (req, res) => {
   const canEdit = isOwner || canEditDiary(id, req.user.id);
   if (!canEdit) return res.status(403).json({ error: '无权编辑此日记' });
 
-  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo } = req.body || {};
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, folder_id } = req.body || {};
 
-  // 仅 owner 可改可见性/置顶/公开
+  // 仅 owner 可改可见性/置顶/公开/移动文件夹
   const canChangeMeta = isOwner;
   const vis = canChangeMeta && ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : existing.visibility;
+
+  // 处理 folder_id 移动（仅 owner 可移动；folder_id 可为 null 表示移到默认文件夹）
+  let folderIdUpdate = null;
+  let shouldUpdateFolder = false;
+  if (canChangeMeta && folder_id !== undefined) {
+    shouldUpdateFolder = true;
+    if (folder_id === null) {
+      folderIdUpdate = null;
+    } else {
+      const fid = parseInt(folder_id, 10);
+      if (Number.isInteger(fid) && fid > 0) {
+        const owned = db.prepare('SELECT 1 FROM folders WHERE id = ? AND user_id = ?').get(fid, req.user.id);
+        if (owned) {
+          folderIdUpdate = fid;
+        } else {
+          return res.status(400).json({ error: '文件夹不存在或无权访问' });
+        }
+      } else {
+        return res.status(400).json({ error: 'folder_id 参数无效' });
+      }
+    }
+  }
 
   db.prepare(
     `UPDATE diaries SET
@@ -238,6 +376,12 @@ router.put('/:id', (req, res) => {
     vis,
     id
   );
+
+  // 单独处理 folder_id（因为它可能是 NULL，COALESCE 无法区分"未传"和"传 null"）
+  if (shouldUpdateFolder) {
+    db.prepare('UPDATE diaries SET folder_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(folderIdUpdate, id);
+  }
 
   // 仅 owner 可同步可见性用户列表
   if (canChangeMeta && vis === 'specific' && Array.isArray(visibleTo)) {
@@ -274,6 +418,7 @@ router.patch('/:id/pin', (req, res) => {
 // ===== 共享/协作相关 =====
 
 // 我能看到的他人日记（好友公开 / 指定可见 / 我协作的）
+// 已屏蔽作者的笔记不会出现在列表中
 router.get('/shared/list', (req, res) => {
   const rows = db.prepare(
     `SELECT d.id, d.title, d.content, d.mood, d.weather, d.tags, d.visibility, d.created_at, d.updated_at,
@@ -281,6 +426,7 @@ router.get('/shared/list', (req, res) => {
      FROM diaries d
      JOIN users u ON u.id = d.user_id
      WHERE d.user_id != ?
+       AND NOT EXISTS (SELECT 1 FROM user_blocks ub WHERE ub.user_id = ? AND ub.blocked_user_id = d.user_id)
        AND (
          d.visibility = 'public'
          OR (d.visibility = 'friends' AND EXISTS (
@@ -291,9 +437,47 @@ router.get('/shared/list', (req, res) => {
        )
      ORDER BY d.created_at DESC
      LIMIT 100`
-  ).all(req.user.id, req.user.id, req.user.id, req.user.id);
+  ).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
   const items = rows.map(r => ({ ...r, tags: parseTags(r.tags) }));
   res.json({ items, total: items.length });
+});
+
+// ===== 屏蔽用户管理 =====
+
+// 获取已屏蔽用户列表
+router.get('/blocked-users', (req, res) => {
+  const rows = db.prepare(
+    `SELECT u.id, u.username, u.nickname, u.avatar, ub.created_at AS blocked_at
+     FROM user_blocks ub
+     JOIN users u ON u.id = ub.blocked_user_id
+     WHERE ub.user_id = ?
+     ORDER BY ub.created_at DESC`
+  ).all(req.user.id);
+  res.json({ items: rows, total: rows.length });
+});
+
+// 屏蔽用户
+router.post('/blocked-users', (req, res) => {
+  const { blockedUserId } = req.body || {};
+  const uid = parseInt(blockedUserId, 10);
+  if (!uid) return res.status(400).json({ error: '请指定要屏蔽的用户' });
+  if (uid === req.user.id) return res.status(400).json({ error: '不能屏蔽自己' });
+
+  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(uid);
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+
+  db.prepare('INSERT OR IGNORE INTO user_blocks (user_id, blocked_user_id) VALUES (?, ?)')
+    .run(req.user.id, uid);
+  res.status(201).json({ message: '已屏蔽该用户' });
+});
+
+// 取消屏蔽
+router.delete('/blocked-users/:userId', (req, res) => {
+  const uid = parseInt(req.params.userId, 10);
+  if (!uid) return res.status(400).json({ error: '参数无效' });
+  db.prepare('DELETE FROM user_blocks WHERE user_id = ? AND blocked_user_id = ?')
+    .run(req.user.id, uid);
+  res.json({ message: '已取消屏蔽' });
 });
 
 // 我正在协作的日记

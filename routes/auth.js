@@ -98,9 +98,15 @@ router.get('/me', authRequired, (req, res) => {
 // 更新个人资料
 router.put('/profile', authRequired, (req, res) => {
   const { nickname, bio, avatar } = req.body || {};
+  // avatar: undefined=不更新；''=清除；其他字符串=更新
+  const avatarParam = (avatar === undefined ? null : avatar);
   db.prepare(
-    'UPDATE users SET nickname = COALESCE(?, nickname), bio = COALESCE(?, bio), avatar = COALESCE(?, avatar) WHERE id = ?'
-  ).run(nickname || null, bio || null, avatar || null, req.user.id);
+    `UPDATE users SET
+      nickname = COALESCE(?, nickname),
+      bio = COALESCE(?, bio),
+      avatar = CASE WHEN ? IS NULL THEN avatar ELSE NULLIF(?, '') END
+     WHERE id = ?`
+  ).run(nickname || null, bio || null, avatarParam, avatarParam, req.user.id);
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = ?`).get(req.user.id);
   res.json({ user });
 });

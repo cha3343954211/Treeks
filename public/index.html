@@ -317,35 +317,50 @@
               </div>
             </header>
           </div>
-          <div class="content-header">
-            <h2 id="list-title">全部日记</h2>
-            <span class="content-count" id="list-count"></span>
-            <div class="content-header-actions">
-              <button class="btn btn-ghost btn-sm" id="btn-toggle-select" title="批量选择">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                批量选择
-              </button>
-              <button class="btn btn-ghost btn-sm" id="btn-export-all" title="导出当前列表">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                导出全部
-              </button>
+          <div class="list-layout">
+            <aside class="folder-sidebar" id="folder-sidebar">
+              <div class="folder-sidebar-header">
+                <span class="folder-sidebar-title">文件夹</span>
+                <button class="folder-add-btn" id="btn-add-folder" title="新建文件夹" aria-label="新建文件夹">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+              </div>
+              <div class="folder-list" id="folder-list">
+                <!-- 动态渲染 -->
+              </div>
+            </aside>
+            <div class="list-main">
+              <div class="content-header">
+                <h2 id="list-title">全部日记</h2>
+                <span class="content-count" id="list-count"></span>
+                <div class="content-header-actions">
+                  <button class="btn btn-ghost btn-sm" id="btn-toggle-select" title="批量选择">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                    批量选择
+                  </button>
+                  <button class="btn btn-ghost btn-sm" id="btn-export-all" title="导出当前列表">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    导出全部
+                  </button>
+                </div>
+              </div>
+              <div class="batch-select-bar" id="batch-select-bar" style="display:none;">
+                <label class="checkbox select-all-label">
+                  <input type="checkbox" id="select-all-checkbox"> 全选当前页
+                </label>
+                <span class="batch-count" id="batch-count">已选 0 篇</span>
+                <div class="batch-actions">
+                  <button class="btn btn-primary btn-sm" id="btn-batch-export" disabled>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    导出选中
+                  </button>
+                  <button class="btn btn-ghost btn-sm" id="btn-cancel-select">取消</button>
+                </div>
+              </div>
+              <div id="diary-list" class="diary-list"></div>
+              <div id="list-pagination" class="pagination"></div>
             </div>
           </div>
-          <div class="batch-select-bar" id="batch-select-bar" style="display:none;">
-            <label class="checkbox select-all-label">
-              <input type="checkbox" id="select-all-checkbox"> 全选当前页
-            </label>
-            <span class="batch-count" id="batch-count">已选 0 篇</span>
-            <div class="batch-actions">
-              <button class="btn btn-primary btn-sm" id="btn-batch-export" disabled>
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                导出选中
-              </button>
-              <button class="btn btn-ghost btn-sm" id="btn-cancel-select">取消</button>
-            </div>
-          </div>
-          <div id="diary-list" class="diary-list"></div>
-          <div id="list-pagination" class="pagination"></div>
         </div>
 
         <!-- 编辑器视图 -->
@@ -467,6 +482,15 @@
                   <button class="brush-btn" data-brush="annotate" title="讲解笔（箭头）">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="9 5 19 5 19 15"/></svg>
                   </button>
+                  <button class="brush-btn" data-brush="text" title="文本标注（点击位置输入文字，可拖动）">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                  </button>
+                  <button class="brush-btn brush-secondary-tool" data-brush="rect" title="矩形（拖动绘制）">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+                  </button>
+                  <button class="brush-btn brush-secondary-tool" data-brush="ellipse" title="椭圆（拖动绘制）">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="10" ry="7"/></svg>
+                  </button>
                   <button class="brush-btn" data-brush="eraser" title="橡皮（点击删除单条标记）">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16c-1-1-1-3 0-4l9-9c1-1 3-1 4 0l7 7c1 1 1 3 0 4l-7 7"/><line x1="18" y1="13" x2="9" y2="4"/></svg>
                   </button>
@@ -495,9 +519,17 @@
                     <input type="range" id="brush-size-input" class="brush-size-input" min="1" max="24" value="6">
                     <span class="brush-size-value" id="brush-size-value">6</span>
                   </div>
+                  <div class="brush-opacity-wrap brush-secondary-tool" title="不透明度">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.65;"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+                    <input type="range" id="brush-opacity-input" class="brush-size-input" min="10" max="100" value="100">
+                    <span class="brush-size-value" id="brush-opacity-value">100%</span>
+                  </div>
                   <span class="brush-divider"></span>
-                  <button class="brush-btn" data-brush="undo" title="撤销上一步">
+                  <button class="brush-btn" data-brush="undo" title="撤销（Ctrl+Z）">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+                  </button>
+                  <button class="brush-btn" data-brush="redo" title="重做（Ctrl+Y）">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>
                   </button>
                   <button class="brush-btn" data-brush="clear" title="清除全部标记">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
@@ -507,6 +539,13 @@
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                     <span>保存</span>
                   </button>
+                  <button class="brush-btn brush-secondary-tool" data-brush="export" title="导出标注数据为 JSON 文件">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
+                  <button class="brush-btn brush-secondary-tool" data-brush="import" title="导入标注数据（JSON）">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  </button>
+                  <input type="file" id="brush-import-input" accept="application/json,.json" style="display:none;">
                 </div>
                 <button class="brush-btn brush-collapse-btn" id="btn-collapse-brush" title="折叠笔刷栏">
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
@@ -588,6 +627,13 @@
           </div>
           <div class="profile-card">
             <form id="profile-form">
+              <div class="profile-avatar-section">
+                <div class="profile-avatar-preview" id="profile-avatar-preview"></div>
+                <div class="profile-avatar-actions">
+                  <button type="button" class="btn btn-ghost" id="btn-change-avatar">更换头像</button>
+                  <button type="button" class="btn btn-text btn-remove-avatar" id="btn-remove-avatar" style="display:none;">移除头像</button>
+                </div>
+              </div>
               <div class="form-group">
                 <label>用户名</label>
                 <input type="text" id="profile-username" disabled>
@@ -769,6 +815,7 @@
             <div class="shared-tabs">
               <button class="letter-tab active" data-shared-tab="shared">好友分享</button>
               <button class="letter-tab" data-shared-tab="collaborating">我协作的</button>
+              <button class="letter-tab" data-shared-tab="blocked">已屏蔽用户</button>
             </div>
           </div>
           <div id="shared-content"></div>
@@ -781,6 +828,82 @@
   <div id="toast" class="toast"></div>
 
   <!-- 模态对话框 -->
+  <!-- 头像来源选择弹窗 -->
+  <div id="avatar-source-modal" class="modal avatar-source-modal" style="display:none;">
+    <div class="modal-backdrop" data-close="avatar-source"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>设置头像</h3>
+        <button class="modal-close" data-close="avatar-source">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="avatar-source-options">
+          <button type="button" class="avatar-source-option" id="avatar-source-pick">
+            <div class="avatar-source-icon">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            </div>
+            <div class="avatar-source-text">
+              <div class="avatar-source-title">从我的照片选择</div>
+              <div class="avatar-source-desc">从图片库中挑选一张裁切为头像</div>
+            </div>
+          </button>
+          <button type="button" class="avatar-source-option" id="avatar-source-upload">
+            <div class="avatar-source-icon">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <div class="avatar-source-text">
+              <div class="avatar-source-title">上传新图片</div>
+              <div class="avatar-source-desc">从设备中选择图片上传并裁切</div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 头像图片选择弹窗（从我的照片中挑选） -->
+  <div id="avatar-picker-modal" class="modal avatar-picker-modal" style="display:none;">
+    <div class="modal-backdrop" data-close="avatar-picker"></div>
+    <div class="modal-content modal-content-wide">
+      <div class="modal-header">
+        <h3>从我的照片中选择</h3>
+        <button class="modal-close" data-close="avatar-picker">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="avatar-picker-grid" class="avatar-picker-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 头像裁切弹窗 -->
+  <div id="avatar-crop-modal" class="modal avatar-crop-modal" style="display:none;">
+    <div class="modal-backdrop" data-close="avatar-crop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>裁切头像</h3>
+        <button class="modal-close" data-close="avatar-crop">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="avatar-crop-stage">
+          <div class="avatar-crop-container" id="avatar-crop-container">
+            <img class="avatar-crop-image" id="avatar-crop-image" alt="" draggable="false">
+            <div class="avatar-crop-overlay"></div>
+          </div>
+          <div class="avatar-crop-zoom">
+            <button type="button" class="avatar-crop-zoom-btn" id="avatar-crop-zoom-out" aria-label="缩小">−</button>
+            <input type="range" class="avatar-crop-zoom-slider" id="avatar-crop-zoom-slider" min="0.1" max="3" step="0.01" value="1">
+            <button type="button" class="avatar-crop-zoom-btn" id="avatar-crop-zoom-in" aria-label="放大">+</button>
+            <span class="avatar-crop-zoom-label">滚轮缩放 · 拖动调整</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close="avatar-crop">取消</button>
+        <button class="btn btn-primary" id="avatar-crop-confirm">确认裁切并上传</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal" class="modal" style="display:none;">
     <div class="modal-backdrop"></div>
     <div class="modal-content">

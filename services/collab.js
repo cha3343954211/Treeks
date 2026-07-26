@@ -23,6 +23,33 @@ const { JWT_SECRET } = require('../middleware/auth');
 const rooms = new Map();
 // ws -> { userId, username, nickname, avatar, diaryIds: Set<number> }
 const clients = new WeakMap();
+// userId -> Set<ws>，全局在线用户列表（同一用户可能多端登录，故用 Set）
+const onlineUsers = new Map();
+
+function addOnlineUser(userId, ws) {
+  let set = onlineUsers.get(userId);
+  if (!set) {
+    set = new Set();
+    onlineUsers.set(userId, set);
+  }
+  set.add(ws);
+}
+
+function removeOnlineUser(userId, ws) {
+  const set = onlineUsers.get(userId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) onlineUsers.delete(userId);
+}
+
+function isUserOnline(userId) {
+  const set = onlineUsers.get(userId);
+  return !!set && set.size > 0;
+}
+
+function getOnlineUserIds() {
+  return Array.from(onlineUsers.keys());
+}
 
 function getUserInfo(userId) {
   return db.prepare('SELECT id, username, nickname, avatar FROM users WHERE id = ?').get(userId);
@@ -176,6 +203,7 @@ function setupWebSocket(server) {
       avatar: user.avatar,
       diaryIds: new Set()
     });
+    addOnlineUser(user.id, ws);
 
     ws.on('message', raw => {
       let data;
@@ -200,6 +228,7 @@ function setupWebSocket(server) {
             else broadcastPresence(diaryId);
           }
         }
+        removeOnlineUser(info.userId, ws);
       }
       clients.delete(ws);
     });
@@ -211,4 +240,4 @@ function setupWebSocket(server) {
   return wss;
 }
 
-module.exports = { setupWebSocket };
+module.exports = { setupWebSocket, isUserOnline, getOnlineUserIds };
