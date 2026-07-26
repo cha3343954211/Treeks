@@ -259,4 +259,18 @@ function setupWebSocket(server) {
   return wss;
 }
 
-module.exports = { setupWebSocket, isUserOnline, getOnlineUserIds, touchUserActive, ONLINE_THRESHOLD_SEC };
+// 向某用户的所有在线连接推送消息（用于即时消息）
+function pushToUser(userId, payload) {
+  const set = onlineUsers.get(userId);
+  if (!set || set.size === 0) return false;
+  const msg = JSON.stringify(payload);
+  let sent = 0;
+  for (const ws of set) {
+    if (ws.readyState === 1) {
+      try { ws.send(msg); sent++; } catch (_) {}
+    }
+  }
+  return sent > 0;
+}
+
+module.exports = { setupWebSocket, isUserOnline, getOnlineUserIds, touchUserActive, ONLINE_THRESHOLD_SEC, pushToUser };

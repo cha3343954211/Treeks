@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { db } = require('../db');
-const { signToken, authRequired } = require('../middleware/auth');
+const { signToken, authRequired, JWT_EXPIRES } = require('../middleware/auth');
 const { touchUserActive, isUserOnline } = require('../services/collab');
 
 const router = express.Router();
@@ -14,6 +14,34 @@ function getSetting(key, def = null) {
 
 // 用户公开信息字段
 const USER_PUBLIC_FIELDS = 'id, username, nickname, avatar, bio, is_admin, status, storage_limit, theme, created_at';
+
+// 将 JWT 过期时间转换为秒数（如 "7d" -> 604800）
+function jwtExpiresToSeconds(exp) {
+  if (!exp) return 7 * 24 * 60 * 60;
+  const m = String(exp).match(/^(\d+)\s*([smhd])$/);
+  if (!m) return 7 * 24 * 60 * 60;
+  const n = parseInt(m[1], 10);
+  const unit = m[2];
+  return n * (unit === 's' ? 1 : unit === 'm' ? 60 : unit === 'h' ? 3600 : 86400);
+}
+
+// 设置 treeks_token cookie，用于浏览器自动随 <img> 等请求发送
+function setAuthCookie(res, token) {
+  const maxAge = jwtExpiresToSeconds(JWT_EXPIRES) * 1000;
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie('treeks_token', token, {
+    httpOnly: false,   // 前端 JS 可读，便于与 localStorage 一致管理
+    maxAge,
+    sameSite: 'lax',   // 防 CSRF
+    secure: isProd,    // 生产环境要求 HTTPS
+    path: '/'
+  });
+}
+
+// 清除 cookie
+function clearAuthCookie(res) {
+  res.clearCookie('treeks_token', { path: '/' });
+}
 
 // 注册
 router.post('/register', (req, res) => {
@@ -51,6 +79,7 @@ router.post('/register', (req, res) => {
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = ?`).get(result.lastInsertRowid);
 
   const token = signToken(user.id, user.username, user.is_admin);
+  setAuthCookie(res, token);
   res.status(201).json({ token, user });
 });
 
@@ -86,7 +115,14 @@ router.post('/login', (req, res) => {
     created_at: row.created_at
   };
   const token = signToken(user.id, user.username, user.is_admin);
+  setAuthCookie(res, token);
   res.json({ token, user });
+});
+
+// 退出登录：清除 cookie（前端会同步删除 localStorage 中的 token）
+router.post('/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.json({ message: '已退出登录' });
 });
 
 // 获取当前用户信息

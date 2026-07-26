@@ -203,6 +203,13 @@
               信件
               <span class="nav-badge" id="badge-letters" style="display:none;"></span>
             </button>
+            <button class="nav-item" data-nav="messages">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+              </svg>
+              消息
+              <span class="nav-badge" id="badge-messages" style="display:none;"></span>
+            </button>
             <button class="nav-item" data-nav="shared">
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="18" cy="5" r="3"/>
@@ -637,13 +644,9 @@
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
                 删除
               </button>
-              <label class="btn btn-ghost btn-sm" id="btn-bind-pdf" title="从「我的文件」中选择 PDF 绑定到本日记（先在「我的文件」页面上传）">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h6"/></svg>
-                <span id="btn-bind-pdf-text">绑定 PDF</span>
-              </label>
-              <button class="btn btn-ghost btn-sm" id="btn-remove-pdf" style="display:none;" title="移除 PDF 附件">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                移除 PDF
+              <button class="btn btn-ghost btn-sm" id="btn-attachments" title="管理日记附件">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                附件 <span id="att-count-badge" class="att-count-badge" style="display:none;">0</span>
               </button>
               <button class="btn btn-ghost" id="btn-export-diary" title="导出当前日记">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -896,6 +899,48 @@
           <div id="letters-content"></div>
         </div>
 
+        <!-- 消息视图（即时聊天） -->
+        <div id="view-messages" class="content-view">
+          <div class="content-header">
+            <h2>消息</h2>
+            <span id="msg-unread-badge" class="msg-unread-badge" style="display:none;">0 未读</span>
+          </div>
+          <div class="messages-layout">
+            <aside class="msg-sidebar" id="msg-sidebar">
+              <div class="msg-sidebar-header">
+                <input type="text" id="msg-search-input" class="msg-search-input" placeholder="搜索好友开始聊天…" />
+              </div>
+              <div id="msg-conversations" class="msg-conversations"></div>
+            </aside>
+            <section class="msg-chat" id="msg-chat">
+              <div class="msg-chat-empty" id="msg-chat-empty">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                <p>选择好友开始聊天</p>
+              </div>
+              <div class="msg-chat-active" id="msg-chat-active" style="display:none;">
+                <header class="msg-chat-header">
+                  <button class="btn btn-ghost btn-sm" id="msg-back-btn" title="返回">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                  </button>
+                  <img id="msg-peer-avatar" class="msg-peer-avatar" alt="" src="" />
+                  <div class="msg-peer-info">
+                    <div class="msg-peer-name" id="msg-peer-name"></div>
+                    <div class="msg-peer-status" id="msg-peer-status"></div>
+                  </div>
+                </header>
+                <div class="msg-messages" id="msg-messages"></div>
+                <footer class="msg-input-bar">
+                  <button class="btn btn-ghost btn-sm" id="msg-attach-btn" title="发送文件">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                  </button>
+                  <input type="text" id="msg-input" class="msg-input" placeholder="输入消息，Enter 发送…" autocomplete="off" />
+                  <button class="btn btn-primary btn-sm" id="msg-send-btn">发送</button>
+                </footer>
+              </div>
+            </section>
+          </div>
+        </div>
+
         <!-- 共享日记视图 -->
         <div id="view-shared" class="content-view">
           <div class="content-header">
@@ -914,6 +959,64 @@
 
   <!-- Toast 通知 -->
   <div id="toast" class="toast"></div>
+
+  <!-- 附件管理模态框 -->
+  <div id="attachments-modal" class="modal" style="display:none;">
+    <div class="modal-backdrop" data-close="attachments"></div>
+    <div class="modal-content attachments-modal-content">
+      <header class="modal-header">
+        <h3>日记附件</h3>
+        <button class="modal-close" data-close="attachments" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <div class="att-section">
+          <div class="att-section-title">从「我的文件」选择</div>
+          <div id="att-file-picker" class="att-file-picker">
+            <div class="att-loading">加载中…</div>
+          </div>
+        </div>
+        <div class="att-section">
+          <div class="att-section-title">快速上传新文件</div>
+          <div class="att-upload-zone">
+            <label class="btn btn-primary btn-sm" for="att-upload-input">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              选择文件上传
+            </label>
+            <input type="file" id="att-upload-input" multiple style="display:none;" />
+            <span class="att-upload-hint">支持 PDF/图片/文档/文本/表格</span>
+          </div>
+        </div>
+        <div class="att-section">
+          <div class="att-section-title">已添加附件（<span id="att-current-count">0</span>）</div>
+          <div id="att-current-list" class="att-current-list">
+            <div class="att-empty">暂无附件</div>
+          </div>
+        </div>
+      </div>
+      <footer class="modal-footer">
+        <button class="btn btn-ghost" data-close="attachments">关闭</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- 发送文件模态框（用于消息中发送文件） -->
+  <div id="msg-file-picker-modal" class="modal" style="display:none;">
+    <div class="modal-backdrop" data-close="msg-file-picker"></div>
+    <div class="modal-content" style="max-width:600px;">
+      <header class="modal-header">
+        <h3>选择要发送的文件</h3>
+        <button class="modal-close" data-close="msg-file-picker" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <div id="msg-file-picker-list" class="att-file-picker">
+          <div class="att-loading">加载中…</div>
+        </div>
+      </div>
+      <footer class="modal-footer">
+        <button class="btn btn-ghost" data-close="msg-file-picker">取消</button>
+      </footer>
+    </div>
+  </div>
 
   <!-- 模态对话框 -->
   <!-- 头像来源选择弹窗 -->

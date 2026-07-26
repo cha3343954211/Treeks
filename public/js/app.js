@@ -1440,109 +1440,22 @@ function setupPdfViewer() {
       });
     }
   }
-  // 新的"绑定 PDF"按钮：弹窗选择已上传的 PDF
-  const bindBtn = document.getElementById('btn-bind-pdf');
-  if (bindBtn) {
-    bindBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      openBindPdfModal();
-    });
+  // 附件按钮：打开附件管理模态框
+  const attBtn = document.getElementById('btn-attachments');
+  if (attBtn) {
+    attBtn.addEventListener('click', () => openAttachmentsModal());
   }
-  // 移除按钮
-  const removeBtn = document.getElementById('btn-remove-pdf');
-  if (removeBtn) removeBtn.addEventListener('click', handleRemovePdf);
   // 初始化 PDF.js worker
   setupPdfJsWorker();
 }
 
-// 弹窗：从"我的文件"中选一个 PDF 绑定到当前日记
-async function openBindPdfModal() {
-  if (!brushState.diaryId) {
-    toast('请先打开或新建一篇日记', 'error');
-    return;
-  }
-  let files;
-  try {
-    const data = await api('/api/upload/files?kind=pdf');
-    files = data.items || [];
-  } catch (e) {
-    toast('加载 PDF 列表失败：' + e.message, 'error');
-    return;
-  }
-  if (!files.length) {
-    showModal(
-      '没有 PDF 文件',
-      `<div style="padding:8px 0;">
-         <p style="color:var(--fg-secondary);margin-bottom:12px;">你还没有上传任何 PDF 文件。</p>
-         <p style="color:var(--fg-muted);font-size:13px;">请到「我的文件」页面上传 PDF 后再回来绑定。</p>
-       </div>
-       <div style="display:flex;gap:8px;margin-top:12px;">
-         <button class="btn btn-primary" id="goto-files-btn">前往「我的文件」</button>
-       </div>`,
-      null,
-      { hideCancel: true, confirmText: '关闭' }
-    );
-    setTimeout(() => {
-      const goto = document.getElementById('goto-files-btn');
-      if (goto) goto.addEventListener('click', () => { closeModal(); navigateTo('files'); });
-    }, 50);
-    return;
-  }
-  const html = `
-    <div style="max-height:60vh;overflow:auto;">
-      <p style="color:var(--fg-secondary);margin-bottom:12px;font-size:13px;">选择要绑定到当前日记的 PDF（来自「我的文件」）：</p>
-      <div class="bind-pdf-list">
-        ${files.map(f => `
-          <div class="bind-pdf-item" data-id="${f.id}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_name || f.filename)}">
-            <div class="bind-pdf-thumb">PDF</div>
-            <div class="bind-pdf-meta">
-              <div class="bind-pdf-name" title="${escapeHtml(f.original_name || f.filename)}">${escapeHtml(f.original_name || f.filename)}</div>
-              <div class="bind-pdf-info">${formatFileSize ? formatFileSize(f.size) : (f.size + ' B')} · ${escapeHtml((f.created_at || '').slice(0, 10))}</div>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-  showModal('绑定 PDF', html, null, { hideCancel: true, confirmText: '关闭' });
-  setTimeout(() => {
-    document.querySelectorAll('.bind-pdf-item').forEach(item => {
-      item.addEventListener('click', async () => {
-        const id = item.dataset.id;
-        try {
-          await api(`/api/diaries/${brushState.diaryId}/bind-pdf`, {
-            method: 'POST',
-            body: JSON.stringify({ fileId: parseInt(id, 10) })
-          });
-          closeModal();
-          toast('已绑定 PDF，正在加载预览', 'success');
-          // 重新加载当前日记
-          const diary = await api(`/api/diaries/${brushState.diaryId}`);
-          await autoLoadDiaryPdf(diary);
-          // 切到预览模式
-          const previewBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="preview"]');
-          if (previewBtn) previewBtn.click();
-        } catch (e) {
-          toast('绑定失败：' + e.message, 'error');
-        }
-      });
-    });
-  }, 50);
-}
-
-// 当打开一篇已有 PDF 的日记时，自动加载并进入预览
+// 当打开一篇已有附件的日记时，自动加载并进入预览
 async function autoLoadDiaryPdf(diary) {
+  // 兼容旧逻辑：如果 diaries.pdf_filename 还在则继续加载
   if (!diary || !diary.pdf_filename) {
-    // 没有 PDF，回到普通模式
     exitPdfMode();
-    const removeBtn = document.getElementById('btn-remove-pdf');
-    if (removeBtn) removeBtn.style.display = 'none';
-    const uploadText = document.getElementById('btn-upload-pdf-text');
-    if (uploadText) uploadText.textContent = '上传 PDF';
     return;
   }
-  // 构建 PDF URL：使用鉴权 API 端点
-  // 同时兼容 /uploads/USER_ID/pdf/xxx.pdf（旧格式）和 /api/upload/pdf/xxx.pdf（新格式）
   let url;
   if (diary.pdf_filename.startsWith('/uploads/') || diary.pdf_filename.startsWith('/api/')) {
     url = diary.pdf_filename;
@@ -1552,15 +1465,10 @@ async function autoLoadDiaryPdf(diary) {
   const ok = await loadPdf(url, diary.pdf_filename);
   if (ok) {
     enterPdfMode();
-    // 切到预览模式
     setTimeout(() => {
       const previewBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="preview"]');
       if (previewBtn) previewBtn.click();
     }, 100);
-    const removeBtn = document.getElementById('btn-remove-pdf');
-    if (removeBtn) removeBtn.style.display = '';
-    const uploadText = document.getElementById('btn-upload-pdf-text');
-    if (uploadText) uploadText.textContent = '替换 PDF';
   }
 }
 
@@ -2454,14 +2362,33 @@ async function api(path, options = {}) {
     if (!res.ok) {
       if (res.status === 401) {
         logout();
-        throw new Error(data.error || '登录已过期');
+        throw new Error(data.error || '登录已过期，请重新登录');
+      }
+      if (res.status === 403) {
+        throw new Error(data.error || '没有权限执行此操作');
+      }
+      if (res.status === 404) {
+        throw new Error(data.error || '请求的资源不存在');
+      }
+      if (res.status === 413) {
+        throw new Error(data.error || '文件过大，超过服务器限制');
+      }
+      if (res.status === 429) {
+        throw new Error('操作过于频繁，请稍后再试');
+      }
+      if (res.status >= 500) {
+        throw new Error(data.error || '服务器暂时不可用，请稍后重试');
       }
       throw new Error(data.error || `请求失败 (${res.status})`);
     }
     return data;
   } catch (e) {
-    if (e.message === 'Failed to fetch') {
+    if (e.message === 'Failed to fetch' || e.message === 'NetworkError when attempting to fetch resource.') {
       throw new Error('网络连接失败，请检查服务是否运行');
+    }
+    // 超时
+    if (e.name === 'AbortError') {
+      throw new Error('请求超时，请检查网络后重试');
     }
     throw e;
   }
@@ -2482,12 +2409,17 @@ async function apiUpload(file) {
 }
 
 // ===== Toast =====
+// type: 'success' | 'error' | 'info' | 'warning' | ''
+// 错误提示展示时间更长（4.5s），让用户充分阅读；其他类型 2.8s
 function toast(msg, type = '') {
   const el = document.getElementById('toast');
+  if (!el) return;
+  // 安全转义，防止 HTML 注入（虽然 textContent 已处理，但保险起见）
   el.textContent = msg;
   el.className = 'toast show ' + type;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { el.className = 'toast'; }, 2800);
+  const duration = type === 'error' ? 4500 : (type === 'warning' ? 3800 : 2800);
+  toast._t = setTimeout(() => { el.className = 'toast'; }, duration);
 }
 
 // ===== Modal =====
@@ -2544,7 +2476,11 @@ function setAuth(token, user) {
   localStorage.setItem('treeks_user', JSON.stringify(user));
 }
 
-function logout() {
+async function logout() {
+  // 通知后端清除 cookie（treeks_token）
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch (_) { /* 忽略网络错误，仍继续本地清理 */ }
   state.token = null;
   state.user = null;
   localStorage.removeItem('treeks_token');
@@ -2643,6 +2579,11 @@ function navigateTo(nav) {
   if (state.selectMode && nav !== 'list' && nav !== 'pinned') {
     toggleSelectMode(false);
   }
+  // 离开消息视图时清理轮询定时器
+  if (nav !== 'messages' && typeof msgState !== 'undefined' && msgState.pollTimer) {
+    clearInterval(msgState.pollTimer);
+    msgState.pollTimer = null;
+  }
 
   // 重置筛选
   if (nav === 'list') {
@@ -2676,6 +2617,9 @@ function navigateTo(nav) {
   } else if (nav === 'letters') {
     showView('letters');
     loadLettersView();
+  } else if (nav === 'messages') {
+    showView('messages');
+    loadMessagesView();
   } else if (nav === 'shared') {
     showView('shared');
     loadSharedView();
@@ -3370,6 +3314,8 @@ async function openEditor(id) {
   updateWordCount();
   // 初始化当前日记的笔刷标注数据
   initAnnotationsForDiary(id || null);
+  // 刷新附件徽标
+  refreshAttachmentBadge(id);
   // 如果该日记带 PDF 附件，自动加载并进入预览模式
   const diaryObj = state.currentDiary;
   if (diaryObj && diaryObj.pdf_filename) {
@@ -3377,10 +3323,6 @@ async function openEditor(id) {
   } else {
     // 任何不带 PDF 的情况：彻底清空 PDF 模式状态
     exitPdfMode();
-    const removeBtn = document.getElementById('btn-remove-pdf');
-    if (removeBtn) removeBtn.style.display = 'none';
-    const uploadText = document.getElementById('btn-upload-pdf-text');
-    if (uploadText) uploadText.textContent = '上传 PDF';
   }
 }
 
@@ -8972,6 +8914,16 @@ async function updateNavBadges() {
       badgeL.textContent = ls.unread;
       badgeL.style.display = '';
     } else { badgeL.style.display = 'none'; }
+
+    // 消息未读数
+    try {
+      const ms = await api('/api/messages/unread/count');
+      const badgeM = document.getElementById('badge-messages');
+      if (ms.unread > 0) {
+        badgeM.textContent = ms.unread > 99 ? '99+' : String(ms.unread);
+        badgeM.style.display = '';
+      } else { badgeM.style.display = 'none'; }
+    } catch {}
   } catch {}
 }
 
@@ -9679,6 +9631,9 @@ function collabConnect() {
         setSaveStatus(`${data.username || '协作者'} 已更新`, 'saved');
       } else if (data.type === 'error') {
         console.warn('[Collab]', data.message);
+      } else if (data.type === 'message') {
+        // 即时消息推送
+        handleIncomingWsMessage(data);
       }
     };
 
@@ -9749,3 +9704,587 @@ function renderCollabPresence(diaryId, users) {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ============================================================
+//  日记附件模块
+// ============================================================
+const ATT_KIND_ICON = { image: 'IMG', pdf: 'PDF', text: 'TXT', document: 'DOC', other: 'FILE' };
+const ATT_KIND_LABEL = { image: '图片', pdf: 'PDF', text: '文本', document: '文档', other: '文件' };
+
+function kindInitial(kind) {
+  return ATT_KIND_ICON[kind] || 'FILE';
+}
+
+// 刷新编辑器附件徽标
+async function refreshAttachmentBadge(diaryId) {
+  const badge = document.getElementById('att-count-badge');
+  if (!badge) return;
+  if (!diaryId) { badge.style.display = 'none'; return; }
+  try {
+    const data = await api(`/api/diaries/${diaryId}/attachments`);
+    const n = (data.items || []).length;
+    if (n > 0) {
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (_) {
+    badge.style.display = 'none';
+  }
+}
+
+// 打开附件管理模态框
+async function openAttachmentsModal() {
+  const diaryId = state.currentDiary && state.currentDiary.id;
+  if (!diaryId) {
+    toast('请先打开或新建一篇日记', 'error');
+    return;
+  }
+  const modal = document.getElementById('attachments-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  // 绑定关闭
+  modal.querySelectorAll('[data-close="attachments"]').forEach(el => {
+    el.onclick = () => { modal.style.display = 'none'; };
+  });
+  // 加载文件列表 + 当前附件
+  await loadAttFilePicker(diaryId);
+  await loadAttCurrentList(diaryId);
+  // 上传
+  const input = document.getElementById('att-upload-input');
+  if (input) {
+    input.onchange = async () => {
+      if (!input.files || input.files.length === 0) return;
+      await uploadFiles(input.files, null);
+      input.value = '';
+      await loadAttFilePicker(diaryId);
+      toast('文件已上传，可在上方选择添加为附件', 'success');
+    };
+  }
+}
+
+// 加载可选文件列表
+async function loadAttFilePicker(diaryId) {
+  const box = document.getElementById('att-file-picker');
+  if (!box) return;
+  box.innerHTML = '<div class="att-loading">加载中…</div>';
+  try {
+    const data = await api('/api/upload/files?limit=100');
+    const items = data.items || [];
+    // 取当前已添加附件的 file_id 集合
+    let addedIds = new Set();
+    try {
+      const att = await api(`/api/diaries/${diaryId}/attachments`);
+      (att.items || []).forEach(a => addedIds.add(a.file_id));
+    } catch (_) {}
+    if (!items.length) {
+      box.innerHTML = '<div class="att-empty">还没有任何文件，先上传一个吧</div>';
+      return;
+    }
+    box.innerHTML = items.map(f => `
+      <div class="att-file-item" data-id="${f.id}">
+        <div class="att-file-icon" data-kind="${f.kind}">${kindInitial(f.kind)}</div>
+        <div class="att-file-info">
+          <div class="att-file-name" title="${escapeHtml(f.original_name || f.filename)}">${escapeHtml(f.original_name || f.filename)}</div>
+          <div class="att-file-meta">${escapeHtml(ATT_KIND_LABEL[f.kind] || '文件')} · ${formatFileSize(f.size)}</div>
+        </div>
+        <button class="att-file-action" data-action="add" data-id="${f.id}">
+          ${addedIds.has(f.id) ? '已添加' : '添加'}
+        </button>
+      </div>
+    `).join('');
+    box.querySelectorAll('.att-file-action[data-action="add"]').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const fid = parseInt(btn.dataset.id, 10);
+        try {
+          await api(`/api/diaries/${diaryId}/attachments`, {
+            method: 'POST',
+            body: JSON.stringify({ fileId: fid })
+          });
+          toast('已添加附件', 'success');
+          await loadAttFilePicker(diaryId);
+          await loadAttCurrentList(diaryId);
+          refreshAttachmentBadge(diaryId);
+        } catch (err) {
+          toast('添加失败：' + err.message, 'error');
+        }
+      };
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// 加载已添加的附件列表
+async function loadAttCurrentList(diaryId) {
+  const box = document.getElementById('att-current-list');
+  if (!box) return;
+  const countEl = document.getElementById('att-current-count');
+  box.innerHTML = '<div class="att-loading">加载中…</div>';
+  try {
+    const data = await api(`/api/diaries/${diaryId}/attachments`);
+    const items = data.items || [];
+    if (countEl) countEl.textContent = String(items.length);
+    if (!items.length) {
+      box.innerHTML = '<div class="att-empty">暂无附件</div>';
+      return;
+    }
+    box.innerHTML = items.map(f => `
+      <div class="att-file-item" data-id="${f.file_id}">
+        <div class="att-file-icon" data-kind="${f.kind}">${kindInitial(f.kind)}</div>
+        <div class="att-file-info">
+          <div class="att-file-name" title="${escapeHtml(f.original_name || f.filename)}">${escapeHtml(f.original_name || f.filename)}</div>
+          <div class="att-file-meta">${escapeHtml(ATT_KIND_LABEL[f.kind] || '文件')} · ${formatFileSize(f.size)}</div>
+        </div>
+        ${f.kind === 'pdf' ? `<button class="att-file-action" data-action="view" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_name || f.filename)}">预览</button>` : ''}
+        <button class="att-file-action att-remove" data-action="remove" data-id="${f.file_id}">移除</button>
+      </div>
+    `).join('');
+    box.querySelectorAll('.att-file-action[data-action="remove"]').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const fid = parseInt(btn.dataset.id, 10);
+        if (!confirm('确定移除该附件？')) return;
+        try {
+          await api(`/api/diaries/${diaryId}/attachments/${fid}`, { method: 'DELETE' });
+          toast('已移除附件', 'success');
+          await loadAttFilePicker(diaryId);
+          await loadAttCurrentList(diaryId);
+          refreshAttachmentBadge(diaryId);
+        } catch (err) {
+          toast('移除失败：' + err.message, 'error');
+        }
+      };
+    });
+    box.querySelectorAll('.att-file-action[data-action="view"]').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const url = btn.dataset.url;
+        const name = btn.dataset.name;
+        if (window.openPdfViewerModal) openPdfViewerModal(url, name);
+      };
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ============================================================
+//  我的消息模块
+// ============================================================
+const msgState = {
+  peerId: null,
+  peer: null,
+  messages: [],
+  conversations: [],
+  pollTimer: null,
+  searchKeyword: ''
+};
+
+async function loadMessagesView() {
+  await loadMsgConversations();
+  await refreshMsgUnreadBadge();
+  // 启动轮询
+  if (msgState.pollTimer) clearInterval(msgState.pollTimer);
+  msgState.pollTimer = setInterval(pollNewMessages, 8000);
+  // 绑定事件
+  bindMsgEvents();
+}
+
+function bindMsgEvents() {
+  const sendBtn = document.getElementById('msg-send-btn');
+  const input = document.getElementById('msg-input');
+  const attachBtn = document.getElementById('msg-attach-btn');
+  const backBtn = document.getElementById('msg-back-btn');
+  const searchInput = document.getElementById('msg-search-input');
+  if (sendBtn) sendBtn.onclick = sendMsg;
+  if (input) {
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMsg();
+      }
+    };
+  }
+  if (attachBtn) attachBtn.onclick = openMsgFilePicker;
+  if (backBtn) backBtn.onclick = () => {
+    msgState.peerId = null;
+    document.getElementById('msg-chat-active').style.display = 'none';
+    document.getElementById('msg-chat-empty').style.display = '';
+    document.querySelector('.messages-layout').classList.remove('has-active-chat');
+  };
+  if (searchInput) {
+    searchInput.oninput = () => {
+      msgState.searchKeyword = searchInput.value.trim().toLowerCase();
+      renderMsgConversations();
+    };
+  }
+}
+
+async function loadMsgConversations() {
+  const box = document.getElementById('msg-conversations');
+  if (!box) return;
+  try {
+    const data = await api('/api/messages/conversations');
+    msgState.conversations = data.items || [];
+    // 如果没有会话，显示好友列表作为可发起聊天的对象
+    if (msgState.conversations.length === 0) {
+      try {
+        const fdata = await api('/api/friends');
+        msgState.conversations = (fdata.items || []).map(f => ({
+          peer: f,
+          latest_at: null,
+          unread: 0,
+          last_message: null
+        }));
+      } catch (_) {}
+    } else {
+      // 合并好友中没有聊天记录的（方便发起新聊天）
+      let fdata;
+      try { fdata = await api('/api/friends'); } catch (_) { fdata = { items: [] }; }
+      const existing = new Set(msgState.conversations.map(c => c.peer.id));
+      (fdata.items || []).forEach(f => {
+        if (!existing.has(f.id)) {
+          msgState.conversations.push({ peer: f, latest_at: null, unread: 0, last_message: null });
+        }
+      });
+    }
+    renderMsgConversations();
+  } catch (e) {
+    box.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderMsgConversations() {
+  const box = document.getElementById('msg-conversations');
+  if (!box) return;
+  let list = msgState.conversations || [];
+  if (msgState.searchKeyword) {
+    list = list.filter(c => {
+      const name = (c.peer.nickname || c.peer.username || '').toLowerCase();
+      return name.includes(msgState.searchKeyword);
+    });
+  }
+  // 排序：有最后消息的在前，按 latest_at 倒序
+  list.sort((a, b) => {
+    if (!a.latest_at && !b.latest_at) return 0;
+    if (!a.latest_at) return 1;
+    if (!b.latest_at) return -1;
+    return b.latest_at.localeCompare(a.latest_at);
+  });
+  if (!list.length) {
+    box.innerHTML = '<div class="att-empty">没有匹配的好友</div>';
+    return;
+  }
+  box.innerHTML = list.map(c => {
+    const peer = c.peer;
+    const isActive = msgState.peerId === peer.id ? ' active' : '';
+    const initial = (peer.nickname || peer.username || '?').charAt(0).toUpperCase();
+    const avatarHtml = peer.avatar
+      ? `<img class="msg-conv-avatar" src="${escapeHtml(peer.avatar)}" alt="" />`
+      : `<div class="msg-conv-avatar-ph">${escapeHtml(initial)}</div>`;
+    const preview = c.last_message
+      ? (c.last_message.content || '[文件]')
+      : '点击开始聊天';
+    const time = c.latest_at ? formatMsgTime(c.latest_at) : '';
+    const unread = c.unread > 0 ? `<span class="msg-conv-unread">${c.unread > 99 ? '99+' : c.unread}</span>` : '';
+    return `
+      <div class="msg-conv-item${isActive}" data-peer-id="${peer.id}">
+        ${avatarHtml}
+        <div class="msg-conv-main">
+          <div class="msg-conv-top">
+            <span class="msg-conv-name">${escapeHtml(peer.nickname || peer.username || '未知')}</span>
+            <span class="msg-conv-time">${time}</span>
+          </div>
+          <div class="msg-conv-preview">${escapeHtml(preview)}</div>
+        </div>
+        ${unread}
+      </div>
+    `;
+  }).join('');
+  box.querySelectorAll('.msg-conv-item').forEach(el => {
+    el.onclick = () => openConversation(parseInt(el.dataset.peerId, 10));
+  });
+}
+
+async function openConversation(peerId) {
+  msgState.peerId = peerId;
+  // 找到 peer 信息
+  const conv = msgState.conversations.find(c => c.peer.id === peerId);
+  msgState.peer = conv ? conv.peer : null;
+  if (!msgState.peer) {
+    try {
+      const data = await api('/api/friends');
+      msgState.peer = (data.items || []).find(f => f.id === peerId);
+    } catch (_) {}
+  }
+  if (!msgState.peer) {
+    toast('无法获取对方信息', 'error');
+    return;
+  }
+  // 渲染头部
+  const peerName = msgState.peer.nickname || msgState.peer.username || '未知';
+  document.getElementById('msg-peer-name').textContent = peerName;
+  const avatar = document.getElementById('msg-peer-avatar');
+  if (msgState.peer.avatar) {
+    avatar.src = msgState.peer.avatar;
+    avatar.style.display = '';
+  } else {
+    avatar.style.display = 'none';
+  }
+  document.getElementById('msg-peer-status').textContent = '在线状态加载中…';
+  // 加载历史
+  await loadMsgHistory(peerId);
+  // 切换UI
+  document.getElementById('msg-chat-empty').style.display = 'none';
+  document.getElementById('msg-chat-active').style.display = '';
+  document.querySelector('.messages-layout').classList.add('has-active-chat');
+  renderMsgConversations();
+  // 在线状态
+  const online = typeof isUserOnlineLocal === 'function' ? isUserOnlineLocal(peerId) : null;
+  const statusEl = document.getElementById('msg-peer-status');
+  if (online === true) statusEl.textContent = '在线';
+  else if (online === false) statusEl.textContent = '离线';
+  else statusEl.textContent = '';
+  // 聚焦输入框
+  setTimeout(() => { const inp = document.getElementById('msg-input'); if (inp) inp.focus(); }, 100);
+}
+
+async function loadMsgHistory(peerId, beforeId) {
+  const box = document.getElementById('msg-messages');
+  if (!box) return;
+  let url = `/api/messages/with/${peerId}?limit=50`;
+  if (beforeId) url += `&before=${beforeId}`;
+  try {
+    const data = await api(url);
+    if (!beforeId) {
+      msgState.messages = data.items || [];
+      renderMsgMessages();
+      scrollMsgToBottom();
+    } else {
+      // 加载更多，前置
+      const prevHeight = box.scrollHeight;
+      msgState.messages = (data.items || []).concat(msgState.messages);
+      renderMsgMessages();
+      box.scrollTop = box.scrollHeight - prevHeight;
+    }
+    await refreshMsgUnreadBadge();
+    await loadMsgConversations();
+  } catch (e) {
+    box.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderMsgMessages() {
+  const box = document.getElementById('msg-messages');
+  if (!box) return;
+  const meId = state.user && state.user.id;
+  if (!msgState.messages.length) {
+    box.innerHTML = '<div class="att-empty">暂无消息，发送第一条吧</div>';
+    return;
+  }
+  // 加载更多按钮
+  const moreHtml = msgState.messages.length >= 50
+    ? `<div class="msg-load-more" id="msg-load-more">加载更早消息</div>`
+    : '';
+  box.innerHTML = moreHtml + msgState.messages.map(m => {
+    const mine = m.sender_id === meId;
+    const time = formatMsgTime(m.created_at);
+    let fileHtml = '';
+    if (m.file_id) {
+      const fname = m.file_original_name || m.file_filename || '文件';
+      const fkind = m.file_kind || 'other';
+      fileHtml = `<a class="msg-bubble-file" href="${escapeHtml(m.file_url || '#')}" target="_blank" rel="noopener">
+        <span class="att-file-icon" data-kind="${fkind}" style="width:22px;height:22px;font-size:9px;">${kindInitial(fkind)}</span>
+        <span>${escapeHtml(fname)}</span>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </a>`;
+    }
+    return `
+      <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
+        <div>
+          <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${escapeHtml(m.content || '')}${fileHtml}</div>
+          <div class="msg-bubble-time">${time}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  const more = document.getElementById('msg-load-more');
+  if (more) more.onclick = () => {
+    if (msgState.messages.length > 0) {
+      loadMsgHistory(msgState.peerId, msgState.messages[0].id);
+    }
+  };
+}
+
+function scrollMsgToBottom() {
+  const box = document.getElementById('msg-messages');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+async function sendMsg() {
+  const input = document.getElementById('msg-input');
+  if (!input) return;
+  const content = input.value.trim();
+  if (!content) return;
+  if (!msgState.peerId) {
+    toast('请先选择对话对象', 'error');
+    return;
+  }
+  input.value = '';
+  try {
+    await api('/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({ peerId: msgState.peerId, content })
+    });
+    // 立即追加到本地
+    const meId = state.user && state.user.id;
+    msgState.messages.push({
+      id: Date.now(),
+      sender_id: meId,
+      recipient_id: msgState.peerId,
+      content,
+      file_id: null,
+      created_at: new Date().toISOString()
+    });
+    renderMsgMessages();
+    scrollMsgToBottom();
+    await loadMsgConversations();
+  } catch (e) {
+    toast('发送失败：' + e.message, 'error');
+  }
+}
+
+async function openMsgFilePicker() {
+  if (!msgState.peerId) {
+    toast('请先选择对话对象', 'error');
+    return;
+  }
+  const modal = document.getElementById('msg-file-picker-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  modal.querySelectorAll('[data-close="msg-file-picker"]').forEach(el => {
+    el.onclick = () => { modal.style.display = 'none'; };
+  });
+  const list = document.getElementById('msg-file-picker-list');
+  if (!list) return;
+  list.innerHTML = '<div class="att-loading">加载中…</div>';
+  try {
+    const data = await api('/api/upload/files?limit=200');
+    const items = data.items || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="att-empty">没有文件，先到「我的文件」上传</div>';
+      return;
+    }
+    list.innerHTML = items.map(f => `
+      <div class="att-file-item" data-id="${f.id}">
+        <div class="att-file-icon" data-kind="${f.kind}">${kindInitial(f.kind)}</div>
+        <div class="att-file-info">
+          <div class="att-file-name" title="${escapeHtml(f.original_name || f.filename)}">${escapeHtml(f.original_name || f.filename)}</div>
+          <div class="att-file-meta">${escapeHtml(ATT_KIND_LABEL[f.kind] || '文件')} · ${formatFileSize(f.size)}</div>
+        </div>
+        <button class="att-file-action" data-action="send" data-id="${f.id}">发送</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('.att-file-action[data-action="send"]').forEach(btn => {
+      btn.onclick = async () => {
+        const fid = parseInt(btn.dataset.id, 10);
+        try {
+          await api('/api/messages', {
+            method: 'POST',
+            body: JSON.stringify({ peerId: msgState.peerId, content: '', fileId: fid })
+          });
+          modal.style.display = 'none';
+          toast('文件已发送', 'success');
+          await loadMsgHistory(msgState.peerId);
+          await loadMsgConversations();
+        } catch (err) {
+          toast('发送失败：' + err.message, 'error');
+        }
+      };
+    });
+  } catch (e) {
+    list.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function refreshMsgUnreadBadge() {
+  const badge = document.getElementById('badge-messages');
+  const top = document.getElementById('msg-unread-badge');
+  try {
+    const data = await api('/api/messages/unread/count');
+    const n = data.unread || 0;
+    if (badge) {
+      if (n > 0) {
+        badge.textContent = n > 99 ? '99+' : String(n);
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+    if (top) {
+      if (n > 0) {
+        top.textContent = `${n} 未读`;
+        top.style.display = '';
+      } else {
+        top.style.display = 'none';
+      }
+    }
+  } catch (_) {}
+}
+
+// 轮询：刷新未读数与会话列表（仅在消息页面活动时）
+async function pollNewMessages() {
+  if (state.currentNav !== 'messages') {
+    return;
+  }
+  await refreshMsgUnreadBadge();
+  // 仅当未在某个会话中时才刷新列表
+  if (!msgState.peerId) {
+    await loadMsgConversations();
+  }
+}
+
+function formatMsgTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) {
+    return '昨天';
+  }
+  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
+
+// 在线状态本地判定（基于心跳）
+function isUserOnlineLocal(userId) {
+  // 简化：始终返回null表示未知，避免误导
+  return null;
+}
+
+// WebSocket 消息接收：通过 collab WS 转发
+function handleIncomingWsMessage(payload) {
+  if (!payload || payload.type !== 'message') return;
+  const data = payload.data;
+  if (!data) return;
+  // 如果当前正在和发送者聊天，立即追加
+  if (msgState.peerId === data.sender_id) {
+    msgState.messages.push(data);
+    renderMsgMessages();
+    scrollMsgToBottom();
+    // 自动标记已读
+    api(`/api/messages/read/${data.sender_id}`, { method: 'POST' }).catch(() => {});
+  }
+  // 刷新未读与会话
+  refreshMsgUnreadBadge();
+  if (state.currentNav === 'messages') {
+    loadMsgConversations();
+  }
+}

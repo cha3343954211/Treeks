@@ -11,8 +11,11 @@ const storageBootstrap = bootstrapStorageConfig();
 
 const { initDatabase } = require('./db');
 
-// 初始化数据库
+// 初始化数据库（必须在加载 middleware/auth 之前完成，因为 auth 在加载时会读写 settings 表）
 initDatabase();
+
+// auth 中间件需在 DB 初始化后加载（内部 resolveJwtSecret 会查询 settings 表）
+const { verifyToken } = require('./middleware/auth');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,11 +45,16 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/schedules', require('./routes/schedules'));
 app.use('/api/friends', require('./routes/friends'));
 app.use('/api/letters', require('./routes/letters'));
+app.use('/api/messages', require('./routes/messages'));
 
 // WebSocket 协同编辑
 require('./services/collab').setupWebSocket(server);
 
 // 静态文件访问上传的图片（使用运行时配置的上传目录）
+// 安全：必须通过 token 鉴权才能访问（Cookie/Authorization 头/?token=xxx 三选一）
+//   - Cookie：用于 HTML 中 <img src="/uploads/..."> 场景（浏览器自动随请求发送）
+//   - Authorization 头：用于 AJAX / fetch 调用
+//   - ?token=xxx：用于浏览器直接打开的下载链接
 // 自定义 fallthrough 静态服务：优先运行时目录，缺失时回退到默认目录
 // 这样即使在切换存储位置时（重启前），老路径的图片仍可访问
 // 同时：旧版图片 URL 不带子目录（如 /uploads/17/file.png），新版要求 /uploads/17/images/file.png
@@ -54,6 +62,11 @@ require('./services/collab').setupWebSocket(server);
 const runtimeUploadDir = getRuntimeUploadDir();
 const defaultUploadDir = DEFAULT_UPLOAD_DIR;
 app.use('/uploads', (req, res, next) => {
+  // 鉴权：必须登录才能访问 /uploads
+  const user = verifyToken(req);
+  if (!user) {
+    return res.status(401).end('Unauthorized');
+  }
   // 解码 URL 路径
   const relPath = decodeURIComponent(req.path.replace(/^\/+/, ''));
   // 防止路径穿越
@@ -81,6 +94,13 @@ app.use('/uploads', (req, res, next) => {
   }
   if (!found) return res.status(404).end('Not Found');
   res.setHeader('Cache-Control', 'private, max-age=600');
+  // 防 MIME 嗅探
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // SVG 强制附件下载，防存储型 XSS
+  if (found.toLowerCase().endsWith('.svg')) {
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Content-Disposition', 'attachment');
+  }
   fs.createReadStream(found).pipe(res);
 });
 
@@ -102,7 +122,12 @@ app.use((err, req, res, next) => {
   if (err.name === 'MulterError') {
     return res.status(400).json({ error: `上传失败: ${err.message}` });
   }
-  res.status(err.status || 500).json({ error: err.message || '服务器内部错误' });
+  // 客户端错误（4xx）保留原始 message，服务端错误（5xx）隐藏内部信息
+  const status = err.status || 500;
+  if (status >= 500) {
+    return res.status(500).json({ error: '服务器内部错误，请稍后重试' });
+  }
+  res.status(status).json({ error: err.message || '请求失败' });
 });
 
 server.listen(PORT, () => {

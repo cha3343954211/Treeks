@@ -260,6 +260,36 @@ function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_user_blocks_user_id ON user_blocks(user_id);
     CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_user_id);
+
+    -- 日记附件（一个日记可挂多个文件，复用 files 表）
+    CREATE TABLE IF NOT EXISTS diary_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      diary_id INTEGER NOT NULL,
+      file_id INTEGER NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE,
+      FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+      UNIQUE(diary_id, file_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_diary_attachments_diary ON diary_attachments(diary_id, sort_order);
+
+    -- 即时消息（一对一聊天）
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      content TEXT DEFAULT '',
+      file_id INTEGER,
+      is_read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      read_at TEXT,
+      FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, recipient_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_recipient_unread ON messages(recipient_id, is_read);
   `);
 
   // 兼容旧库：补字段（已在 initDatabase 开头执行）
@@ -385,6 +415,28 @@ function initDatabase() {
       upd.run(newUrl, r.id);
     }
     console.log(`[DB] 修复了 ${oldImageUrlRows.length} 条历史图片 URL，添加 images/ 子目录`);
+  }
+
+  // 迁移：把旧 diaries.pdf_filename 绑定关系迁移到 diary_attachments 表
+  const attachMigrationFlag = db.prepare("SELECT value FROM settings WHERE key = 'pdf_attach_migration_v1'").get();
+  if (!attachMigrationFlag) {
+    const oldBinds = db.prepare(
+      `SELECT d.id AS diary_id, d.user_id, d.pdf_filename, f.id AS file_id
+       FROM diaries d
+       LEFT JOIN files f ON f.user_id = d.user_id AND f.filename = d.pdf_filename
+       WHERE d.pdf_filename IS NOT NULL AND d.pdf_filename != ''`
+    ).all();
+    let attMigrated = 0;
+    const insAtt = db.prepare(
+      'INSERT OR IGNORE INTO diary_attachments (diary_id, file_id, sort_order) VALUES (?, ?, ?)'
+    );
+    for (const r of oldBinds) {
+      if (!r.file_id) continue;
+      insAtt.run(r.diary_id, r.file_id, 0);
+      attMigrated++;
+    }
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pdf_attach_migration_v1', ?)").run(String(attMigrated));
+    if (attMigrated > 0) console.log(`[DB] 已迁移 ${attMigrated} 条旧 PDF 绑定到 diary_attachments 表`);
   }
 
   console.log('[DB] 数据库初始化完成');

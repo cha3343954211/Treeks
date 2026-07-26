@@ -463,6 +463,92 @@ router.post('/:id/bind-pdf', (req, res) => {
   res.json({ message: '已绑定 PDF', pdf_filename: file.filename, url: file.url, original_name: file.original_name });
 });
 
+// ===== 日记附件（多文件，替代旧 PDF 绑定）=====
+
+// 列出某日记的全部附件
+router.get('/:id/attachments', (req, res) => {
+  const diaryId = parseInt(req.params.id, 10);
+  if (!diaryId) return res.status(400).json({ error: '参数错误' });
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  // 协作者也可查看
+  const isOwner = diary.user_id === req.user.id;
+  if (!isOwner) {
+    const collab = db.prepare('SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ?').get(diaryId, req.user.id);
+    if (!collab) return res.status(403).json({ error: '无权访问该日记' });
+  }
+  const rows = db.prepare(
+    `SELECT da.id AS attachment_id, da.sort_order, da.created_at,
+            f.id AS file_id, f.kind, f.filename, f.original_name, f.mime_type, f.size, f.url
+     FROM diary_attachments da
+     JOIN files f ON f.id = da.file_id
+     WHERE da.diary_id = ?
+     ORDER BY da.sort_order ASC, da.created_at ASC`
+  ).all(diaryId);
+  res.json({ items: rows });
+});
+
+// 添加附件（body: { fileId }）
+router.post('/:id/attachments', (req, res) => {
+  const diaryId = parseInt(req.params.id, 10);
+  if (!diaryId) return res.status(400).json({ error: '参数错误' });
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  const isOwner = diary.user_id === req.user.id;
+  if (!isOwner) {
+    const collab = db.prepare("SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ? AND role = 'editor'").get(diaryId, req.user.id);
+    if (!collab) return res.status(403).json({ error: '只有作者或可编辑协作者才能添加附件' });
+  }
+  const fid = parseInt(req.body && req.body.fileId, 10);
+  if (!fid) return res.status(400).json({ error: '请提供 fileId' });
+  const file = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(fid, req.user.id);
+  if (!file) return res.status(404).json({ error: '文件不存在或不属于你' });
+  try {
+    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM diary_attachments WHERE diary_id = ?').get(diaryId);
+    db.prepare('INSERT OR IGNORE INTO diary_attachments (diary_id, file_id, sort_order) VALUES (?, ?, ?)')
+      .run(diaryId, fid, maxOrder.m + 1);
+  } catch (e) {
+    return res.status(409).json({ error: '该文件已是附件' });
+  }
+  db.prepare("UPDATE diaries SET updated_at = datetime('now') WHERE id = ?").run(diaryId);
+  res.json({ message: '已添加附件', file_id: fid });
+});
+
+// 移除附件
+router.delete('/:id/attachments/:fileId', (req, res) => {
+  const diaryId = parseInt(req.params.id, 10);
+  const fid = parseInt(req.params.fileId, 10);
+  if (!diaryId || !fid) return res.status(400).json({ error: '参数错误' });
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  const isOwner = diary.user_id === req.user.id;
+  if (!isOwner) {
+    const collab = db.prepare("SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ? AND role = 'editor'").get(diaryId, req.user.id);
+    if (!collab) return res.status(403).json({ error: '只有作者或可编辑协作者才能移除附件' });
+  }
+  const info = db.prepare('DELETE FROM diary_attachments WHERE diary_id = ? AND file_id = ?').run(diaryId, fid);
+  if (info.changes === 0) return res.status(404).json({ error: '附件不存在' });
+  db.prepare("UPDATE diaries SET updated_at = datetime('now') WHERE id = ?").run(diaryId);
+  res.json({ message: '已移除附件' });
+});
+
+// 调整附件顺序（body: { orderedFileIds: [3, 5, 7] }）
+router.put('/:id/attachments/order', (req, res) => {
+  const diaryId = parseInt(req.params.id, 10);
+  if (!diaryId) return res.status(400).json({ error: '参数错误' });
+  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  if (diary.user_id !== req.user.id) return res.status(403).json({ error: '只有作者才能调整附件顺序' });
+  const ids = Array.isArray(req.body && req.body.orderedFileIds) ? req.body.orderedFileIds : null;
+  if (!ids) return res.status(400).json({ error: '请提供 orderedFileIds' });
+  const upd = db.prepare('UPDATE diary_attachments SET sort_order = ? WHERE diary_id = ? AND file_id = ?');
+  const tx = db.transaction(() => {
+    ids.forEach((fid, i) => upd.run(i, diaryId, parseInt(fid, 10)));
+  });
+  tx();
+  res.json({ message: '顺序已更新' });
+});
+
 // ===== 共享/协作相关 =====
 
 // 我能看到的他人日记（好友公开 / 指定可见 / 我协作的）
