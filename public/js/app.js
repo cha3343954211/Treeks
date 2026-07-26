@@ -378,7 +378,7 @@ const FabManager = (() => {
 // ===== 预览模式笔刷标注功能 =====
 // 笔刷状态
 const brushState = {
-  tool: 'none',           // 'none' | 'highlight' | 'pen' | 'annotate' | 'text' | 'rect' | 'ellipse' | 'eraser'
+  tool: 'none',           // 'none' | 'highlight' | 'pen' | 'annotate' | 'text' | 'rect' | 'ellipse' | 'eraser' | 'lasso'
   color: '#ffeb3b',       // 当前颜色
   size: 6,                // 笔刷粗细
   opacity: 1,             // 不透明度 0-1（荧光笔自动切换为 0.45）
@@ -392,7 +392,15 @@ const brushState = {
   textInput: null,        // 当前文本输入框（HTML element）
   draggingAnno: null,     // 正在拖动的标注 id（文本拖动用）
   dragOffset: null,       // 拖动偏移量
-  diaryId: null           // 当前日记 ID（用于保存到 localStorage）
+  diaryId: null,          // 当前日记 ID（用于保存到 localStorage）
+  // 橡皮相关
+  eraserMode: 'stroke',   // 'stroke' 笔画橡皮擦（整笔擦除）| 'pixel' 精细橡皮擦（仅擦除经过区域）
+  eraserRadius: 20,       // 精细橡皮擦半径
+  eraserPath: [],         // 精细橡皮擦当前拖动轨迹
+  // 套索相关
+  lassoPath: [],          // 套索当前拖动轨迹
+  selectedIds: [],        // 套索选中的标注 id
+  lassoDragging: false    // 是否正在套索拖动
 };
 
 const ANNOTATION_STORAGE_PREFIX = 'treeks_annotations_';
@@ -620,6 +628,8 @@ function renderAllAnnotations() {
       svg.appendChild(el);
     }
   }
+  // 重新绘制选区高亮
+  renderSelectionOverlay();
 }
 
 // 重新计算 SVG 尺寸（不使用 viewBox，坐标 1:1 映射到像素，避免偏移）
@@ -627,6 +637,27 @@ function resizeAnnotationLayer() {
   const svg = document.getElementById('annotation-layer');
   const wrapper = document.getElementById('preview-content-wrapper');
   if (!svg || !wrapper) return;
+  // PDF 模式：让 SVG 与 PDF canvas 大小完全一致，并覆盖在 canvas 上
+  // 这样笔刷坐标才能与 PDF 页面像素精准对应
+  if (pdfState.active && pdfState.pdfDoc) {
+    const canvas = document.getElementById('pdf-canvas');
+    if (canvas) {
+      const cRect = canvas.getBoundingClientRect();
+      const wRect = wrapper.getBoundingClientRect();
+      const offsetLeft = cRect.left - wRect.left;
+      const offsetTop = cRect.top - wRect.top;
+      svg.style.left = offsetLeft + 'px';
+      svg.style.top = offsetTop + 'px';
+      svg.setAttribute('width', cRect.width);
+      svg.setAttribute('height', cRect.height);
+      svg.removeAttribute('viewBox');
+      svg.removeAttribute('preserveAspectRatio');
+      return;
+    }
+  }
+  // 默认（Markdown 模式）：SVG 覆盖整个 wrapper
+  svg.style.left = '';
+  svg.style.top = '';
   const rect = wrapper.getBoundingClientRect();
   // 显式设置 width/height，确保 SVG 坐标系与像素 1:1 对应
   svg.setAttribute('width', rect.width);
@@ -656,12 +687,20 @@ function setBrushTool(tool) {
   }
 
   // 重置光标类
-  svg.classList.remove('eraser-mode', 'text-mode', 'shape-mode');
+  svg.classList.remove('eraser-mode', 'eraser-stroke-mode', 'eraser-pixel-mode',
+                       'text-mode', 'shape-mode', 'lasso-mode', 'lasso-selected');
   if (tool === 'none') {
     svg.classList.remove('active');
     previewPane.classList.remove('annotate-active');
   } else if (tool === 'eraser') {
-    svg.classList.add('active', 'eraser-mode');
+    if (brushState.eraserMode === 'pixel') {
+      svg.classList.add('active', 'eraser-mode', 'eraser-pixel-mode');
+    } else {
+      svg.classList.add('active', 'eraser-mode', 'eraser-stroke-mode');
+    }
+    previewPane.classList.add('annotate-active');
+  } else if (tool === 'lasso') {
+    svg.classList.add('active', 'lasso-mode');
     previewPane.classList.add('annotate-active');
   } else if (tool === 'text') {
     svg.classList.add('active', 'text-mode');
@@ -677,6 +716,17 @@ function setBrushTool(tool) {
   // 切换工具时提交未完成的文本输入
   if (tool !== 'text' && brushState.textInput) {
     commitTextInput();
+  }
+
+  // 工具栏橡皮半径滑块仅在精细橡皮擦时显示
+  const radiusWrap = document.getElementById('brush-eraser-radius');
+  if (radiusWrap) {
+    radiusWrap.style.display = (tool === 'eraser' && brushState.eraserMode === 'pixel') ? 'inline-flex' : 'none';
+  }
+  // 橡皮工具组高亮：选中橡皮时整个工具组轻微底色
+  const eraserGroup = document.getElementById('brush-eraser-group');
+  if (eraserGroup) {
+    eraserGroup.classList.toggle('eraser-active', tool === 'eraser');
   }
 }
 
@@ -708,12 +758,21 @@ function setBrushOpacity(op) {
 
 // 撤销上一步（推入 undoStack 以便重做）
 function undoAnnotation() {
-  if (brushState.paths.length === 0) {
+  if (brushState.undoStack.length === 0) {
     toast('没有可撤销的标记', 'error');
     return;
   }
-  const removed = brushState.paths.pop();
-  brushState.undoStack.push(removed);
+  const removed = brushState.undoStack.pop();
+  if (removed && removed._type === 'pixel-erase') {
+    // 精细擦除：把整个 paths 恢复
+    brushState.paths = removed.before;
+  } else if (removed && removed._type === 'multi-delete') {
+    // 套索批量删除：把删除项全部恢复
+    brushState.paths = brushState.paths.concat(removed.items);
+  } else if (removed) {
+    // 单条删除：单条恢复
+    brushState.paths.push(removed);
+  }
   renderAllAnnotations();
   toast('已撤销，可点重做恢复', 'info');
 }
@@ -724,10 +783,27 @@ function redoAnnotation() {
     toast('没有可重做的标记', 'error');
     return;
   }
+  // 当前 undo/redo 模型为：路径创建时 push 到 undoStack，undo 时弹回
+  // 对于单条 stroke/rect/ellipse/text 删除，undoStack 顶层是单条对象
+  // 弹回即恢复
   const restored = brushState.undoStack.pop();
-  brushState.paths.push(restored);
+  if (restored && restored._type === 'pixel-erase') {
+    // 精细擦除 redo：重新应用擦除
+    // 保存当前 paths 到栈（作为再 undo 的恢复点）
+    brushState.undoStack.push({ _type: 'pixel-erase', before: brushState.paths });
+    brushState.paths = pixelErasePaths(brushState.paths, brushState.eraserPath, brushState.eraserRadius);
+    toast('已重做精细擦除', 'info');
+  } else if (restored && restored._type === 'multi-delete') {
+    // 套索批量删除 redo：再删除一次
+    brushState.undoStack.push({ _type: 'multi-delete', items: restored.items });
+    brushState.paths = brushState.paths.filter(p => !restored.items.some(it => it.id === p.id));
+    toast('已重做批量删除', 'info');
+  } else if (restored) {
+    // 单条删除/绘制：直接放回 paths
+    brushState.paths.push(restored);
+    toast('已重做', 'info');
+  }
   renderAllAnnotations();
-  toast('已重做', 'info');
 }
 
 // 清除所有标记
@@ -749,9 +825,17 @@ function saveAnnotationsForCurrentDiary() {
     toast('请先保存日记再保存标记', 'error');
     return;
   }
-  const ok = saveAnnotationsToStorage(brushState.diaryId, brushState.paths);
+  let ok;
+  if (pdfState.active) {
+    ok = savePdfAnnotations();
+  } else {
+    ok = saveAnnotationsToStorage(brushState.diaryId, brushState.paths);
+  }
   if (ok) {
-    toast(`已保存 ${brushState.paths.length} 条标记`, 'success');
+    const total = pdfState.active
+      ? Object.values(pdfState.allPagesAnnos).reduce((s, arr) => s + arr.length, 0)
+      : brushState.paths.length;
+    toast(`已保存 ${total} 条标记`, 'success');
   } else {
     toast('保存失败', 'error');
   }
@@ -886,6 +970,108 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
   const cx = x1 + t * dx;
   const cy = y1 + t * dy;
   return Math.hypot(px - cx, py - cy);
+}
+
+// 生成标注 id
+function genAnnoId() {
+  return 'anno_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+// 两点距离
+function dist2D(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// ===== 精细橡皮擦：按轨迹擦除，返回新的 paths 列表 =====
+/**
+ * 思路：把橡皮轨迹离散为一系列采样点（步进 ~ radius/2）
+ * - pen / highlight (polyline)：逐点判断是否在橡皮半径内，相邻被擦点之间断开，保留剩余段
+ * - annotate (箭头) / rect / ellipse / text：任一关键点被擦到则整条擦除
+ */
+function pixelErasePaths(paths, eraserPath, radius) {
+  if (!eraserPath || eraserPath.length === 0) return paths;
+  const r = radius;
+  // 轨迹点太少时补足（单点也能擦除，但容差更宽容）
+  const r2 = r * r;
+
+  // 对每个路径点，判断是否在橡皮"圆盘链"范围内：任一轨迹点的距离 < r
+  // O(N*M) 即可，性能足够（百级标注、百级轨迹点）
+  const inEraser = (x, y) => {
+    for (let i = 0; i < eraserPath.length; i++) {
+      const p = eraserPath[i];
+      const dx = x - p.x, dy = y - p.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  };
+
+  const next = [];
+  for (const path of paths) {
+    if (path.type === 'pen' || path.type === 'highlight') {
+      // 逐点检查
+      const segments = [];
+      let cur = [];
+      for (const pt of path.points) {
+        if (!inEraser(pt.x, pt.y)) {
+          if (cur.length === 0) cur.push({ x: pt.x, y: pt.y });
+          else cur.push({ x: pt.x, y: pt.y });
+        } else {
+          if (cur.length >= 2) {
+            segments.push({ ...path, id: genAnnoId(), points: cur });
+          }
+          cur = [];
+        }
+      }
+      if (cur.length >= 2) {
+        segments.push({ ...path, id: genAnnoId(), points: cur });
+      }
+      for (const seg of segments) next.push(seg);
+    } else {
+      // 其它类型：任一关键点被擦到则整条擦除
+      let hit = false;
+      for (const pt of path.points) {
+        if (inEraser(pt.x, pt.y)) { hit = true; break; }
+      }
+      if (!hit) next.push(path);
+    }
+  }
+  return next;
+}
+
+// ===== 套索：判断点是否在多边形内（射线法） =====
+function pointInPolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-9) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// 获取标注的代表性点（用于套索包含判断）
+function annoAnchorPoint(anno) {
+  if (!anno.points || anno.points.length === 0) return null;
+  if (anno.type === 'text') return anno.points[0];
+  // 用首末两点的中点
+  const a = anno.points[0];
+  const b = anno.points[anno.points.length - 1];
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+// 判断标注是否被套索多边形"包围"（用锚点 + 端点判断）
+function isAnnoInLasso(anno, polygon) {
+  if (polygon.length < 3) return false;
+  // 锚点
+  const anchor = annoAnchorPoint(anno);
+  if (anchor && pointInPolygon(anchor.x, anchor.y, polygon)) return true;
+  // 首末端点也判断（提高鲁棒性）
+  for (const p of anno.points) {
+    if (pointInPolygon(p.x, p.y, polygon)) return true;
+  }
+  return false;
 }
 
 // 笔刷栏拖拽逻辑（仿 GoodNotes，fixed 定位贴视口，可拖到任意位置不回弹）
@@ -1074,6 +1260,37 @@ function setupBrushAnnotations() {
     opacityInput.addEventListener('input', (e) => setBrushOpacity(e.target.value / 100));
   }
 
+  // 橡皮模式切换（笔画/精细）
+  document.querySelectorAll('.brush-eraser-mode').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const mode = btn.dataset.eraserMode;
+      if (!mode) return;
+      brushState.eraserMode = mode;
+      document.querySelectorAll('.brush-eraser-mode').forEach(b => {
+        b.classList.toggle('active', b.dataset.eraserMode === mode);
+      });
+      // 如果当前是橡皮工具，刷新滑块显示
+      if (brushState.tool === 'eraser') {
+        const radiusWrap = document.getElementById('brush-eraser-radius');
+        if (radiusWrap) {
+          radiusWrap.style.display = (mode === 'pixel') ? 'inline-flex' : 'none';
+        }
+      }
+    });
+  });
+
+  // 橡皮半径滑块
+  const eraserRadiusInput = document.getElementById('brush-eraser-radius-input');
+  if (eraserRadiusInput) {
+    eraserRadiusInput.addEventListener('input', (e) => {
+      const v = parseInt(e.target.value, 10) || 20;
+      brushState.eraserRadius = v;
+      const vEl = document.getElementById('brush-eraser-radius-value');
+      if (vEl) vEl.textContent = v;
+    });
+  }
+
   // 导入文件输入
   const importInput = document.getElementById('brush-import-input');
   if (importInput) {
@@ -1120,10 +1337,30 @@ function setupBrushAnnotations() {
   }
 
   // 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做
+  // Delete/Backspace 删除套索选中的标注
   document.addEventListener('keydown', (e) => {
     const toolbar = document.getElementById('brush-toolbar');
     // 仅在笔刷工具栏可见（预览模式）下响应
     if (!toolbar || toolbar.style.display === 'none') return;
+    // Delete / Backspace：删除套索选中的标注
+    if ((e.key === 'Delete' || e.key === 'Backspace') &&
+        brushState.selectedIds && brushState.selectedIds.length > 0) {
+      // 不要在文本输入框中触发
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      deleteSelectedAnnotations();
+      return;
+    }
+    // Escape：取消套索选区
+    if (e.key === 'Escape') {
+      if (brushState.selectedIds && brushState.selectedIds.length > 0) {
+        brushState.selectedIds = [];
+        renderAllAnnotations();
+        toast('已取消选区', 'info');
+        return;
+      }
+    }
     if (!(e.ctrlKey || e.metaKey)) return;
     const key = e.key.toLowerCase();
     if (key === 'z' && !e.shiftKey) {
@@ -1134,6 +1371,110 @@ function setupBrushAnnotations() {
       redoAnnotation();
     }
   });
+}
+
+// ===== PDF 事件绑定（在编辑器初始化时调用一次） =====
+function setupPdfViewer() {
+  // 翻页
+  const prevBtn = document.getElementById('btn-pdf-prev');
+  const nextBtn = document.getElementById('btn-pdf-next');
+  if (prevBtn) prevBtn.addEventListener('click', () => {
+    if (!pdfState.pdfDoc) return;
+    stashCurrentPageAnnos();
+    renderPdfPage(pdfState.pageNum - 1);
+  });
+  if (nextBtn) nextBtn.addEventListener('click', () => {
+    if (!pdfState.pdfDoc) return;
+    stashCurrentPageAnnos();
+    renderPdfPage(pdfState.pageNum + 1);
+  });
+  // 页码输入
+  const pageInput = document.getElementById('pdf-page-input');
+  if (pageInput) {
+    pageInput.addEventListener('change', (e) => {
+      if (!pdfState.pdfDoc) return;
+      const n = parseInt(e.target.value, 10);
+      if (!isNaN(n) && n >= 1 && n <= pdfState.totalPages) {
+        stashCurrentPageAnnos();
+        renderPdfPage(n);
+      } else {
+        e.target.value = pdfState.pageNum;
+      }
+    });
+  }
+  // 缩放
+  const zoomIn = document.getElementById('btn-pdf-zoom-in');
+  const zoomOut = document.getElementById('btn-pdf-zoom-out');
+  const zoomFit = document.getElementById('btn-pdf-fit');
+  function setScale(s) {
+    pdfState.scale = Math.max(0.5, Math.min(3, s));
+    const valEl = document.getElementById('pdf-zoom-value');
+    if (valEl) valEl.textContent = Math.round(pdfState.scale * 100) + '%';
+    if (pdfState.pdfDoc) {
+      stashCurrentPageAnnos();
+      renderPdfPage(pdfState.pageNum);
+    }
+  }
+  if (zoomIn) zoomIn.addEventListener('click', () => setScale(pdfState.scale + 0.1));
+  if (zoomOut) zoomOut.addEventListener('click', () => setScale(pdfState.scale - 0.1));
+  if (zoomFit) zoomFit.addEventListener('click', async () => {
+    if (!pdfState.pdfDoc) return;
+    // 简单适应宽度：取预览容器宽度，计算缩放
+    const wrapper = document.getElementById('preview-content-wrapper');
+    const page = await pdfState.pdfDoc.getPage(pdfState.pageNum);
+    const viewport = page.getViewport({ scale: 1 });
+    const containerW = (wrapper && wrapper.clientWidth) || 800;
+    const targetScale = Math.max(0.5, Math.min(2, (containerW - 80) / viewport.width));
+    setScale(targetScale);
+  });
+  // 上传按钮
+  const uploadInput = document.getElementById('input-upload-pdf');
+  if (uploadInput) {
+    uploadInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) handlePdfUpload(file);
+      e.target.value = ''; // 允许重复上传
+    });
+  }
+  // 移除按钮
+  const removeBtn = document.getElementById('btn-remove-pdf');
+  if (removeBtn) removeBtn.addEventListener('click', handleRemovePdf);
+  // 初始化 PDF.js worker
+  setupPdfJsWorker();
+}
+
+// 当打开一篇已有 PDF 的日记时，自动加载并进入预览
+async function autoLoadDiaryPdf(diary) {
+  if (!diary || !diary.pdf_filename) {
+    // 没有 PDF，回到普通模式
+    exitPdfMode();
+    const removeBtn = document.getElementById('btn-remove-pdf');
+    if (removeBtn) removeBtn.style.display = 'none';
+    const uploadText = document.getElementById('btn-upload-pdf-text');
+    if (uploadText) uploadText.textContent = '上传 PDF';
+    return;
+  }
+  // 构建 PDF URL：使用鉴权 API 端点
+  // 同时兼容 /uploads/USER_ID/pdf/xxx.pdf（旧格式）和 /api/upload/pdf/xxx.pdf（新格式）
+  let url;
+  if (diary.pdf_filename.startsWith('/uploads/') || diary.pdf_filename.startsWith('/api/')) {
+    url = diary.pdf_filename;
+  } else {
+    url = `/api/upload/pdf/${diary.pdf_filename}`;
+  }
+  const ok = await loadPdf(url, diary.pdf_filename);
+  if (ok) {
+    enterPdfMode();
+    // 切到预览模式
+    setTimeout(() => {
+      const previewBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="preview"]');
+      if (previewBtn) previewBtn.click();
+    }, 100);
+    const removeBtn = document.getElementById('btn-remove-pdf');
+    if (removeBtn) removeBtn.style.display = '';
+    const uploadText = document.getElementById('btn-upload-pdf-text');
+    if (uploadText) uploadText.textContent = '替换 PDF';
+  }
 }
 
 // 显示文本输入框（用于文本标注工具）
@@ -1217,7 +1558,14 @@ function onBrushPointerDown(e) {
   const pt = getSvgPoint(e);
 
   if (brushState.tool === 'eraser') {
-    // 橡皮：删除命中的标注
+    if (brushState.eraserMode === 'pixel') {
+      // 精细橡皮擦：开始记录轨迹
+      brushState.drawing = true;
+      brushState.eraserPath = [pt];
+      svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
+      return;
+    }
+    // 笔画橡皮擦（整笔擦除）：单点擦除
     const hit = findHitAnnotation(pt.x, pt.y);
     if (hit) {
       brushState.undoStack.push(hit); // 支持重做
@@ -1238,6 +1586,16 @@ function onBrushPointerDown(e) {
     } else {
       showTextInput(pt.x, pt.y);
     }
+    return;
+  }
+
+  // 套索工具：开始绘制套索多边形
+  if (brushState.tool === 'lasso') {
+    brushState.drawing = true;
+    brushState.lassoDragging = true;
+    brushState.lassoPath = [pt];
+    brushState.selectedIds = [];
+    svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
     return;
   }
 
@@ -1301,6 +1659,29 @@ function onBrushPointerMove(e) {
   const svg = document.getElementById('annotation-layer');
   if (!svg) return;
 
+  // 精细橡皮擦：连续记录轨迹，按步进采样避免点过密
+  if (brushState.tool === 'eraser' && brushState.eraserMode === 'pixel') {
+    const last = brushState.eraserPath[brushState.eraserPath.length - 1];
+    // 步进 ≈ radius/2，保证覆盖连续不漏擦
+    const minStep = Math.max(2, brushState.eraserRadius / 2);
+    if (!last || dist2D(last, pt) >= minStep) {
+      brushState.eraserPath.push(pt);
+      // 实时预览橡皮圆环（用最后一节段画一个圆）
+      renderEraserPreview();
+    }
+    return;
+  }
+
+  // 套索：记录路径
+  if (brushState.tool === 'lasso' && brushState.lassoDragging) {
+    const last = brushState.lassoPath[brushState.lassoPath.length - 1];
+    if (!last || dist2D(last, pt) >= 3) {
+      brushState.lassoPath.push(pt);
+      renderLassoPreview();
+    }
+    return;
+  }
+
   if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
     brushState.points.push(pt);
     if (brushState.currentPath) {
@@ -1344,12 +1725,110 @@ function onBrushPointerMove(e) {
   }
 }
 
+// 渲染精细橡皮擦的预览（当前指针位置的圆环 + 轨迹）
+function renderEraserPreview() {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+  // 移除旧预览
+  const old = svg.querySelector('.eraser-preview');
+  if (old) old.remove();
+  if (!brushState.eraserPath || brushState.eraserPath.length === 0) return;
+  const g = svgEl('g', { 'class': 'eraser-preview', 'pointer-events': 'none' });
+  // 轨迹线
+  if (brushState.eraserPath.length >= 2) {
+    const d = brushState.eraserPath.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    g.appendChild(svgEl('polyline', {
+      points: d, fill: 'none', stroke: 'rgba(76,153,92,0.55)',
+      'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+      'stroke-dasharray': '4 3'
+    }));
+  }
+  // 当前指针位置的圆环
+  const last = brushState.eraserPath[brushState.eraserPath.length - 1];
+  g.appendChild(svgEl('circle', {
+    cx: last.x, cy: last.y, r: brushState.eraserRadius,
+    fill: 'rgba(76,153,92,0.12)',
+    stroke: 'rgba(76,153,92,0.9)',
+    'stroke-width': '1.5',
+    'stroke-dasharray': '5 3'
+  }));
+  svg.appendChild(g);
+}
+
+// 渲染套索预览（折线 + 已选标注的描边）
+function renderLassoPreview() {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+  // 移除旧预览
+  const old = svg.querySelector('.lasso-preview');
+  if (old) old.remove();
+  if (!brushState.lassoPath || brushState.lassoPath.length < 2) return;
+  const g = svgEl('g', { 'class': 'lasso-preview', 'pointer-events': 'none' });
+  const d = brushState.lassoPath.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  g.appendChild(svgEl('polyline', {
+    points: d, fill: 'rgba(76,153,92,0.10)',
+    stroke: 'rgba(76,153,92,0.85)',
+    'stroke-width': '1.5',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    'stroke-dasharray': '5 3'
+  }));
+  svg.appendChild(g);
+}
+
 // 鼠标松开：完成绘制
 function onBrushPointerUp(e) {
   // 文本拖动结束
   if (brushState.tool === 'text' && brushState.draggingAnno) {
     brushState.draggingAnno = null;
     brushState.dragOffset = null;
+    return;
+  }
+
+  // 精细橡皮擦：执行擦除
+  if (brushState.tool === 'eraser' && brushState.eraserMode === 'pixel' && brushState.drawing) {
+    brushState.drawing = false;
+    const svg = document.getElementById('annotation-layer');
+    // 移除预览
+    if (svg) {
+      const old = svg.querySelector('.eraser-preview');
+      if (old) old.remove();
+    }
+    if (brushState.eraserPath.length > 0) {
+      const before = brushState.paths.length;
+      const removed = before - brushState.paths.length;
+      const newPaths = pixelErasePaths(brushState.paths, brushState.eraserPath, brushState.eraserRadius);
+      const actuallyRemoved = before - newPaths.length;
+      // 部分被擦除（拆分后变多）也支持重做：保存旧 paths 到 undoStack
+      if (actuallyRemoved > 0 || newPaths.length !== before) {
+        brushState.undoStack.push({ _type: 'pixel-erase', before: brushState.paths });
+        brushState.paths = newPaths;
+        renderAllAnnotations();
+        toast(`精细擦除完成（影响 ${actuallyRemoved} 条）`, 'success');
+      }
+    }
+    brushState.eraserPath = [];
+    return;
+  }
+
+  // 套索：选中范围内标注
+  if (brushState.tool === 'lasso' && brushState.lassoDragging) {
+    brushState.drawing = false;
+    brushState.lassoDragging = false;
+    const svg = document.getElementById('annotation-layer');
+    if (svg) {
+      const old = svg.querySelector('.lasso-preview');
+      if (old) old.remove();
+    }
+    // 闭合套索（自动连回起点）
+    if (brushState.lassoPath.length >= 3) {
+      brushState.selectedIds = brushState.paths
+        .filter(p => isAnnoInLasso(p, brushState.lassoPath))
+        .map(p => p.id);
+      renderAllAnnotations();
+      renderSelectionOverlay();
+      toast(`已选中 ${brushState.selectedIds.length} 条标注（按 Delete 删除）`, 'info');
+    }
     return;
   }
 
@@ -1373,7 +1852,7 @@ function onBrushPointerUp(e) {
 
   // 创建正式标注
   const anno = {
-    id: 'anno_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    id: genAnnoId(),
     type: brushState.tool,
     color: brushState.color,
     size: brushState.size,
@@ -1386,6 +1865,77 @@ function onBrushPointerUp(e) {
   brushState.points = [];
   brushState.startPoint = null;
   renderAllAnnotations();
+}
+
+// 渲染选区高亮（套索选中的标注加描边）
+function renderSelectionOverlay() {
+  const svg = document.getElementById('annotation-layer');
+  if (!svg) return;
+  const old = svg.querySelector('.selection-overlay');
+  if (old) old.remove();
+  if (!brushState.selectedIds || brushState.selectedIds.length === 0) return;
+  const g = svgEl('g', { 'class': 'selection-overlay', 'pointer-events': 'none' });
+  for (const p of brushState.paths) {
+    if (!brushState.selectedIds.includes(p.id)) continue;
+    if (p.type === 'text') {
+      // 文字：用估算的包围盒
+      const pt = p.points[0];
+      if (!pt) continue;
+      const fontSize = Math.max(12, p.size * 2.5);
+      const charW = fontSize * 0.6;
+      const w = Math.max(charW * 2, (p.text || '').length * charW);
+      const h = fontSize * 1.3;
+      const box = svgEl('rect', {
+        x: pt.x - 3, y: pt.y - h + 2, width: w + 6, height: h + 4,
+        fill: 'none', stroke: 'rgba(76,153,92,0.95)',
+        'stroke-width': '1.5', 'stroke-dasharray': '4 3', rx: 3
+      });
+      g.appendChild(box);
+    } else if (p.type === 'rect') {
+      const a = p.points[0], b = p.points[p.points.length - 1];
+      g.appendChild(svgEl('rect', {
+        x: Math.min(a.x, b.x) - 4, y: Math.min(a.y, b.y) - 4,
+        width: Math.abs(b.x - a.x) + 8, height: Math.abs(b.y - a.y) + 8,
+        fill: 'none', stroke: 'rgba(76,153,92,0.95)', 'stroke-width': '1.5',
+        'stroke-dasharray': '4 3', rx: 3
+      }));
+    } else if (p.type === 'ellipse') {
+      const a = p.points[0], b = p.points[p.points.length - 1];
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      const rx = Math.abs(b.x - a.x) / 2 + 4, ry = Math.abs(b.y - a.y) / 2 + 4;
+      g.appendChild(svgEl('ellipse', {
+        cx, cy, rx, ry, fill: 'none', stroke: 'rgba(76,153,92,0.95)',
+        'stroke-width': '1.5', 'stroke-dasharray': '4 3'
+      }));
+    } else {
+      // pen / highlight / annotate：画包围盒
+      const xs = p.points.map(pt => pt.x);
+      const ys = p.points.map(pt => pt.y);
+      const minX = Math.min(...xs) - 4;
+      const maxX = Math.max(...xs) + 4;
+      const minY = Math.min(...ys) - 4;
+      const maxY = Math.max(...ys) + 4;
+      g.appendChild(svgEl('rect', {
+        x: minX, y: minY, width: maxX - minX, height: maxY - minY,
+        fill: 'none', stroke: 'rgba(76,153,92,0.95)', 'stroke-width': '1.5',
+        'stroke-dasharray': '4 3', rx: 3
+      }));
+    }
+  }
+  svg.appendChild(g);
+}
+
+// 删除选中的标注（供 Delete/Backspace 快捷键调用）
+function deleteSelectedAnnotations() {
+  if (!brushState.selectedIds || brushState.selectedIds.length === 0) return false;
+  const removed = brushState.paths.filter(p => brushState.selectedIds.includes(p.id));
+  brushState.undoStack.push({ _type: 'multi-delete', items: removed });
+  brushState.paths = brushState.paths.filter(p => !brushState.selectedIds.includes(p.id));
+  brushState.selectedIds = [];
+  renderAllAnnotations();
+  renderSelectionOverlay();
+  toast(`已删除 ${removed.length} 条标注`, 'success');
+  return true;
 }
 
 // 在切换到预览模式时显示笔刷工具栏
@@ -1417,18 +1967,295 @@ function updateBrushToolbarVisibility() {
 // 初始化当前日记的标注数据（在打开日记时调用）
 function initAnnotationsForDiary(diaryId) {
   brushState.diaryId = diaryId;
-  brushState.paths = diaryId ? loadAnnotations(diaryId) : [];
   brushState.undoStack = []; // 重置 redo 栈
-  // 兼容旧数据：补齐 opacity 字段
-  brushState.paths = brushState.paths.map(p => ({
-    opacity: 1,
-    text: '',
-    ...p
-  }));
+  brushState.selectedIds = [];
   setBrushTool('none');
-  renderAllAnnotations();
-  // 等待预览渲染完成后重新计算 SVG 尺寸
-  setTimeout(resizeAnnotationLayer, 100);
+  // PDF 模式：标注按页存储，从 allPagesAnnos 加载当前页
+  // Markdown 模式：从单一 key 加载整个 paths
+  if (pdfState.active && pdfState.pdfDoc) {
+    const pagePaths = pdfState.allPagesAnnos[String(pdfState.pageNum)] || [];
+    brushState.paths = pagePaths.map(p => ({ opacity: 1, text: '', ...p }));
+    renderAllAnnotations();
+    // 等待 canvas 渲染完成后调整标注层尺寸
+    setTimeout(() => {
+      resizeAnnotationLayer();
+    }, 80);
+  } else {
+    brushState.paths = diaryId ? loadAnnotations(diaryId) : [];
+    // 兼容旧数据：补齐 opacity 字段
+    brushState.paths = brushState.paths.map(p => ({
+      opacity: 1,
+      text: '',
+      ...p
+    }));
+    renderAllAnnotations();
+    // 等待预览渲染完成后重新计算 SVG 尺寸
+    setTimeout(resizeAnnotationLayer, 100);
+  }
+}
+
+// ===== PDF 阅读 + 笔刷标注 =====
+
+// PDF 状态
+const pdfState = {
+  pdfDoc: null,            // PDF.js 文档对象
+  url: '',                 // 当前 PDF URL
+  filename: '',            // 文件名（uploads/.../xxx.pdf）
+  pageNum: 1,              // 当前页码（1-based）
+  totalPages: 0,
+  scale: 1.2,              // 渲染缩放
+  renderTask: null,        // 当前渲染任务（用于取消）
+  active: false,           // 是否处于 PDF 模式
+  allPagesAnnos: {}        // 按页存储的标注 { pageNum: [anno, ...] }
+};
+
+// PDF.js worker 路径（在 CDN 加载后必须设置）
+function setupPdfJsWorker() {
+  if (typeof pdfjsLib === 'undefined') return false;
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+  return true;
+}
+
+// 加载 PDF（支持完整 URL 或相对路径）
+async function loadPdf(pdfUrl, filename) {
+  if (typeof pdfjsLib === 'undefined') {
+    toast('PDF.js 未加载，请检查网络', 'error');
+    return false;
+  }
+  setupPdfJsWorker();
+  // 卸载旧文档
+  if (pdfState.pdfDoc) {
+    try { pdfState.pdfDoc.destroy(); } catch (_) {}
+    pdfState.pdfDoc = null;
+  }
+  // 显示加载状态
+  const canvas = document.getElementById('pdf-canvas');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  try {
+    // 使用 fetch + ArrayBuffer 加载 PDF（携带 JWT 鉴权头），再喂给 PDF.js
+    // 这样可以避免 PDF.js 内部 fetch 不携带 Authorization 头导致 401 的问题
+    const token = state.token;
+    const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+    const resp = await fetch(pdfUrl, { headers, credentials: 'include' });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    }
+    const buf = await resp.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: buf });
+    const pdf = await loadingTask.promise;
+    pdfState.pdfDoc = pdf;
+    pdfState.url = pdfUrl;
+    pdfState.filename = filename || '';
+    pdfState.totalPages = pdf.numPages;
+    pdfState.pageNum = 1;
+    pdfState.allPagesAnnos = {};
+    // 更新 UI
+    const totalEl = document.getElementById('pdf-page-total');
+    if (totalEl) totalEl.textContent = pdf.numPages;
+    const inputEl = document.getElementById('pdf-page-input');
+    if (inputEl) { inputEl.max = pdf.numPages; inputEl.value = 1; }
+    const fnEl = document.getElementById('pdf-filename');
+    if (fnEl) { fnEl.textContent = filename || ''; fnEl.title = filename || ''; }
+    // 渲染首页
+    await renderPdfPage(1);
+    // 加载首页标注
+    if (brushState.diaryId) {
+      const all = loadAnnotations(brushState.diaryId);
+      pdfState.allPagesAnnos = all || {};
+      initAnnotationsForDiary(brushState.diaryId);
+    }
+    return true;
+  } catch (err) {
+    console.error('PDF 加载失败:', err);
+    toast('PDF 加载失败：' + (err.message || '未知错误'), 'error');
+    return false;
+  }
+}
+
+// 渲染指定页
+async function renderPdfPage(num) {
+  if (!pdfState.pdfDoc) return;
+  num = Math.max(1, Math.min(pdfState.totalPages, num));
+  pdfState.pageNum = num;
+  const pageInput = document.getElementById('pdf-page-input');
+  if (pageInput) pageInput.value = num;
+  // 取消上一次渲染
+  if (pdfState.renderTask) {
+    try { pdfState.renderTask.cancel(); } catch (_) {}
+    pdfState.renderTask = null;
+  }
+  const page = await pdfState.pdfDoc.getPage(num);
+  const viewport = page.getViewport({ scale: pdfState.scale });
+  const canvas = document.getElementById('pdf-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  // 高分屏优化
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(viewport.width * dpr);
+  canvas.height = Math.floor(viewport.height * dpr);
+  canvas.style.width = viewport.width + 'px';
+  canvas.style.height = viewport.height + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  pdfState.renderTask = page.render({
+    canvasContext: ctx,
+    viewport: page.getViewport({ scale: pdfState.scale * dpr })
+  });
+  try {
+    await pdfState.renderTask.promise;
+  } catch (e) {
+    if (e.name !== 'RenderingCancelledException') console.warn('PDF 渲染错误', e);
+  } finally {
+    pdfState.renderTask = null;
+  }
+  // 重新计算标注层尺寸（让 SVG 与 canvas 像素对齐）
+  setTimeout(resizeAnnotationLayer, 50);
+  // 渲染当前页标注
+  initAnnotationsForDiary(brushState.diaryId);
+}
+
+// 进入 PDF 模式（隐藏 markdown 预览、显示 PDF 查看器）
+function enterPdfMode() {
+  pdfState.active = true;
+  const preview = document.getElementById('editor-preview');
+  const pdfViewer = document.getElementById('pdf-viewer');
+  if (preview) preview.style.display = 'none';
+  if (pdfViewer) pdfViewer.style.display = 'flex';
+  // 在 body 上加标记，CSS 可用 :has() 或属性选择器定位 PDF 模式
+  const body = document.querySelector('.editor-body');
+  if (body) body.setAttribute('data-pdf-mode', 'active');
+}
+
+// 退出 PDF 模式
+function exitPdfMode() {
+  pdfState.active = false;
+  const preview = document.getElementById('editor-preview');
+  const pdfViewer = document.getElementById('pdf-viewer');
+  if (preview) preview.style.display = '';
+  if (pdfViewer) pdfViewer.style.display = 'none';
+  if (pdfState.pdfDoc) {
+    try { pdfState.pdfDoc.destroy(); } catch (_) {}
+    pdfState.pdfDoc = null;
+  }
+  pdfState.allPagesAnnos = {};
+  const body = document.querySelector('.editor-body');
+  if (body) body.removeAttribute('data-pdf-mode');
+  // 标注层重新计算
+  setTimeout(resizeAnnotationLayer, 50);
+}
+
+// 在保存 PDF 标注时，按页保存到 localStorage
+function savePdfAnnotations() {
+  if (!brushState.diaryId) {
+    toast('请先保存日记', 'error');
+    return false;
+  }
+  // 把当前页标注存回 allPagesAnnos
+  pdfState.allPagesAnnos[String(pdfState.pageNum)] = brushState.paths.slice();
+  // 保存整个 allPagesAnnos 到 localStorage
+  return saveAnnotationsToStorage(brushState.diaryId, pdfState.allPagesAnnos);
+}
+
+// 在切换页面前，把当前页标注缓存到 allPagesAnnos
+function stashCurrentPageAnnos() {
+  if (pdfState.active) {
+    pdfState.allPagesAnnos[String(pdfState.pageNum)] = brushState.paths.slice();
+  }
+}
+
+// 上传 PDF
+async function handlePdfUpload(file) {
+  if (!file) return;
+  if (!brushState.diaryId) {
+    toast('请先保存日记后再上传 PDF', 'error');
+    return;
+  }
+  const formData = new FormData();
+  formData.append('pdf', file);
+  try {
+    const res = await fetch('/api/upload/pdf', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + getToken() },
+      body: formData
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || '上传失败');
+    }
+    const data = await res.json();
+    // 把 pdf_filename 写入日记
+    const saveRes = await fetch(`/api/diaries/${brushState.diaryId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + getToken()
+      },
+      body: JSON.stringify({ pdf_filename: data.filename, pdf_pages: 0 })
+    });
+    if (!saveRes.ok) {
+      const errData = await saveRes.json().catch(() => ({}));
+      throw new Error(errData.error || '写入日记失败');
+    }
+    toast('PDF 上传成功', 'success');
+    // 加载 PDF（使用 API 返回的 url，已经是 /api/upload/pdf/... 格式）
+    await loadPdf(data.url, data.originalName);
+    // 把总页数写回（如果有元数据）
+    enterPdfMode();
+    // 切到预览模式
+    const previewBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="preview"]');
+    if (previewBtn) previewBtn.click();
+    // 显示移除按钮
+    const removeBtn = document.getElementById('btn-remove-pdf');
+    if (removeBtn) removeBtn.style.display = '';
+    // 更新上传按钮文字
+    const uploadText = document.getElementById('btn-upload-pdf-text');
+    if (uploadText) uploadText.textContent = '替换 PDF';
+  } catch (e) {
+    toast('PDF 上传失败：' + e.message, 'error');
+  }
+}
+
+// 移除 PDF
+async function handleRemovePdf() {
+  if (!confirm('确认移除该 PDF 附件？此操作不会删除原始文件。')) return;
+  if (!brushState.diaryId) return;
+  try {
+    const res = await fetch(`/api/diaries/${brushState.diaryId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + getToken()
+      },
+      body: JSON.stringify({ pdf_filename: null, pdf_pages: 0 })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || '操作失败');
+    }
+    exitPdfMode();
+    // 同时清空 localStorage 标注
+    if (brushState.diaryId) {
+      try { localStorage.removeItem(ANNOTATION_STORAGE_PREFIX + brushState.diaryId); } catch (_) {}
+    }
+    brushState.paths = [];
+    renderAllAnnotations();
+    // 隐藏移除按钮
+    const removeBtn = document.getElementById('btn-remove-pdf');
+    if (removeBtn) removeBtn.style.display = 'none';
+    const uploadText = document.getElementById('btn-upload-pdf-text');
+    if (uploadText) uploadText.textContent = '上传 PDF';
+    // 切回分屏
+    const splitBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="split"]');
+    if (splitBtn) splitBtn.click();
+    toast('已移除 PDF 附件', 'success');
+  } catch (e) {
+    toast('移除失败：' + e.message, 'error');
+  }
 }
 
 function escapeHtml(s) {
@@ -2435,6 +3262,18 @@ async function openEditor(id) {
   updateWordCount();
   // 初始化当前日记的笔刷标注数据
   initAnnotationsForDiary(id || null);
+  // 如果该日记带 PDF 附件，自动加载并进入预览模式
+  const diaryObj = state.currentDiary;
+  if (diaryObj && diaryObj.pdf_filename) {
+    autoLoadDiaryPdf(diaryObj);
+  } else {
+    // 任何不带 PDF 的情况：彻底清空 PDF 模式状态
+    exitPdfMode();
+    const removeBtn = document.getElementById('btn-remove-pdf');
+    if (removeBtn) removeBtn.style.display = 'none';
+    const uploadText = document.getElementById('btn-upload-pdf-text');
+    if (uploadText) uploadText.textContent = '上传 PDF';
+  }
 }
 
 // 渲染"指定可见用户"徽标（在可见性下拉框旁展示当前已选用户）
@@ -3668,6 +4507,8 @@ function bindEvents() {
 
   // ===== 预览模式笔刷标注 =====
   setupBrushAnnotations();
+  // ===== PDF 阅读器事件绑定 =====
+  setupPdfViewer();
 
   // 编辑器实时预览
   const textarea = document.getElementById('editor-textarea');

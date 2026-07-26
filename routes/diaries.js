@@ -200,7 +200,7 @@ router.get('/', (req, res) => {
 
   const total = db.prepare(`SELECT COUNT(*) as count FROM diaries ${where}`).get(...params).count;
   const rows = db.prepare(
-    `SELECT id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id, created_at, updated_at
+    `SELECT id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id, pdf_filename, pdf_pages, created_at, updated_at
      FROM diaries ${where} ${orderClause} LIMIT ? OFFSET ?`
   ).all(...params, limitNum, offset);
 
@@ -263,7 +263,7 @@ router.get('/:id', (req, res) => {
 
 // 创建日记
 router.post('/', (req, res) => {
-  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators, folder_id } = req.body || {};
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators, folder_id, pdf_filename, pdf_pages } = req.body || {};
   const vis = ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : 'private';
 
   // 校验 folder_id：必须属于当前用户，否则置为 NULL（默认文件夹）
@@ -277,8 +277,8 @@ router.post('/', (req, res) => {
   }
 
   const result = db.prepare(
-    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id, pdf_filename, pdf_pages)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     req.user.id,
     (title || '').trim(),
@@ -289,7 +289,9 @@ router.post('/', (req, res) => {
     is_pinned ? 1 : 0,
     is_public ? 1 : 0,
     vis,
-    folderId
+    folderId,
+    pdf_filename !== undefined ? pdf_filename : null,
+    pdf_pages !== undefined ? parseInt(pdf_pages, 10) || 0 : 0
   );
   const newId = result.lastInsertRowid;
 
@@ -325,7 +327,7 @@ router.put('/:id', (req, res) => {
   const canEdit = isOwner || canEditDiary(id, req.user.id);
   if (!canEdit) return res.status(403).json({ error: '无权编辑此日记' });
 
-  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, folder_id } = req.body || {};
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, folder_id, pdf_filename, pdf_pages } = req.body || {};
 
   // 仅 owner 可改可见性/置顶/公开/移动文件夹
   const canChangeMeta = isOwner;
@@ -352,6 +354,10 @@ router.put('/:id', (req, res) => {
       }
     }
   }
+
+  // PDF 字段：仅 owner 可修改；pdf_filename 可被设置为 null 来移除附件
+  const shouldUpdatePdf = canChangeMeta && pdf_filename !== undefined;
+  const shouldUpdatePdfPages = canChangeMeta && pdf_pages !== undefined;
 
   db.prepare(
     `UPDATE diaries SET
@@ -381,6 +387,23 @@ router.put('/:id', (req, res) => {
   if (shouldUpdateFolder) {
     db.prepare('UPDATE diaries SET folder_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .run(folderIdUpdate, id);
+  }
+
+  // PDF 字段单独处理（保持一致的处理方式）
+  if (shouldUpdatePdf || shouldUpdatePdfPages) {
+    const sets = [];
+    const args = [];
+    if (shouldUpdatePdf) {
+      sets.push('pdf_filename = ?');
+      args.push(pdf_filename); // 支持 null（移除 PDF）
+    }
+    if (shouldUpdatePdfPages) {
+      sets.push('pdf_pages = ?');
+      args.push(parseInt(pdf_pages, 10) || 0);
+    }
+    sets.push("updated_at = datetime('now')");
+    args.push(id);
+    db.prepare(`UPDATE diaries SET ${sets.join(', ')} WHERE id = ?`).run(...args);
   }
 
   // 仅 owner 可同步可见性用户列表

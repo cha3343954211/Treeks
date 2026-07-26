@@ -9,8 +9,8 @@ const { getRuntimeUploadDir } = require('../services/storageLocation');
 
 const router = express.Router();
 
-// 用户专属上传目录（使用运行时配置的上传目录）
-const storage = multer.diskStorage({
+// 图片上传配置
+const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const userDir = path.join(getRuntimeUploadDir(), String(req.user.id));
     if (!fs.existsSync(userDir)) {
@@ -26,8 +26,24 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({
-  storage,
+// PDF 上传配置（用 pdf/ 子目录，扩展名固定为 .pdf）
+const pdfStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const userDir = path.join(getRuntimeUploadDir(), String(req.user.id), 'pdf');
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true });
+    }
+    cb(null, userDir);
+  },
+  filename: (req, file, cb) => {
+    const hash = crypto.createHash('md5').update(Date.now() + file.originalname + (req.user.id || '')).digest('hex').slice(0, 12);
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    cb(null, `${dateStr}_${hash}.pdf`);
+  }
+});
+
+const imageUpload = multer({
+  storage: imageStorage,
   limits: {
     fileSize: (parseInt(process.env.MAX_UPLOAD_SIZE, 10) || 10) * 1024 * 1024
   },
@@ -36,6 +52,21 @@ const upload = multer({
     const ok = allowed.test(file.mimetype) || allowed.test(path.extname(file.originalname).toLowerCase());
     if (ok) cb(null, true);
     else cb(new Error('仅支持 jpeg/jpg/png/gif/webp/bmp/svg 格式'));
+  }
+});
+
+// PDF 限制：单文件最大 50MB
+const pdfUpload = multer({
+  storage: pdfStorage,
+  limits: {
+    fileSize: (parseInt(process.env.MAX_PDF_SIZE, 10) || 50) * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf' || path.extname(file.originalname).toLowerCase() === '.pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('仅支持 PDF 格式'));
+    }
   }
 });
 
@@ -61,7 +92,7 @@ function formatBytes(n) {
 }
 
 // 上传单张图片
-router.post('/image', upload.single('image'), (req, res) => {
+router.post('/image', imageUpload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '未接收到图片文件' });
   try {
     checkStorage(req.user, req.file.size);
@@ -85,7 +116,7 @@ router.post('/image', upload.single('image'), (req, res) => {
 });
 
 // 上传多张图片
-router.post('/images', upload.array('images', 9), (req, res) => {
+router.post('/images', imageUpload.array('images', 9), (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: '未接收到图片文件' });
   }
@@ -149,6 +180,61 @@ router.delete('/images/:id', (req, res) => {
   }
   db.prepare('DELETE FROM images WHERE id = ?').run(req.params.id);
   res.json({ message: '已删除' });
+});
+
+// ============ PDF 上传与服务 ============
+
+// 上传 PDF（仅返回 url 与原始文件名，不绑定日记；绑定由前端在创建/更新日记时写入 pdf_filename）
+router.post('/pdf', pdfUpload.single('pdf'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '未接收到 PDF 文件' });
+  try {
+    checkStorage(req.user, req.file.size);
+  } catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    return res.status(400).json({ error: e.message });
+  }
+  // 使用 /api/upload/pdf/:filename 接口提供 PDF 文件（带鉴权 + 范围请求支持），
+  // 避免被 /uploads 静态服务无鉴权暴露
+  const url = `/api/upload/pdf/${req.file.filename}`;
+  res.status(201).json({
+    url,
+    filename: req.file.filename,
+    originalName: req.file.originalname,
+    size: req.file.size
+  });
+});
+
+// PDF 文件服务（带鉴权 + 范围请求支持）
+// 注意：必须放在通用 /uploads 静态服务之前，因为通用服务不做鉴权
+router.get('/pdf/:filename', (req, res) => {
+  const filename = req.params.filename;
+  // 防路径穿越
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).json({ error: '无效的文件名' });
+  }
+  const filePath = path.join(getRuntimeUploadDir(), String(req.user.id), 'pdf', filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10) || 0;
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = end - start + 1;
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader('Content-Length', chunksize);
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.setHeader('Content-Length', fileSize);
+    fs.createReadStream(filePath).pipe(res);
+  }
 });
 
 module.exports = router;

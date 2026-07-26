@@ -217,6 +217,9 @@ function initDatabase() {
   addColumnIfMissing('diaries', 'visibility', "TEXT DEFAULT 'private'");
   // 日记所属文件夹（NULL 表示在默认/根目录）
   addColumnIfMissing('diaries', 'folder_id', 'INTEGER DEFAULT NULL');
+  // PDF 附件：filename 是用户上传的 PDF 文件名（相对路径），pdf_pages 是总页数
+  addColumnIfMissing('diaries', 'pdf_filename', "TEXT DEFAULT NULL");
+  addColumnIfMissing('diaries', 'pdf_pages', "INTEGER DEFAULT 0");
 
   // 默认设置
   const defaultSettings = {
