@@ -5253,26 +5253,26 @@ html, body {
   overflow: auto;
   background: var(--bg-secondary);
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 24px 16px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 16px 16px 24px;
   position: relative;
 }
 .pdf-viewer-page-host {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  min-height: 200px;
+  position: relative;
   background: var(--bg);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
   border-radius: var(--radius-sm);
   padding: 0;
-  overflow: auto;
+  overflow: visible;
   max-width: 100%;
+  flex-shrink: 0;
 }
 #pdf-viewer-canvas {
   display: block;
   background: white;
+  border-radius: var(--radius-sm);
 }
 [data-mode="dark"] #pdf-viewer-canvas {
   background: #f5f5f5;
@@ -5665,6 +5665,347 @@ html, body {
 [data-mode="dark"] .file-item.file-other .file-pdf-icon::before {
   background: rgba(255, 255, 255, 0.18);
   color: #d4c5f0;
+}
+
+/* ===== 文件查看器：文档/表格笔刷覆盖层 ===== */
+.file-viewer-doc-host,
+.file-viewer-sheet-content {
+  position: relative;
+}
+
+/* 让 brush overlay 在文档/表格/文本容器内可绘制 */
+.file-viewer-doc-host .brush-overlay-svg,
+.file-viewer-sheet-content .brush-overlay-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  z-index: 5;
+  touch-action: none;
+}
+
+/* ===== 图片灯箱（带笔刷） ===== */
+.image-lightbox-modal .modal-content {
+  background: var(--bg);
+}
+.image-lightbox-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+.image-lightbox-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  color: var(--accent);
+}
+.image-lightbox-title > svg { color: var(--accent); }
+.image-lightbox-title #image-lightbox-filename {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.image-lightbox-toolbar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.image-lightbox-toolbar .btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.image-lightbox-toolbar .btn-ghost:hover {
+  background: var(--bg-hover);
+}
+.image-lightbox-zoom-value {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.image-lightbox-body {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  position: relative;
+}
+.image-lightbox-stage {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #fff;
+  transform-origin: top left;
+}
+.image-lightbox-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 200px);
+  width: auto;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: auto;
+}
+.image-lightbox-stage .brush-overlay-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  z-index: 5;
+  touch-action: none;
+}
+
+/* 笔刷工具条（PDF/文件/图片 共用） */
+.pdf-brush-tools,
+.file-brush-tools,
+.image-brush-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  margin: 0 4px;
+}
+.pdf-brush-tools input[type="color"],
+.file-brush-tools input[type="color"],
+.image-brush-tools input[type="color"] {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  background: none;
+}
+.pdf-brush-tools input[type="range"],
+.file-brush-tools input[type="range"],
+.image-brush-tools input[type="range"] {
+  width: 70px;
+  cursor: pointer;
+}
+.pdf-brush-tools .btn-ghost[aria-pressed="true"],
+.file-brush-tools .btn-ghost[aria-pressed="true"],
+.image-brush-tools .btn-ghost[aria-pressed="true"] {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+[data-mode="dark"] .pdf-brush-tools,
+[data-mode="dark"] .file-brush-tools,
+[data-mode="dark"] .image-brush-tools {
+  background: rgba(40, 44, 52, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ===== 我的文件：文件夹侧边栏与面包屑 ===== */
+.files-page-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.files-folders-panel {
+  position: sticky;
+  top: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+.files-folders-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.files-folders-title .files-folder-add {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--fg-muted);
+  transition: all 0.15s var(--ease);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
+.files-folders-title .files-folder-add:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.file-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  transition: all 0.12s var(--ease);
+  margin-bottom: 2px;
+  user-select: none;
+}
+.file-folder-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.file-folder-item.active {
+  background: var(--accent-bg, rgba(76, 153, 92, 0.12));
+  color: var(--accent);
+  font-weight: 600;
+}
+.file-folder-item .file-folder-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.file-folder-item.active .file-folder-icon {
+  opacity: 1;
+}
+.file-folder-item .file-folder-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s var(--ease);
+}
+.file-folder-item:hover .file-folder-actions,
+.file-folder-item.active .file-folder-actions {
+  opacity: 1;
+}
+.file-folder-item .file-folder-action {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.file-folder-item .file-folder-action:hover {
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+.file-folder-item .file-folder-action.danger:hover {
+  color: var(--danger);
+}
+.file-folder-children {
+  margin-left: 18px;
+  border-left: 1px dashed var(--border);
+  padding-left: 6px;
+}
+.files-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  padding: 4px 0 12px;
+  flex-wrap: wrap;
+}
+.files-breadcrumb .crumb {
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  transition: background 0.12s var(--ease);
+  user-select: none;
+}
+.files-breadcrumb .crumb:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.files-breadcrumb .crumb-sep {
+  opacity: 0.5;
+  user-select: none;
+}
+.files-breadcrumb .crumb.current {
+  font-weight: 600;
+  color: var(--fg);
+  cursor: default;
+}
+.files-breadcrumb .crumb.current:hover { background: transparent; }
+
+@media (max-width: 900px) {
+  .files-page-layout {
+    grid-template-columns: 1fr;
+  }
+  .files-folders-panel {
+    position: static;
+    max-height: none;
+  }
+}
+@media (max-width: 720px) {
+  .image-lightbox-header {
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .image-lightbox-title {
+    flex: 1 0 100%;
+    order: 1;
+    font-size: 13px;
+  }
+  .image-lightbox-title #image-lightbox-filename { max-width: 100%; }
+  .image-lightbox-toolbar {
+    order: 2;
+    flex: 1 0 100%;
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .image-lightbox-body { padding: 12px; }
+  .image-lightbox-stage img { max-height: calc(100vh - 220px); }
 }
 
 @media (max-width: 720px) {

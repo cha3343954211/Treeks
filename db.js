@@ -13,6 +13,35 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
 function initDatabase() {
+  // 兼容旧库：先补字段，再执行 CREATE TABLE/INDEX（确保索引引用的列存在）
+  const addColumnIfMissing = (table, column, def) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes(column)) {
+      try {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+        console.log(`[DB] 补字段: ${table}.${column}`);
+      } catch (e) {
+        console.warn(`[DB] 补字段失败 ${table}.${column}: ${e.message}`);
+      }
+    }
+  };
+  addColumnIfMissing('users', 'is_admin', 'INTEGER DEFAULT 0');
+  addColumnIfMissing('users', 'status', "TEXT DEFAULT 'active'");
+  addColumnIfMissing('users', 'storage_limit', 'INTEGER DEFAULT 104857600');
+  addColumnIfMissing('users', 'theme', "TEXT DEFAULT 'green'");
+  // 用户最近一次活跃时间（用于在线/离线判定）
+  addColumnIfMissing('users', 'last_active_at', "TEXT DEFAULT NULL");
+  // 日记可见性：private / public / friends / specific
+  addColumnIfMissing('diaries', 'visibility', "TEXT DEFAULT 'private'");
+  // 日记所属文件夹（NULL 表示在默认/根目录）
+  addColumnIfMissing('diaries', 'folder_id', 'INTEGER DEFAULT NULL');
+  // PDF 附件：filename 是用户上传的 PDF 文件名（相对路径），pdf_pages 是总页数
+  addColumnIfMissing('diaries', 'pdf_filename', "TEXT DEFAULT NULL");
+  addColumnIfMissing('diaries', 'pdf_pages', "INTEGER DEFAULT 0");
+  // 统一文件表：folder（所属文件夹路径），annotations（批注数据 JSON）
+  addColumnIfMissing('files', 'folder', "TEXT DEFAULT ''");
+  addColumnIfMissing('files', 'annotations', "TEXT DEFAULT NULL");
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,11 +113,26 @@ function initDatabase() {
       mime_type TEXT,
       size INTEGER,
       url TEXT NOT NULL,
+      folder TEXT DEFAULT '',
+      annotations TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id);
     CREATE INDEX IF NOT EXISTS idx_files_user_kind ON files(user_id, kind);
+    CREATE INDEX IF NOT EXISTS idx_files_user_folder ON files(user_id, folder);
+
+    -- 用户文件夹表
+    CREATE TABLE IF NOT EXISTS file_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      parent TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, parent, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_folders_user ON file_folders(user_id, parent);
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -218,27 +262,7 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_user_id);
   `);
 
-  // 兼容旧库：补字段
-  const addColumnIfMissing = (table, column, def) => {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
-    if (!cols.includes(column)) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
-      console.log(`[DB] 补字段: ${table}.${column}`);
-    }
-  };
-  addColumnIfMissing('users', 'is_admin', 'INTEGER DEFAULT 0');
-  addColumnIfMissing('users', 'status', "TEXT DEFAULT 'active'");
-  addColumnIfMissing('users', 'storage_limit', 'INTEGER DEFAULT 104857600');
-  addColumnIfMissing('users', 'theme', "TEXT DEFAULT 'green'");
-  // 用户最近一次活跃时间（用于在线/离线判定）
-  addColumnIfMissing('users', 'last_active_at', "TEXT DEFAULT NULL");
-  // 日记可见性：private / public / friends / specific
-  addColumnIfMissing('diaries', 'visibility', "TEXT DEFAULT 'private'");
-  // 日记所属文件夹（NULL 表示在默认/根目录）
-  addColumnIfMissing('diaries', 'folder_id', 'INTEGER DEFAULT NULL');
-  // PDF 附件：filename 是用户上传的 PDF 文件名（相对路径），pdf_pages 是总页数
-  addColumnIfMissing('diaries', 'pdf_filename', "TEXT DEFAULT NULL");
-  addColumnIfMissing('diaries', 'pdf_pages', "INTEGER DEFAULT 0");
+  // 兼容旧库：补字段（已在 initDatabase 开头执行）
 
   // 默认设置
   const defaultSettings = {

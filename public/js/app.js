@@ -3868,11 +3868,250 @@ const pdfViewerState = {
   scale: 1.2,
   renderTask: null,
   bound: false,        // 是否已绑定事件（避免重复）
-  fitWidth: false      // 是否启用适应宽度
+  fitWidth: false,     // 是否启用适应宽度
+  brush: null          // 笔刷覆盖层实例
 };
 
+// ===== 通用笔刷覆盖层（用于 PDF / 文档 / 表格 / 图片 预览） =====
+// 用法：
+//   const brush = createBrushOverlay(container, { fileId, kind, getPageKey, ... });
+//   brush.setTool('pen'); brush.setColor('#ff0000');
+//   brush.load().then(() => brush.render());
+//   brush.destroy();
+function createBrushOverlay(container, opts = {}) {
+  if (!container) return null;
+  const state = {
+    fileId: opts.fileId || null,
+    kind: opts.kind || 'pdf',         // pdf | document | sheet | image
+    pageKey: opts.pageKey || 'main',  // 用于 PDF 多页：'page-1' / 'page-2' / ...
+    savePath: opts.savePath || null,  // 自定义保存路径（可选）
+    pathsByKey: {},                   // 缓存每个 pageKey 的 paths
+    drawing: false,
+    tool: 'pen',                      // 'pen' | 'highlight' | 'eraser' | 'none'
+    color: opts.defaultColor || '#ff5252',
+    size: opts.defaultSize || 4,
+    opacity: 1,
+    points: [],
+    bound: false
+  };
+  // 创建 SVG
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.classList.add('brush-overlay-svg');
+  svg.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:auto;z-index:5;touch-action:none;';
+  // SVG 内容
+  const inner = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  inner.classList.add('brush-overlay-inner');
+  svg.appendChild(inner);
+  container.style.position = 'relative';
+  container.appendChild(svg);
+  // 监听尺寸变化
+  const ro = new ResizeObserver(() => {
+    if (svg.clientWidth > 0 && svg.clientHeight > 0) {
+      svg.setAttribute('viewBox', `0 0 ${svg.clientWidth} ${svg.clientHeight}`);
+    }
+  });
+  ro.observe(container);
+  // 工具函数
+  function getPoint(e) {
+    const rect = container.getBoundingClientRect();
+    const sx = svg.clientWidth / rect.width;
+    const sy = svg.clientHeight / rect.height;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+      x: (clientX - rect.left) * sx,
+      y: (clientY - rect.top) * sy
+    };
+  }
+  function getCurrentPaths() {
+    if (!state.pathsByKey[state.pageKey]) state.pathsByKey[state.pageKey] = [];
+    return state.pathsByKey[state.pageKey];
+  }
+  function createPathEl(p) {
+    if (p.type === 'text') {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', p.points[0].x);
+      t.setAttribute('y', p.points[0].y);
+      t.setAttribute('fill', p.color);
+      t.setAttribute('font-size', Math.max(12, p.size * 3));
+      t.setAttribute('opacity', p.opacity || 1);
+      t.setAttribute('font-weight', '600');
+      t.setAttribute('font-family', 'inherit');
+      t.textContent = p.text || '';
+      return t;
+    }
+    if (!p.points || p.points.length < 2) return null;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    if (p.type === 'highlight') {
+      const sw = Math.max(8, p.size * 3);
+      path.setAttribute('stroke', p.color);
+      path.setAttribute('stroke-width', sw);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      path.setAttribute('opacity', '0.4');
+    } else {
+      path.setAttribute('stroke', p.color);
+      path.setAttribute('stroke-width', p.size);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      path.setAttribute('opacity', p.opacity || 1);
+    }
+    let d = `M ${p.points[0].x} ${p.points[0].y}`;
+    for (let i = 1; i < p.points.length; i++) {
+      d += ` L ${p.points[i].x} ${p.points[i].y}`;
+    }
+    path.setAttribute('d', d);
+    return path;
+  }
+  function render() {
+    inner.innerHTML = '';
+    const list = getCurrentPaths();
+    for (const p of list) {
+      const el = createPathEl(p);
+      if (el) inner.appendChild(el);
+    }
+  }
+  // 事件
+  function onDown(e) {
+    if (state.tool === 'none' || state.tool === 'eraser' || !state.tool) return;
+    e.preventDefault();
+    e.stopPropagation();
+    state.drawing = true;
+    state.points = [getPoint(e)];
+  }
+  function onMove(e) {
+    if (!state.drawing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    state.points.push(getPoint(e));
+    // 临时绘制最后一段
+    const last = inner.lastElementChild;
+    if (last && last.tagName === 'path' && last.dataset.temp) inner.removeChild(last);
+    const p = {
+      type: state.tool === 'highlight' ? 'highlight' : 'pen',
+      color: state.color,
+      size: state.size,
+      opacity: state.opacity,
+      points: state.points.slice()
+    };
+    const el = createPathEl(p);
+    if (el) {
+      el.dataset.temp = '1';
+      inner.appendChild(el);
+    }
+  }
+  function onUp(e) {
+    if (!state.drawing) return;
+    state.drawing = false;
+    // 移除临时
+    const last = inner.lastElementChild;
+    if (last && last.tagName === 'path' && last.dataset.temp) inner.removeChild(last);
+    if (state.points.length < 2) {
+      state.points = [];
+      return;
+    }
+    const p = {
+      id: 'p' + Date.now() + Math.random().toString(36).slice(2, 6),
+      type: state.tool === 'highlight' ? 'highlight' : 'pen',
+      color: state.color,
+      size: state.size,
+      opacity: state.opacity,
+      points: state.points.slice()
+    };
+    getCurrentPaths().push(p);
+    state.points = [];
+    const el = createPathEl(p);
+    if (el) inner.appendChild(el);
+    // 自动保存（防抖）
+    scheduleSave();
+  }
+  let saveTimer = null;
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => save().catch(e => console.warn('笔刷保存失败', e)), 600);
+  }
+  // 事件绑定
+  svg.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  svg.addEventListener('touchstart', onDown, { passive: false });
+  window.addEventListener('touchmove', onMove, { passive: false });
+  window.addEventListener('touchend', onUp);
+  // 加载与保存
+  async function load() {
+    if (!state.fileId) return;
+    try {
+      const data = await api(`/api/upload/files/${state.fileId}/annotations`);
+      const ann = data.annotations || {};
+      // ann 结构: { 'main': [...], 'page-1': [...] }
+      state.pathsByKey = ann && typeof ann === 'object' ? ann : {};
+    } catch (e) { /* ignore */ }
+    render();
+  }
+  let saving = false;
+  let lastSaved = '';
+  async function save() {
+    if (!state.fileId) return;
+    const payload = JSON.stringify(state.pathsByKey);
+    if (payload === lastSaved) return;
+    saving = true;
+    try {
+      await api(`/api/upload/files/${state.fileId}/annotations`, {
+        method: 'PUT',
+        body: JSON.stringify({ annotations: state.pathsByKey })
+      });
+      lastSaved = payload;
+    } finally { saving = false; }
+  }
+  function setPageKey(key) {
+    state.pageKey = key;
+    render();
+  }
+  function setTool(tool) {
+    state.tool = tool;
+    svg.style.pointerEvents = tool === 'none' || !tool ? 'none' : 'auto';
+    svg.style.cursor = tool === 'eraser' ? 'crosshair' : (tool === 'pen' || tool === 'highlight') ? 'crosshair' : 'default';
+  }
+  function setColor(c) { state.color = c; }
+  function setSize(s) { state.size = Math.max(1, parseInt(s, 10) || 4); }
+  function setOpacity(o) { state.opacity = Math.max(0, Math.min(1, parseFloat(o) || 0)); }
+  function clear() {
+    state.pathsByKey[state.pageKey] = [];
+    render();
+    scheduleSave();
+  }
+  function undo() {
+    const list = getCurrentPaths();
+    if (list.length === 0) return;
+    list.pop();
+    render();
+    scheduleSave();
+  }
+  function getAllPaths() {
+    return state.pathsByKey;
+  }
+  function destroy() {
+    try { ro.disconnect(); } catch (_) {}
+    try { svg.remove(); } catch (_) {}
+  }
+  // 初始化
+  setTool('none');
+  // 立即异步加载
+  load();
+  return {
+    setTool, setColor, setSize, setOpacity,
+    setPageKey, clear, undo, save, load, render,
+    getAllPaths, destroy,
+    get tool() { return state.tool; },
+    get size() { return state.size; },
+    get color() { return state.color; }
+  };
+}
+
 // 打开 PDF 阅读器模态框
-async function openPdfViewerModal(url, filename) {
+async function openPdfViewerModal(url, filename, fileId) {
   if (typeof pdfjsLib === 'undefined') {
     toast('PDF.js 未加载，请检查网络', 'error');
     return;
@@ -3880,6 +4119,7 @@ async function openPdfViewerModal(url, filename) {
   setupPdfJsWorker();
   const modal = document.getElementById('pdf-viewer-modal');
   if (!modal) return;
+  pdfViewerState.fileId = fileId || null;
   // 重置 UI
   const fnEl = document.getElementById('pdf-viewer-modal-filename');
   if (fnEl) { fnEl.textContent = filename || '未命名.pdf'; fnEl.title = filename || ''; }
@@ -3891,6 +4131,9 @@ async function openPdfViewerModal(url, filename) {
   if (zoomEl) zoomEl.textContent = Math.round(pdfViewerState.scale * 100) + '%';
   const loading = document.getElementById('pdf-viewer-loading');
   if (loading) loading.style.display = '';
+  // 重置笔刷工具条
+  const brushTools = document.getElementById('pdf-brush-tools');
+  if (brushTools) brushTools.style.display = 'none';
   // 显示模态框
   modal.style.display = '';
   document.body.style.overflow = 'hidden';
@@ -3903,6 +4146,21 @@ async function openPdfViewerModal(url, filename) {
   const ok = await loadPdfForViewer(url, filename);
   if (!ok) {
     closePdfViewerModal();
+  }
+  // 初始化笔刷（仅当有 fileId 时）
+  if (ok && pdfViewerState.fileId) {
+    const host = document.getElementById('pdf-viewer-page-host');
+    if (host) {
+      // 销毁旧的笔刷实例
+      if (pdfViewerState.brush && typeof pdfViewerState.brush.destroy === 'function') {
+        pdfViewerState.brush.destroy();
+      }
+      pdfViewerState.brush = createBrushOverlay(host, {
+        fileId: pdfViewerState.fileId,
+        kind: 'pdf',
+        pageKey: 'page-1'
+      });
+    }
   }
 }
 
@@ -3919,10 +4177,17 @@ function closePdfViewerModal() {
     try { pdfViewerState.pdfDoc.destroy(); } catch (_) {}
     pdfViewerState.pdfDoc = null;
   }
+  // 保存并销毁笔刷
+  if (pdfViewerState.brush) {
+    try { pdfViewerState.brush.save(); } catch (_) {}
+    try { pdfViewerState.brush.destroy(); } catch (_) {}
+    pdfViewerState.brush = null;
+  }
   pdfViewerState.pageNum = 1;
   pdfViewerState.totalPages = 0;
   pdfViewerState.url = '';
   pdfViewerState.filename = '';
+  pdfViewerState.fileId = null;
   const loading = document.getElementById('pdf-viewer-loading');
   if (loading) loading.style.display = '';
   // 清空 canvas
@@ -3992,9 +4257,13 @@ async function renderPdfViewerPage(num) {
   // 计算可用宽度（用于适应宽度）
   let scale = pdfViewerState.scale;
   if (pdfViewerState.fitWidth) {
-    const host = document.getElementById('pdf-viewer-page-host');
+    const body = document.getElementById('pdf-viewer-modal-body');
+    // 用 body 的可视宽度（含 padding）减去左右 padding，得到实际可用宽度
+    const bodyStyle = body ? getComputedStyle(body) : null;
+    const padL = bodyStyle ? parseFloat(bodyStyle.paddingLeft) || 0 : 0;
+    const padR = bodyStyle ? parseFloat(bodyStyle.paddingRight) || 0 : 0;
+    const availW = (body ? body.clientWidth - padL - padR : 800) - 16;
     const baseViewport = page.getViewport({ scale: 1 });
-    const availW = (host ? host.clientWidth - 32 : 800);
     scale = Math.max(0.5, Math.min(3, availW / baseViewport.width));
   }
   const viewport = page.getViewport({ scale });
@@ -4021,6 +4290,10 @@ async function renderPdfViewerPage(num) {
   // 更新缩放显示（fit 时显示实际缩放）
   const zoomEl = document.getElementById('pdf-viewer-zoom-value');
   if (zoomEl) zoomEl.textContent = Math.round(scale * 100) + '%';
+  // 同步笔刷 pageKey
+  if (pdfViewerState.brush) {
+    pdfViewerState.brush.setPageKey('page-' + num);
+  }
 }
 
 // 设置缩放
@@ -4110,9 +4383,70 @@ function bindPdfViewerEvents() {
       renderPdfViewerPage(pdfViewerState.pageNum);
     }
   });
+  // ===== 笔刷工具事件 =====
+  const brushToggle = document.getElementById('pdf-viewer-brush-toggle');
+  if (brushToggle) {
+    brushToggle.addEventListener('click', () => {
+      if (!pdfViewerState.fileId) {
+        toast('请通过"我的文件"打开 PDF 才能批注', 'info');
+        return;
+      }
+      const tools = document.getElementById('pdf-brush-tools');
+      if (!tools) return;
+      const visible = tools.style.display !== 'none';
+      tools.style.display = visible ? 'none' : 'flex';
+      if (pdfViewerState.brush) {
+        pdfViewerState.brush.setTool(visible ? 'none' : 'pen');
+      }
+      brushToggle.classList.toggle('active', !visible);
+    });
+  }
+  const penBtn = document.getElementById('pdf-brush-pen');
+  const hlBtn = document.getElementById('pdf-brush-highlight');
+  const undoBtn = document.getElementById('pdf-brush-undo');
+  const clearBtn = document.getElementById('pdf-brush-clear');
+  const saveBtn = document.getElementById('pdf-brush-save');
+  const colorInput = document.getElementById('pdf-brush-color');
+  const sizeInput = document.getElementById('pdf-brush-size');
+  if (penBtn) penBtn.addEventListener('click', () => {
+    if (pdfViewerState.brush) {
+      pdfViewerState.brush.setTool('pen');
+      penBtn.setAttribute('aria-pressed', 'true');
+      hlBtn.setAttribute('aria-pressed', 'false');
+    }
+  });
+  if (hlBtn) hlBtn.addEventListener('click', () => {
+    if (pdfViewerState.brush) {
+      pdfViewerState.brush.setTool('highlight');
+      penBtn.setAttribute('aria-pressed', 'false');
+      hlBtn.setAttribute('aria-pressed', 'true');
+    }
+  });
+  if (undoBtn) undoBtn.addEventListener('click', () => {
+    if (pdfViewerState.brush) pdfViewerState.brush.undo();
+  });
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    if (pdfViewerState.brush) {
+      if (confirm('确定清空当前页的所有批注？')) pdfViewerState.brush.clear();
+    }
+  });
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
+    if (pdfViewerState.brush) {
+      try {
+        await pdfViewerState.brush.save();
+        toast('已保存批注', 'success');
+      } catch (e) { toast('保存失败：' + e.message, 'error'); }
+    }
+  });
+  if (colorInput) colorInput.addEventListener('input', e => {
+    if (pdfViewerState.brush) pdfViewerState.brush.setColor(e.target.value);
+  });
+  if (sizeInput) sizeInput.addEventListener('input', e => {
+    if (pdfViewerState.brush) pdfViewerState.brush.setSize(e.target.value);
+  });
 }
 
-// ===== 统一文件查看/编辑模态框（文本/文档/表格） =====
+// 统一文件查看/编辑模态框（文本/文档/表格）
 const fileViewerState = {
   id: null,
   kind: null,           // 'text' | 'document' | 'other'
@@ -4120,9 +4454,11 @@ const fileViewerState = {
   originalName: '',
   url: '',
   size: 0,
+  folder: '',
   dirty: false,         // 文本是否有未保存修改
   sheets: [],           // xlsx 工作表缓存
-  currentSheet: 0
+  currentSheet: 0,
+  brush: null           // 笔刷覆盖层实例
 };
 
 // 打开文件查看/编辑模态框（根据 fileId 自动判断类型）
@@ -4162,6 +4498,11 @@ async function openFileViewerFromMeta(f) {
   if (iconEl) iconEl.innerHTML = kindIcon(f.kind);
   const saveBtn = document.getElementById('file-viewer-save');
   if (saveBtn) saveBtn.style.display = f.kind === 'text' ? '' : 'none';
+  const brushToggleBtn = document.getElementById('file-viewer-brush-toggle');
+  // 笔刷按钮：除图片/其他外都允许（PDF 在专门的 PDF 阅读器中批注）
+  if (brushToggleBtn) brushToggleBtn.style.display = (f.kind === 'text' || f.kind === 'document') ? '' : 'none';
+  const brushTools = document.getElementById('file-brush-tools');
+  if (brushTools) brushTools.style.display = 'none';
   const loading = document.getElementById('file-viewer-loading');
   const textHost = document.getElementById('file-viewer-text-host');
   const docHost = document.getElementById('file-viewer-doc-host');
@@ -4175,6 +4516,11 @@ async function openFileViewerFromMeta(f) {
   // 显示模态框
   modal.style.display = '';
   document.body.style.overflow = 'hidden';
+  // 销毁旧的笔刷实例
+  if (fileViewerState.brush) {
+    try { fileViewerState.brush.destroy(); } catch (_) {}
+    fileViewerState.brush = null;
+  }
   // 绑定事件（仅一次）
   if (!fileViewerState.bound) {
     bindFileViewerEvents();
@@ -4202,6 +4548,29 @@ async function openFileViewerFromMeta(f) {
     console.error('文件加载失败:', e);
     if (loading) {
       loading.textContent = '加载失败：' + (e.message || '未知错误');
+    }
+  }
+  // 初始化笔刷覆盖层（doc-host / sheet-content）
+  initFileViewerBrush();
+}
+
+// 初始化文件查看器笔刷覆盖层（仅 doc/sheet 类型）
+function initFileViewerBrush() {
+  if (!fileViewerState.id) return;
+  if (fileViewerState.kind === 'document') {
+    // 文档（docx/rtf 等）→ 笔刷在 doc-host 上
+    // 表格（xlsx）→ 笔刷在 sheet-content 上
+    const ext = (fileViewerState.originalName || fileViewerState.filename || '').toLowerCase();
+    const isSheet = /\.(xlsx|xls|xlsb|ods)$/i.test(ext);
+    const target = isSheet
+      ? document.getElementById('file-viewer-sheet-content')
+      : document.getElementById('file-viewer-doc-host');
+    if (target) {
+      fileViewerState.brush = createBrushOverlay(target, {
+        fileId: fileViewerState.id,
+        kind: isSheet ? 'sheet' : 'document',
+        pageKey: isSheet ? ('sheet-' + fileViewerState.currentSheet) : 'main'
+      });
     }
   }
 }
@@ -4305,6 +4674,15 @@ async function loadSheetFile(f) {
         const idx = parseInt(btn.dataset.idx, 10);
         fileViewerState.currentSheet = idx;
         if (sheetContent) sheetContent.innerHTML = fileViewerState.sheets[idx].html;
+        // 重新初始化笔刷（不同 sheet 用不同 pageKey）
+        if (fileViewerState.brush) {
+          try { fileViewerState.brush.destroy(); } catch (_) {}
+        }
+        fileViewerState.brush = createBrushOverlay(sheetContent, {
+          fileId: fileViewerState.id,
+          kind: 'sheet',
+          pageKey: 'sheet-' + idx
+        });
       });
     });
   }
@@ -4325,6 +4703,12 @@ function closeFileViewerModal() {
   const modal = document.getElementById('file-viewer-modal');
   if (modal) modal.style.display = 'none';
   document.body.style.overflow = '';
+  // 保存并销毁笔刷
+  if (fileViewerState.brush) {
+    try { fileViewerState.brush.save(); } catch (_) {}
+    try { fileViewerState.brush.destroy(); } catch (_) {}
+    fileViewerState.brush = null;
+  }
   // 如果有未保存修改，提示
   if (fileViewerState.dirty && fileViewerState.kind === 'text') {
     // 不强提示，由用户主动 Ctrl+S 或点击保存
@@ -4461,6 +4845,14 @@ function bindFileViewerEvents() {
       original_name: fileViewerState.originalName
     });
   });
+  // 重命名按钮
+  const renameBtn = document.getElementById('file-viewer-rename');
+  if (renameBtn) {
+    renameBtn.addEventListener('click', () => {
+      if (!fileViewerState.id) return;
+      openRenameFileModal(fileViewerState.id, fileViewerState.originalName);
+    });
+  }
   // 文本输入
   const ta = document.getElementById('file-viewer-textarea');
   if (ta) {
@@ -4470,6 +4862,67 @@ function bindFileViewerEvents() {
       updateFileViewerStatus(`编辑中 · ${lines} 行 · ${ta.value.length} 字符`);
     });
   }
+  // 笔刷工具按钮
+  const brushToggle = document.getElementById('file-viewer-brush-toggle');
+  if (brushToggle) {
+    brushToggle.addEventListener('click', () => {
+      if (!fileViewerState.brush) {
+        toast('该文件暂不支持批注（仅文档/表格可批注）', 'info');
+        return;
+      }
+      const tools = document.getElementById('file-brush-tools');
+      if (!tools) return;
+      const visible = tools.style.display !== 'none';
+      tools.style.display = visible ? 'none' : 'flex';
+      if (fileViewerState.brush) {
+        fileViewerState.brush.setTool(visible ? 'none' : 'pen');
+      }
+      brushToggle.classList.toggle('active', !visible);
+    });
+  }
+  const penBtn = document.getElementById('file-brush-pen');
+  const hlBtn = document.getElementById('file-brush-highlight');
+  const undoBtn = document.getElementById('file-brush-undo');
+  const clearBtn = document.getElementById('file-brush-clear');
+  const saveBtn = document.getElementById('file-brush-save');
+  const colorInput = document.getElementById('file-brush-color');
+  const sizeInput = document.getElementById('file-brush-size');
+  if (penBtn) penBtn.addEventListener('click', () => {
+    if (fileViewerState.brush) {
+      fileViewerState.brush.setTool('pen');
+      penBtn.setAttribute('aria-pressed', 'true');
+      hlBtn && hlBtn.setAttribute('aria-pressed', 'false');
+    }
+  });
+  if (hlBtn) hlBtn.addEventListener('click', () => {
+    if (fileViewerState.brush) {
+      fileViewerState.brush.setTool('highlight');
+      penBtn && penBtn.setAttribute('aria-pressed', 'false');
+      hlBtn.setAttribute('aria-pressed', 'true');
+    }
+  });
+  if (undoBtn) undoBtn.addEventListener('click', () => {
+    if (fileViewerState.brush) fileViewerState.brush.undo();
+  });
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    if (fileViewerState.brush) {
+      if (confirm('确定清空当前视图的所有批注？')) fileViewerState.brush.clear();
+    }
+  });
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
+    if (fileViewerState.brush) {
+      try {
+        await fileViewerState.brush.save();
+        toast('已保存批注', 'success');
+      } catch (e) { toast('保存失败：' + e.message, 'error'); }
+    }
+  });
+  if (colorInput) colorInput.addEventListener('input', e => {
+    if (fileViewerState.brush) fileViewerState.brush.setColor(e.target.value);
+  });
+  if (sizeInput) sizeInput.addEventListener('input', e => {
+    if (fileViewerState.brush) fileViewerState.brush.setSize(e.target.value);
+  });
   // 键盘快捷键
   document.addEventListener('keydown', (e) => {
     const modal = document.getElementById('file-viewer-modal');
@@ -4487,10 +4940,12 @@ function bindFileViewerEvents() {
 
 // ===== 我的文件（图片 + PDF） =====
 let currentFileFilter = 'all';
+let currentFileFolder = ''; // 当前文件夹路径（空字符串 = 根目录）
 
 function loadFiles() {
   showView('files');
   refreshFiles();
+  loadFileFolders();
 }
 
 // 加载并渲染文件列表（含存储使用情况）
@@ -4503,15 +4958,19 @@ async function refreshFiles() {
     btn.classList.toggle('active', btn.dataset.filter === currentFileFilter);
   });
   try {
-    const qs = currentFileFilter && currentFileFilter !== 'all' ? `?kind=${currentFileFilter}` : '';
+    const params = [];
+    if (currentFileFilter && currentFileFilter !== 'all') params.push(`kind=${encodeURIComponent(currentFileFilter)}`);
+    if (currentFileFolder) params.push(`folder=${encodeURIComponent(currentFileFolder)}`);
+    const qs = params.length ? `?${params.join('&')}` : '';
     const [data, storage] = await Promise.all([
       api(`/api/upload/files${qs}`),
       api('/api/upload/storage').catch(() => null)
     ]);
     renderFilesStorageBar(storage);
+    renderFilesBreadcrumb();
     if (!data.items || !data.items.length) {
       const emptyMap = {
-        all: { title: '还没有任何文件', hint: '点击右上角"上传文件"按钮开始上传' },
+        all: { title: currentFileFolder ? '此文件夹为空' : '还没有任何文件', hint: currentFileFolder ? '点击右上角"上传文件"按钮往此文件夹添加文件' : '点击右上角"上传文件"按钮开始上传' },
         image: { title: '暂无图片', hint: '切换到"全部"或上传图片试试' },
         pdf: { title: '暂无 PDF', hint: '切换到"全部"或上传 PDF 试试' },
         document: { title: '暂无文档', hint: '上传 Word/Excel/PPT 文件试试' },
@@ -4589,6 +5048,9 @@ function renderFileItem(f) {
   actions.push(`<button class="file-action open-file-btn" data-id="${f.id}" title="打开/预览">
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
   </button>`);
+  actions.push(`<button class="file-action rename-file-btn" data-id="${f.id}" data-name="${escapeHtml(name)}" data-kind="${escapeHtml(kind)}" title="重命名">
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+  </button>`);
   actions.push(`<button class="file-action danger del-file-btn" data-id="${f.id}" data-name="${escapeHtml(name)}" title="删除">
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
   </button>`);
@@ -4644,10 +5106,9 @@ function renderFilesStorageBar(storage) {
 function openFileByKind(f) {
   if (!f) return;
   if (f.kind === 'image') {
-    if (typeof openImageLightbox === 'function') openImageLightbox(f.url, f.original_name || f.filename);
-    else window.open(f.url, '_blank');
+    openImageLightbox(f.url, f.original_name || f.filename, f.id);
   } else if (f.kind === 'pdf') {
-    openPdfViewerModal(f.url, f.original_name || f.filename);
+    openPdfViewerModal(f.url, f.original_name || f.filename, f.id);
   } else if (f.kind === 'text' || f.kind === 'document' || f.kind === 'other') {
     openFileViewerFromMeta(f);
   } else {
@@ -4660,6 +5121,13 @@ function bindFileItemEvents(grid) {
   grid.querySelectorAll('.copy-md-btn').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
     navigator.clipboard.writeText(b.dataset.md).then(() => toast('已复制 Markdown', 'success'));
+  }));
+  // 重命名按钮
+  grid.querySelectorAll('.rename-file-btn').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const id = parseInt(b.dataset.id, 10);
+    const name = b.dataset.name || '';
+    openRenameFileModal(id, name);
   }));
   grid.querySelectorAll('.del-file-btn').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
@@ -4676,7 +5144,9 @@ function bindFileItemEvents(grid) {
   // 兼容旧版 open-pdf-btn（如果存在）
   grid.querySelectorAll('.open-pdf-btn').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
-    openPdfViewerModal(b.dataset.url, b.closest('.file-item')?.dataset.name || '');
+    const item = b.closest('.file-item');
+    const id = item ? parseInt(item.dataset.id, 10) : null;
+    openPdfViewerModal(b.dataset.url, b.closest('.file-item')?.dataset.name || '', id);
   }));
   // 统一打开按钮
   grid.querySelectorAll('.open-file-btn').forEach(b => b.addEventListener('click', e => {
@@ -4721,7 +5191,7 @@ function bindFileItemEvents(grid) {
 }
 
 // 上传文件（通过 input change 触发）
-async function uploadFiles(fileList) {
+async function uploadFiles(fileList, folder) {
   if (!fileList || !fileList.length) return;
   const files = Array.from(fileList);
   const totalSize = files.reduce((s, f) => s + f.size, 0);
@@ -4733,11 +5203,15 @@ async function uploadFiles(fileList) {
       return;
     }
   } catch (_) {}
+  const targetFolder = folder || '';
   for (const f of files) {
     try {
       const fd = new FormData();
       fd.append('file', f);
-      const res = await fetch('/api/upload/file', {
+      const url = targetFolder
+        ? `/api/upload/file?folder=${encodeURIComponent(targetFolder)}`
+        : '/api/upload/file';
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + state.token },
         body: fd
@@ -4761,14 +5235,522 @@ function initFilesView() {
       refreshFiles();
     });
   });
-  // 上传 input
+  // 上传 input（带 folder 参数）
   const input = document.getElementById('files-upload-input');
   if (input) {
     input.addEventListener('change', e => {
-      uploadFiles(e.target.files);
+      uploadFiles(e.target.files, currentFileFolder);
       e.target.value = '';
     });
   }
+  // 新建文件夹按钮
+  const createFolderBtn = document.getElementById('btn-create-folder');
+  if (createFolderBtn) {
+    createFolderBtn.addEventListener('click', () => openNewFolderModal(currentFileFolder));
+  }
+  // 面包屑点击
+  const breadcrumb = document.getElementById('files-breadcrumb');
+  if (breadcrumb) {
+    breadcrumb.addEventListener('click', e => {
+      const crumb = e.target.closest('.crumb');
+      if (!crumb || crumb.classList.contains('current')) return;
+      const folder = crumb.dataset.folder || '';
+      selectFileFolder(folder);
+    });
+  }
+  // 重命名文件模态框事件
+  initRenameFileModal();
+  // 新建文件夹模态框事件
+  initNewFolderModal();
+  // 图片灯箱事件
+  initImageLightbox();
+}
+
+// ===== 文件夹侧边栏（"我的文件"页面） =====
+// 缓存文件文件夹树：{ id, name, parent, children: [] }
+let fileFolderTree = [];
+let fileFolderMap = {}; // path -> {id, name, parent}
+
+async function loadFileFolders() {
+  try {
+    // 加载所有层级（递归子目录）
+    const all = await loadAllFileFolders('');
+    fileFolderTree = all;
+    // 重建 path -> node 索引
+    fileFolderMap = {};
+    const walk = (nodes, basePath) => {
+      for (const n of nodes) {
+        const path = basePath ? basePath + '/' + n.name : n.name;
+        fileFolderMap[path] = n;
+        if (n.children && n.children.length) walk(n.children, path);
+      }
+    };
+    walk(fileFolderTree, '');
+    renderFileFolderSidebar();
+  } catch (e) {
+    console.warn('加载文件文件夹失败:', e.message);
+  }
+}
+
+async function loadAllFileFolders(parent) {
+  const data = await api(`/api/upload/folders?parent=${encodeURIComponent(parent || '')}`);
+  const items = data.items || [];
+  const result = [];
+  for (const it of items) {
+    const node = { id: it.id, name: it.name, parent: it.parent || '', children: [] };
+    try {
+      node.children = await loadAllFileFolders(it.parent ? it.parent + '/' + it.name : it.name);
+    } catch (_) { node.children = []; }
+    result.push(node);
+  }
+  return result;
+}
+
+function renderFileFolderSidebar() {
+  const container = document.getElementById('file-folder-list');
+  if (!container) return;
+  const FOLDER_ICON = '<svg class="file-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+  const renderNode = (node, basePath, depth) => {
+    const path = basePath ? basePath + '/' + node.name : node.name;
+    const active = currentFileFolder === path;
+    const html = `<div class="file-folder-item ${active ? 'active' : ''}" data-folder="${escapeHtml(path)}" title="${escapeHtml(node.name)}">
+      ${FOLDER_ICON}
+      <span class="file-folder-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escapeHtml(node.name)}</span>
+      <span class="file-folder-actions">
+        <button class="file-folder-action rename-file-folder-btn" data-path="${escapeHtml(path)}" data-name="${escapeHtml(node.name)}" title="重命名">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+        </button>
+        <button class="file-folder-action danger del-file-folder-btn" data-path="${escapeHtml(path)}" data-name="${escapeHtml(node.name)}" title="删除">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+        </button>
+      </span>
+    </div>`;
+    const childrenHtml = (node.children || []).map(c => renderNode(c, path, depth + 1)).join('');
+    return html + (childrenHtml ? `<div class="file-folder-children">${childrenHtml}</div>` : '');
+  };
+  const rootActive = currentFileFolder === '';
+  const allHtml = `<div class="file-folder-item ${rootActive ? 'active' : ''}" data-folder="" title="所有文件（根目录）">
+    <svg class="file-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    <span class="file-folder-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">所有文件</span>
+  </div>`;
+  const treeHtml = fileFolderTree.map(n => renderNode(n, '', 0)).join('');
+  container.innerHTML = allHtml + treeHtml;
+  // 绑定点击切换
+  container.querySelectorAll('.file-folder-item').forEach(item => {
+    item.addEventListener('click', e => {
+      if (e.target.closest('.file-folder-action')) return;
+      const path = item.dataset.folder || '';
+      selectFileFolder(path);
+    });
+  });
+  // 重命名按钮
+  container.querySelectorAll('.rename-file-folder-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const path = btn.dataset.path || '';
+      const name = btn.dataset.name || '';
+      openRenameFolderModal(path, name);
+    });
+  });
+  // 删除按钮
+  container.querySelectorAll('.del-file-folder-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const path = btn.dataset.path || '';
+      const name = btn.dataset.name || '';
+      confirmDeleteFileFolder(path, name);
+    });
+  });
+}
+
+function selectFileFolder(path) {
+  currentFileFolder = path || '';
+  renderFileFolderSidebar();
+  refreshFiles();
+}
+
+function renderFilesBreadcrumb() {
+  const el = document.getElementById('files-breadcrumb');
+  if (!el) return;
+  const parts = currentFileFolder ? currentFileFolder.split('/') : [];
+  let html = `<span class="crumb" data-folder="" title="返回根目录">我的文件</span>`;
+  let acc = '';
+  for (const p of parts) {
+    acc = acc ? acc + '/' + p : p;
+    const isLast = acc === currentFileFolder;
+    html += `<span class="crumb-sep">/</span>`;
+    if (isLast) {
+      html += `<span class="crumb current" data-folder="${escapeHtml(acc)}">${escapeHtml(p)}</span>`;
+    } else {
+      html += `<span class="crumb" data-folder="${escapeHtml(acc)}">${escapeHtml(p)}</span>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+async function confirmDeleteFileFolder(path, name) {
+  showModal('删除文件夹', `确定要删除文件夹「${name}」吗？此文件夹下的所有文件及子文件夹都会被一并删除，且无法恢复。`, async () => {
+    try {
+      // 找到 folder id（递归构建时可能没有，需要再查一次）
+      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      const data = await api(`/api/upload/folders?parent=${encodeURIComponent(parent)}`);
+      const target = (data.items || []).find(x => x.name === name);
+      if (!target) throw new Error('文件夹不存在');
+      await api(`/api/upload/folders/${target.id}`, { method: 'DELETE' });
+      toast('已删除文件夹', 'success');
+      // 如果当前在该文件夹下，退出到根目录
+      if (currentFileFolder === path) selectFileFolder('');
+      else loadFileFolders();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }, { danger: true, confirmText: '删除' });
+}
+
+function openRenameFolderModal(path, name) {
+  const newName = prompt('重命名文件夹', name);
+  if (!newName || newName === name) return;
+  if (newName.includes('/')) {
+    toast('文件夹名不能包含 /', 'error');
+    return;
+  }
+  (async () => {
+    try {
+      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      const data = await api(`/api/upload/folders?parent=${encodeURIComponent(parent)}`);
+      const target = (data.items || []).find(x => x.name === name);
+      if (!target) throw new Error('文件夹不存在');
+      await api(`/api/upload/folders/${target.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: newName.trim() })
+      });
+      toast('已重命名', 'success');
+      loadFileFolders();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  })();
+}
+
+// ===== 新建文件夹模态框 =====
+function openNewFolderModal(parentPath) {
+  const modal = document.getElementById('new-folder-modal');
+  const input = document.getElementById('new-folder-input');
+  if (!modal || !input) return;
+  input.value = '';
+  input.dataset.parent = parentPath || '';
+  modal.style.display = 'flex';
+  setTimeout(() => input.focus(), 50);
+}
+
+function initNewFolderModal() {
+  const modal = document.getElementById('new-folder-modal');
+  if (!modal) return;
+  modal.querySelectorAll('[data-close="new-folder"]').forEach(el => {
+    el.addEventListener('click', () => { modal.style.display = 'none'; });
+  });
+  const confirmBtn = document.getElementById('new-folder-confirm');
+  const input = document.getElementById('new-folder-input');
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', async () => {
+      const name = (input.value || '').trim();
+      if (!name) { toast('请输入文件夹名', 'error'); return; }
+      if (name.includes('/')) { toast('文件夹名不能包含 /', 'error'); return; }
+      const parent = input.dataset.parent || '';
+      try {
+        await api('/api/upload/folders', {
+          method: 'POST',
+          body: JSON.stringify({ name, parent })
+        });
+        modal.style.display = 'none';
+        toast('已创建文件夹', 'success');
+        loadFileFolders();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    });
+  }
+  if (input) {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); confirmBtn && confirmBtn.click(); }
+    });
+  }
+}
+
+// ===== 重命名文件模态框 =====
+let renameFileTargetId = null;
+
+function openRenameFileModal(id, name) {
+  const modal = document.getElementById('rename-file-modal');
+  const input = document.getElementById('rename-file-input');
+  if (!modal || !input) return;
+  renameFileTargetId = id;
+  // 智能拆分文件名与扩展名
+  const dotIdx = name.lastIndexOf('.');
+  if (dotIdx > 0 && dotIdx < name.length - 1) {
+    input.value = name;
+  } else {
+    input.value = name;
+  }
+  modal.style.display = 'flex';
+  setTimeout(() => {
+    input.focus();
+    // 选中主体（不含扩展名）
+    if (dotIdx > 0 && dotIdx < name.length - 1) {
+      input.setSelectionRange(0, dotIdx);
+    } else {
+      input.select();
+    }
+  }, 50);
+}
+
+function initRenameFileModal() {
+  const modal = document.getElementById('rename-file-modal');
+  if (!modal) return;
+  modal.querySelectorAll('[data-close="rename-file"]').forEach(el => {
+    el.addEventListener('click', () => {
+      modal.style.display = 'none';
+      renameFileTargetId = null;
+    });
+  });
+  const confirmBtn = document.getElementById('rename-file-confirm');
+  const input = document.getElementById('rename-file-input');
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', async () => {
+      if (!renameFileTargetId) { modal.style.display = 'none'; return; }
+      const newName = (input.value || '').trim();
+      if (!newName) { toast('请输入新文件名', 'error'); return; }
+      try {
+        await api(`/api/upload/files/${renameFileTargetId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ original_name: newName })
+        });
+        modal.style.display = 'none';
+        renameFileTargetId = null;
+        toast('已重命名', 'success');
+        refreshFiles();
+        // 如果当前正在查看该文件，刷新查看器标题
+        if (fileViewerState.id === renameFileTargetId) {
+          const fnEl = document.getElementById('file-viewer-modal-filename');
+          if (fnEl) {
+            fnEl.textContent = newName;
+            fnEl.title = newName;
+          }
+          fileViewerState.originalName = newName;
+        }
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    });
+  }
+  if (input) {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); confirmBtn && confirmBtn.click(); }
+      else if (e.key === 'Escape') { modal.style.display = 'none'; renameFileTargetId = null; }
+    });
+  }
+}
+
+// ===== 图片灯箱（带笔刷） =====
+const imageLightboxState = {
+  url: '',
+  filename: '',
+  fileId: null,
+  scale: 1,
+  brush: null
+};
+
+function openImageLightbox(url, filename, fileId) {
+  const modal = document.getElementById('image-lightbox-modal');
+  if (!modal) {
+    // 兜底：直接新窗口打开
+    window.open(url, '_blank');
+    return;
+  }
+  imageLightboxState.url = url;
+  imageLightboxState.filename = filename || '图片';
+  imageLightboxState.fileId = fileId || null;
+  imageLightboxState.scale = 1;
+  const fnEl = document.getElementById('image-lightbox-filename');
+  if (fnEl) { fnEl.textContent = filename || '图片'; fnEl.title = filename || ''; }
+  const zoomEl = document.getElementById('image-lightbox-zoom-value');
+  if (zoomEl) zoomEl.textContent = '100%';
+  const img = document.getElementById('image-lightbox-img');
+  if (img) img.src = url;
+  const brushTools = document.getElementById('image-brush-tools');
+  if (brushTools) brushTools.style.display = 'none';
+  // 显示模态框
+  modal.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  // 销毁旧笔刷
+  if (imageLightboxState.brush) {
+    try { imageLightboxState.brush.destroy(); } catch (_) {}
+    imageLightboxState.brush = null;
+  }
+  // 初始化笔刷（仅当有 fileId 时）
+  if (fileId) {
+    const stage = document.getElementById('image-lightbox-stage');
+    if (stage) {
+      // 等图片加载完成后再创建笔刷，确保尺寸正确
+      const onImgLoad = () => {
+        if (imageLightboxState.brush) {
+          try { imageLightboxState.brush.destroy(); } catch (_) {}
+        }
+        imageLightboxState.brush = createBrushOverlay(stage, {
+          fileId: fileId,
+          kind: 'image',
+          pageKey: 'main'
+        });
+        img.removeEventListener('load', onImgLoad);
+      };
+      if (img.complete && img.naturalWidth > 0) {
+        onImgLoad();
+      } else {
+        img.addEventListener('load', onImgLoad);
+      }
+    }
+  }
+}
+
+function closeImageLightbox() {
+  const modal = document.getElementById('image-lightbox-modal');
+  if (modal) modal.style.display = 'none';
+  document.body.style.overflow = '';
+  if (imageLightboxState.brush) {
+    try { imageLightboxState.brush.save(); } catch (_) {}
+    try { imageLightboxState.brush.destroy(); } catch (_) {}
+    imageLightboxState.brush = null;
+  }
+  const img = document.getElementById('image-lightbox-img');
+  if (img) img.src = '';
+  imageLightboxState.url = '';
+  imageLightboxState.filename = '';
+  imageLightboxState.fileId = null;
+  imageLightboxState.scale = 1;
+}
+
+function setImageLightboxScale(s) {
+  imageLightboxState.scale = Math.max(0.2, Math.min(5, s));
+  const stage = document.getElementById('image-lightbox-stage');
+  if (stage) stage.style.transform = `scale(${imageLightboxState.scale})`;
+  const zoomEl = document.getElementById('image-lightbox-zoom-value');
+  if (zoomEl) zoomEl.textContent = Math.round(imageLightboxState.scale * 100) + '%';
+}
+
+function initImageLightbox() {
+  // 关闭按钮
+  document.querySelectorAll('[data-close="image-lightbox"]').forEach(el => {
+    el.addEventListener('click', closeImageLightbox);
+  });
+  // 缩放控制
+  const zin = document.getElementById('image-lightbox-zoom-in');
+  const zout = document.getElementById('image-lightbox-zoom-out');
+  const zreset = document.getElementById('image-lightbox-reset');
+  if (zin) zin.addEventListener('click', () => setImageLightboxScale(imageLightboxState.scale + 0.1));
+  if (zout) zout.addEventListener('click', () => setImageLightboxScale(imageLightboxState.scale - 0.1));
+  if (zreset) zreset.addEventListener('click', () => setImageLightboxScale(1));
+  // 下载
+  const dl = document.getElementById('image-lightbox-download');
+  if (dl) dl.addEventListener('click', () => {
+    if (!imageLightboxState.url) return;
+    const a = document.createElement('a');
+    a.href = imageLightboxState.url;
+    a.download = imageLightboxState.filename || 'image';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+  // 笔刷切换
+  const brushToggle = document.getElementById('image-lightbox-brush-toggle');
+  if (brushToggle) {
+    brushToggle.addEventListener('click', () => {
+      if (!imageLightboxState.fileId) {
+        toast('请通过"我的文件"打开图片才能批注', 'info');
+        return;
+      }
+      const tools = document.getElementById('image-brush-tools');
+      if (!tools) return;
+      const visible = tools.style.display !== 'none';
+      tools.style.display = visible ? 'none' : 'flex';
+      if (imageLightboxState.brush) {
+        imageLightboxState.brush.setTool(visible ? 'none' : 'pen');
+      }
+      brushToggle.classList.toggle('active', !visible);
+    });
+  }
+  // 笔刷按钮
+  const penBtn = document.getElementById('image-brush-pen');
+  const hlBtn = document.getElementById('image-brush-highlight');
+  const undoBtn = document.getElementById('image-brush-undo');
+  const clearBtn = document.getElementById('image-brush-clear');
+  const saveBtn = document.getElementById('image-brush-save');
+  const colorInput = document.getElementById('image-brush-color');
+  const sizeInput = document.getElementById('image-brush-size');
+  if (penBtn) penBtn.addEventListener('click', () => {
+    if (imageLightboxState.brush) {
+      imageLightboxState.brush.setTool('pen');
+      penBtn.setAttribute('aria-pressed', 'true');
+      hlBtn.setAttribute('aria-pressed', 'false');
+    }
+  });
+  if (hlBtn) hlBtn.addEventListener('click', () => {
+    if (imageLightboxState.brush) {
+      imageLightboxState.brush.setTool('highlight');
+      penBtn.setAttribute('aria-pressed', 'false');
+      hlBtn.setAttribute('aria-pressed', 'true');
+    }
+  });
+  if (undoBtn) undoBtn.addEventListener('click', () => {
+    if (imageLightboxState.brush) imageLightboxState.brush.undo();
+  });
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    if (imageLightboxState.brush) {
+      if (confirm('确定清空当前图片的所有批注？')) imageLightboxState.brush.clear();
+    }
+  });
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
+    if (imageLightboxState.brush) {
+      try {
+        await imageLightboxState.brush.save();
+        toast('已保存批注', 'success');
+      } catch (e) { toast('保存失败：' + e.message, 'error'); }
+    }
+  });
+  if (colorInput) colorInput.addEventListener('input', e => {
+    if (imageLightboxState.brush) imageLightboxState.brush.setColor(e.target.value);
+  });
+  if (sizeInput) sizeInput.addEventListener('input', e => {
+    if (imageLightboxState.brush) imageLightboxState.brush.setSize(e.target.value);
+  });
+  // 滚轮缩放
+  const body = document.getElementById('image-lightbox-body');
+  if (body) {
+    body.addEventListener('wheel', e => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      if (e.deltaY < 0) setImageLightboxScale(imageLightboxState.scale + 0.1);
+      else setImageLightboxScale(imageLightboxState.scale - 0.1);
+    }, { passive: false });
+  }
+  // ESC 关闭 + 键盘快捷键
+  document.addEventListener('keydown', e => {
+    const modal = document.getElementById('image-lightbox-modal');
+    if (!modal || modal.style.display === 'none') return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeImageLightbox();
+    } else if (e.ctrlKey && (e.key === '+' || e.key === '=')) {
+      e.preventDefault();
+      setImageLightboxScale(imageLightboxState.scale + 0.1);
+    } else if (e.ctrlKey && e.key === '-') {
+      e.preventDefault();
+      setImageLightboxScale(imageLightboxState.scale - 0.1);
+    } else if (e.ctrlKey && e.key === '0') {
+      e.preventDefault();
+      setImageLightboxScale(1);
+    }
+  });
 }
 
 // ===== 个人设置 =====

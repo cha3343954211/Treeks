@@ -158,6 +158,8 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
   const { kind } = classifyFile(req.file.originalname);
   // 取子目录：图片 → images，PDF → pdf，文本 → texts，文档 → docs，其他 → other
   const subdir = req._fileSubdir || (kind === 'image' ? 'images' : kind === 'pdf' ? 'pdf' : kind === 'text' ? 'texts' : kind === 'document' ? 'docs' : 'other');
+  // folder 可选：通过请求头/字段指定
+  const folder = (req.body.folder || req.query.folder || '').toString().trim().slice(0, 200);
   // URL 策略：
   //  - PDF：使用鉴权接口 /api/upload/pdf/<filename>
   //  - 文本/文档：使用鉴权接口 /api/upload/file/<id>/raw（按 ID 鉴权，避免泄露文件结构）
@@ -173,9 +175,9 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
     url = `/uploads/_pending/${req.file.filename}`;
   }
   const ins = db.prepare(
-    `INSERT INTO files (user_id, kind, filename, original_name, mime_type, size, url)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(req.user.id, kind, req.file.filename, req.file.originalname, req.file.mimetype || '', req.file.size, url);
+    `INSERT INTO files (user_id, kind, filename, original_name, mime_type, size, url, folder)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(req.user.id, kind, req.file.filename, req.file.originalname, req.file.mimetype || '', req.file.size, url, folder);
   const fileId = ins.lastInsertRowid;
   // 文本/文档用 ID 生成稳定 URL
   if (kind === 'text' || kind === 'document') {
@@ -187,6 +189,7 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
     id: fileId,
     kind,
     url,
+    folder,
     filename: req.file.filename,
     originalName: req.file.originalname,
     size: req.file.size,
@@ -194,23 +197,171 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
   });
 });
 
-// 获取文件列表（支持按 kind 过滤；空 kind 表示所有）
+// 获取文件列表（支持按 kind / folder 过滤）
 router.get('/files', (req, res) => {
   const kind = (req.query.kind || '').toString();
+  const folder = (req.query.folder || '').toString();
   const VALID_KINDS = ['image', 'pdf', 'text', 'document', 'other'];
-  let rows;
-  if (kind && VALID_KINDS.includes(kind)) {
-    rows = db.prepare(
-      `SELECT id, kind, filename, original_name, mime_type, size, url, created_at
-       FROM files WHERE user_id = ? AND kind = ? ORDER BY created_at DESC`
-    ).all(req.user.id, kind);
-  } else {
-    rows = db.prepare(
-      `SELECT id, kind, filename, original_name, mime_type, size, url, created_at
-       FROM files WHERE user_id = ? ORDER BY created_at DESC`
-    ).all(req.user.id);
-  }
+  const where = ['user_id = ?'];
+  const args = [req.user.id];
+  if (kind && VALID_KINDS.includes(kind)) { where.push('kind = ?'); args.push(kind); }
+  if (folder) { where.push('folder = ?'); args.push(folder); }
+  const rows = db.prepare(
+    `SELECT id, kind, filename, original_name, mime_type, size, url, folder, created_at
+     FROM files WHERE ${where.join(' AND ')} ORDER BY created_at DESC`
+  ).all(...args);
   res.json({ items: rows });
+});
+
+// 重命名文件
+router.patch('/files/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const { original_name, folder } = req.body || {};
+  const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件不存在' });
+  const updates = [];
+  const args = [];
+  if (typeof original_name === 'string' && original_name.trim()) {
+    updates.push('original_name = ?');
+    args.push(original_name.trim().slice(0, 200));
+  }
+  if (typeof folder === 'string') {
+    updates.push('folder = ?');
+    args.push(folder.trim().slice(0, 200));
+  }
+  if (updates.length === 0) return res.status(400).json({ error: '无可更新字段' });
+  args.push(id);
+  db.prepare(`UPDATE files SET ${updates.join(', ')} WHERE id = ?`).run(...args);
+  res.json({ message: '已更新' });
+});
+
+// 保存文件批注（笔刷标注）
+router.put('/files/:id/annotations', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const { annotations } = req.body || {};
+  if (annotations === undefined) return res.status(400).json({ error: 'annotations 必填' });
+  const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件不存在' });
+  // 限制大小：annotations 序列化为 JSON 后不超过 4MB
+  const str = JSON.stringify(annotations);
+  if (str.length > 4 * 1024 * 1024) {
+    return res.status(413).json({ error: '批注数据过大（>4MB）' });
+  }
+  db.prepare('UPDATE files SET annotations = ? WHERE id = ?').run(str, id);
+  res.json({ message: '已保存', size: str.length });
+});
+
+// 获取文件批注
+router.get('/files/:id/annotations', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const row = db.prepare('SELECT annotations FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件不存在' });
+  let data = null;
+  if (row.annotations) {
+    try { data = JSON.parse(row.annotations); } catch (_) { data = null; }
+  }
+  res.json({ annotations: data });
+});
+
+// ===== 文件夹 API =====
+// 列出指定目录下的文件夹
+router.get('/folders', (req, res) => {
+  const parent = (req.query.parent || '').toString();
+  const rows = db.prepare(
+    `SELECT id, name, parent, created_at FROM file_folders
+     WHERE user_id = ? AND parent = ? ORDER BY created_at ASC`
+  ).all(req.user.id, parent);
+  res.json({ items: rows });
+});
+
+// 创建文件夹
+router.post('/folders', (req, res) => {
+  const { name, parent } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: '文件夹名称必填' });
+  }
+  const folderName = name.trim().slice(0, 50);
+  const parentPath = (parent || '').toString().trim().slice(0, 200);
+  try {
+    const result = db.prepare(
+      `INSERT INTO file_folders (user_id, name, parent) VALUES (?, ?, ?)`
+    ).run(req.user.id, folderName, parentPath);
+    res.status(201).json({ id: result.lastInsertRowid, name: folderName, parent: parentPath });
+  } catch (e) {
+    if (String(e.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: '该目录下已存在同名文件夹' });
+    }
+    res.status(500).json({ error: '创建失败：' + e.message });
+  }
+});
+
+// 重命名文件夹
+router.patch('/folders/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: '文件夹名称必填' });
+  }
+  const folderName = name.trim().slice(0, 50);
+  const row = db.prepare('SELECT * FROM file_folders WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件夹不存在' });
+  try {
+    db.prepare('UPDATE file_folders SET name = ? WHERE id = ?').run(folderName, id);
+    res.json({ message: '已重命名' });
+  } catch (e) {
+    if (String(e.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: '该目录下已存在同名文件夹' });
+    }
+    res.status(500).json({ error: '重命名失败：' + e.message });
+  }
+});
+
+// 删除文件夹（同时删除其下所有文件与子文件夹）
+router.delete('/folders/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const row = db.prepare('SELECT * FROM file_folders WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件夹不存在' });
+  // 递归收集所有子文件夹的 path 前缀
+  const collectDescendants = (parentPath) => {
+    const children = db.prepare(
+      `SELECT id, name FROM file_folders WHERE user_id = ? AND parent = ?`
+    ).all(req.user.id, parentPath);
+    const result = [parentPath];
+    for (const c of children) {
+      const childPath = parentPath ? parentPath + '/' + c.name : c.name;
+      result.push(...collectDescendants(childPath));
+    }
+    return result;
+  };
+  const allPaths = collectDescendants(row.parent ? row.parent + '/' + row.name : row.name);
+  // 删除这些路径下的所有文件
+  for (const p of allPaths) {
+    const files = db.prepare(
+      `SELECT * FROM files WHERE user_id = ? AND folder = ?`
+    ).all(req.user.id, p);
+    for (const f of files) {
+      const { subdir } = classifyFile(f.original_name || f.filename);
+      const runtimeDir = getRuntimeUploadDir();
+      const defaultDir = DEFAULT_UPLOAD_DIR;
+      const baseDirs = runtimeDir === defaultDir ? [runtimeDir] : [runtimeDir, defaultDir];
+      for (const base of baseDirs) {
+        const fp = path.join(base, String(req.user.id), subdir, f.filename);
+        if (fs.existsSync(fp)) {
+          try { fs.unlinkSync(fp); } catch (_) {}
+        }
+      }
+    }
+    db.prepare(`DELETE FROM files WHERE user_id = ? AND folder = ?`).run(req.user.id, p);
+    db.prepare(`DELETE FROM file_folders WHERE user_id = ? AND parent = ?`).run(req.user.id, p);
+  }
+  // 最后删除本文件夹
+  db.prepare(`DELETE FROM file_folders WHERE id = ?`).run(id);
+  res.json({ message: '已删除' });
 });
 
 // 删除用户文件
