@@ -2440,17 +2440,7 @@ function bindEvents() {
       // 预览模式全屏：隐藏顶栏三栏（topbar/editor-header/editor-toolbar），仅保留笔刷栏
       const viewEditor = document.getElementById('view-editor');
       if (viewEditor) {
-        const isPreview = mode === 'preview';
-        const wasFullscreen = viewEditor.classList.contains('preview-fullscreen');
-        viewEditor.classList.toggle('preview-fullscreen', isPreview);
-        // 进入全屏预览时显示提示
-        if (isPreview && !wasFullscreen) {
-          setTimeout(() => {
-            if (viewEditor.classList.contains('preview-fullscreen')) {
-              toast('按 ESC 退出全屏预览', '');
-            }
-          }, 350);
-        }
+        viewEditor.classList.toggle('preview-fullscreen', mode === 'preview');
       }
       // 切换到预览或分屏时刷新预览
       if (mode === 'preview' || mode === 'split') {
@@ -2461,18 +2451,14 @@ function bindEvents() {
     });
   });
 
-  // ===== 全屏预览模式：ESC 退出 =====
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    const viewEditor = document.getElementById('view-editor');
-    if (!viewEditor || !viewEditor.classList.contains('preview-fullscreen')) return;
-    // 防止与其它模态框 ESC 关闭冲突
-    if (document.querySelector('.modal.show:not(.preview-only)')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const splitBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="split"]');
-    if (splitBtn) splitBtn.click();
-  });
+  // ===== 全屏预览模式：点击退出按钮切回分屏 =====
+  const exitPreviewBtn = document.getElementById('exit-preview-btn');
+  if (exitPreviewBtn) {
+    exitPreviewBtn.addEventListener('click', () => {
+      const splitBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="split"]');
+      if (splitBtn) splitBtn.click();
+    });
+  }
 
   // ===== 编辑/预览滚动跟随（split 模式下双向同步）=====
   setupScrollSync();
