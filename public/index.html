@@ -1116,12 +1116,15 @@
           <!-- 笔刷工具（默认隐藏） -->
           <div class="pdf-brush-tools" id="pdf-brush-tools" style="display:none;">
             <input type="color" id="pdf-brush-color" value="#ff5252" title="颜色">
-            <input type="range" id="pdf-brush-size" min="1" max="20" value="4" title="粗细">
-            <button class="btn btn-ghost btn-sm" id="pdf-brush-pen" title="画笔" aria-pressed="true">
+            <input type="range" id="pdf-brush-size" min="1" max="40" value="4" title="粗细">
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="pdf-brush-pen" title="画笔" aria-pressed="true">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
             </button>
-            <button class="btn btn-ghost btn-sm" id="pdf-brush-highlight" title="荧光笔">
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="pdf-brush-highlight" title="荧光笔">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+            </button>
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="pdf-brush-eraser" title="橡皮擦（拖动删除经过的笔迹）">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16a2 2 0 0 1 0-2.8L13.2 3a2 2 0 0 1 2.8 0L21 8a2 2 0 0 1 0 2.8L11 20"/><line x1="18" y1="13" x2="8.5" y2="13"/><line x1="9" y1="20" x2="9" y2="13"/></svg>
             </button>
             <button class="btn btn-ghost btn-sm" id="pdf-brush-undo" title="撤销">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
@@ -1172,12 +1175,15 @@
           </button>
           <div class="file-brush-tools" id="file-brush-tools" style="display:none;">
             <input type="color" id="file-brush-color" value="#ff5252" title="颜色">
-            <input type="range" id="file-brush-size" min="1" max="20" value="4" title="粗细">
-            <button class="btn btn-ghost btn-sm" id="file-brush-pen" title="画笔" aria-pressed="true">
+            <input type="range" id="file-brush-size" min="1" max="40" value="4" title="粗细">
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="file-brush-pen" title="画笔" aria-pressed="true">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
             </button>
-            <button class="btn btn-ghost btn-sm" id="file-brush-highlight" title="荧光笔">
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="file-brush-highlight" title="荧光笔">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+            </button>
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="file-brush-eraser" title="橡皮擦（拖动删除经过的笔迹）">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16a2 2 0 0 1 0-2.8L13.2 3a2 2 0 0 1 2.8 0L21 8a2 2 0 0 1 0 2.8L11 20"/><line x1="18" y1="13" x2="8.5" y2="13"/><line x1="9" y1="20" x2="9" y2="13"/></svg>
             </button>
             <button class="btn btn-ghost btn-sm" id="file-brush-undo" title="撤销">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
@@ -1239,12 +1245,15 @@
           <button class="btn btn-ghost btn-sm" id="image-lightbox-reset" title="重置">100%</button>
           <div class="image-brush-tools" id="image-brush-tools" style="display:none;">
             <input type="color" id="image-brush-color" value="#ff5252" title="颜色">
-            <input type="range" id="image-brush-size" min="1" max="20" value="4" title="粗细">
-            <button class="btn btn-ghost btn-sm" id="image-brush-pen" title="画笔" aria-pressed="true">
+            <input type="range" id="image-brush-size" min="1" max="40" value="4" title="粗细">
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="image-brush-pen" title="画笔" aria-pressed="true">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
             </button>
-            <button class="btn btn-ghost btn-sm" id="image-brush-highlight" title="荧光笔">
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="image-brush-highlight" title="荧光笔">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+            </button>
+            <button class="btn btn-ghost btn-sm brush-tool-btn" id="image-brush-eraser" title="橡皮擦（拖动删除经过的笔迹）">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16a2 2 0 0 1 0-2.8L13.2 3a2 2 0 0 1 2.8 0L21 8a2 2 0 0 1 0 2.8L11 20"/><line x1="18" y1="13" x2="8.5" y2="13"/><line x1="9" y1="20" x2="9" y2="13"/></svg>
             </button>
             <button class="btn btn-ghost btn-sm" id="image-brush-undo" title="撤销">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>

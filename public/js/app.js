@@ -3902,6 +3902,16 @@ function createBrushOverlay(container, opts = {}) {
   const inner = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   inner.classList.add('brush-overlay-inner');
   svg.appendChild(inner);
+  // 橡皮擦指示圆
+  const eraserCursor = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  eraserCursor.setAttribute('r', state.size);
+  eraserCursor.setAttribute('fill', 'rgba(255,255,255,0.4)');
+  eraserCursor.setAttribute('stroke', '#ff5252');
+  eraserCursor.setAttribute('stroke-width', '1.5');
+  eraserCursor.setAttribute('stroke-dasharray', '3,2');
+  eraserCursor.style.display = 'none';
+  eraserCursor.style.pointerEvents = 'none';
+  svg.appendChild(eraserCursor);
   container.style.position = 'relative';
   container.appendChild(svg);
   // 监听尺寸变化
@@ -3973,15 +3983,49 @@ function createBrushOverlay(container, opts = {}) {
       if (el) inner.appendChild(el);
     }
   }
+  // 检测一条路径的任意点是否落在橡皮擦圆内
+  function pathHitByEraser(p, cx, cy, r) {
+    if (!p.points || p.points.length === 0) return false;
+    const eraserSize = state.size; // 笔刷大小即橡皮擦半径
+    // 文字批注按点检测
+    if (p.type === 'text') {
+      for (const pt of p.points) {
+        const dx = pt.x - cx, dy = pt.y - cy;
+        if (dx * dx + dy * dy <= (eraserSize + 12) * (eraserSize + 12)) return true;
+      }
+      return false;
+    }
+    // 线段/曲线检测：依次检查点到圆的距离，使用更宽的笔迹容差
+    const tolerance = eraserSize + (p.size || 0);
+    for (let i = 0; i < p.points.length; i++) {
+      const pt = p.points[i];
+      const dx = pt.x - cx, dy = pt.y - cy;
+      if (dx * dx + dy * dy <= tolerance * tolerance) return true;
+    }
+    return false;
+  }
   // 事件
   function onDown(e) {
-    if (state.tool === 'none' || state.tool === 'eraser' || !state.tool) return;
+    if (state.tool === 'none' || !state.tool) return;
     e.preventDefault();
     e.stopPropagation();
+    if (state.tool === 'eraser') {
+      state.erasing = true;
+      const p = getPoint(e);
+      eraseAt(p.x, p.y);
+      return;
+    }
     state.drawing = true;
     state.points = [getPoint(e)];
   }
   function onMove(e) {
+    if (state.erasing) {
+      e.preventDefault();
+      e.stopPropagation();
+      const p = getPoint(e);
+      eraseAt(p.x, p.y);
+      return;
+    }
     if (!state.drawing) return;
     e.preventDefault();
     e.stopPropagation();
@@ -4003,6 +4047,11 @@ function createBrushOverlay(container, opts = {}) {
     }
   }
   function onUp(e) {
+    if (state.erasing) {
+      state.erasing = false;
+      scheduleSave();
+      return;
+    }
     if (!state.drawing) return;
     state.drawing = false;
     // 移除临时
@@ -4071,12 +4120,38 @@ function createBrushOverlay(container, opts = {}) {
   }
   function setTool(tool) {
     state.tool = tool;
-    svg.style.pointerEvents = tool === 'none' || !tool ? 'none' : 'auto';
-    svg.style.cursor = tool === 'eraser' ? 'crosshair' : (tool === 'pen' || tool === 'highlight') ? 'crosshair' : 'default';
+    const isNone = tool === 'none' || !tool;
+    svg.style.pointerEvents = isNone ? 'none' : 'auto';
+    if (tool === 'eraser') {
+      svg.style.cursor = 'none';
+      eraserCursor.style.display = '';
+    } else if (tool === 'pen' || tool === 'highlight') {
+      svg.style.cursor = 'crosshair';
+      eraserCursor.style.display = 'none';
+    } else {
+      svg.style.cursor = 'default';
+      eraserCursor.style.display = 'none';
+    }
   }
   function setColor(c) { state.color = c; }
-  function setSize(s) { state.size = Math.max(1, parseInt(s, 10) || 4); }
+  function setSize(s) {
+    state.size = Math.max(1, parseInt(s, 10) || 4);
+    eraserCursor.setAttribute('r', state.size);
+  }
   function setOpacity(o) { state.opacity = Math.max(0, Math.min(1, parseFloat(o) || 0)); }
+  function eraseAt(x, y) {
+    // 更新橡皮擦光标位置
+    eraserCursor.setAttribute('cx', x);
+    eraserCursor.setAttribute('cy', y);
+    const list = getCurrentPaths();
+    if (list.length === 0) return;
+    const before = list.length;
+    const remaining = list.filter(p => !pathHitByEraser(p, x, y, state.size));
+    if (remaining.length !== before) {
+      state.pathsByKey[state.pageKey] = remaining;
+      render();
+    }
+  }
   function clear() {
     state.pathsByKey[state.pageKey] = [];
     render();
@@ -4383,7 +4458,7 @@ function bindPdfViewerEvents() {
       renderPdfViewerPage(pdfViewerState.pageNum);
     }
   });
-  // ===== 笔刷工具事件 =====
+  // 笔刷工具事件 =====
   const brushToggle = document.getElementById('pdf-viewer-brush-toggle');
   if (brushToggle) {
     brushToggle.addEventListener('click', () => {
@@ -4397,29 +4472,40 @@ function bindPdfViewerEvents() {
       tools.style.display = visible ? 'none' : 'flex';
       if (pdfViewerState.brush) {
         pdfViewerState.brush.setTool(visible ? 'none' : 'pen');
+        syncPdfToolBtns(visible ? 'none' : 'pen');
       }
       brushToggle.classList.toggle('active', !visible);
     });
   }
   const penBtn = document.getElementById('pdf-brush-pen');
   const hlBtn = document.getElementById('pdf-brush-highlight');
+  const eraserBtn = document.getElementById('pdf-brush-eraser');
   const undoBtn = document.getElementById('pdf-brush-undo');
   const clearBtn = document.getElementById('pdf-brush-clear');
   const saveBtn = document.getElementById('pdf-brush-save');
   const colorInput = document.getElementById('pdf-brush-color');
   const sizeInput = document.getElementById('pdf-brush-size');
+  function syncPdfToolBtns(tool) {
+    penBtn && penBtn.setAttribute('aria-pressed', tool === 'pen' ? 'true' : 'false');
+    hlBtn && hlBtn.setAttribute('aria-pressed', tool === 'highlight' ? 'true' : 'false');
+    eraserBtn && eraserBtn.setAttribute('aria-pressed', tool === 'eraser' ? 'true' : 'false');
+  }
   if (penBtn) penBtn.addEventListener('click', () => {
     if (pdfViewerState.brush) {
       pdfViewerState.brush.setTool('pen');
-      penBtn.setAttribute('aria-pressed', 'true');
-      hlBtn.setAttribute('aria-pressed', 'false');
+      syncPdfToolBtns('pen');
     }
   });
   if (hlBtn) hlBtn.addEventListener('click', () => {
     if (pdfViewerState.brush) {
       pdfViewerState.brush.setTool('highlight');
-      penBtn.setAttribute('aria-pressed', 'false');
-      hlBtn.setAttribute('aria-pressed', 'true');
+      syncPdfToolBtns('highlight');
+    }
+  });
+  if (eraserBtn) eraserBtn.addEventListener('click', () => {
+    if (pdfViewerState.brush) {
+      pdfViewerState.brush.setTool('eraser');
+      syncPdfToolBtns('eraser');
     }
   });
   if (undoBtn) undoBtn.addEventListener('click', () => {
@@ -4876,29 +4962,40 @@ function bindFileViewerEvents() {
       tools.style.display = visible ? 'none' : 'flex';
       if (fileViewerState.brush) {
         fileViewerState.brush.setTool(visible ? 'none' : 'pen');
+        syncFileToolBtns(visible ? 'none' : 'pen');
       }
       brushToggle.classList.toggle('active', !visible);
     });
   }
   const penBtn = document.getElementById('file-brush-pen');
   const hlBtn = document.getElementById('file-brush-highlight');
+  const eraserBtn = document.getElementById('file-brush-eraser');
   const undoBtn = document.getElementById('file-brush-undo');
   const clearBtn = document.getElementById('file-brush-clear');
   const saveBtn = document.getElementById('file-brush-save');
   const colorInput = document.getElementById('file-brush-color');
   const sizeInput = document.getElementById('file-brush-size');
+  function syncFileToolBtns(tool) {
+    penBtn && penBtn.setAttribute('aria-pressed', tool === 'pen' ? 'true' : 'false');
+    hlBtn && hlBtn.setAttribute('aria-pressed', tool === 'highlight' ? 'true' : 'false');
+    eraserBtn && eraserBtn.setAttribute('aria-pressed', tool === 'eraser' ? 'true' : 'false');
+  }
   if (penBtn) penBtn.addEventListener('click', () => {
     if (fileViewerState.brush) {
       fileViewerState.brush.setTool('pen');
-      penBtn.setAttribute('aria-pressed', 'true');
-      hlBtn && hlBtn.setAttribute('aria-pressed', 'false');
+      syncFileToolBtns('pen');
     }
   });
   if (hlBtn) hlBtn.addEventListener('click', () => {
     if (fileViewerState.brush) {
       fileViewerState.brush.setTool('highlight');
-      penBtn && penBtn.setAttribute('aria-pressed', 'false');
-      hlBtn.setAttribute('aria-pressed', 'true');
+      syncFileToolBtns('highlight');
+    }
+  });
+  if (eraserBtn) eraserBtn.addEventListener('click', () => {
+    if (fileViewerState.brush) {
+      fileViewerState.brush.setTool('eraser');
+      syncFileToolBtns('eraser');
     }
   });
   if (undoBtn) undoBtn.addEventListener('click', () => {
@@ -5675,6 +5772,7 @@ function initImageLightbox() {
       tools.style.display = visible ? 'none' : 'flex';
       if (imageLightboxState.brush) {
         imageLightboxState.brush.setTool(visible ? 'none' : 'pen');
+        syncImageToolBtns(visible ? 'none' : 'pen');
       }
       brushToggle.classList.toggle('active', !visible);
     });
@@ -5682,23 +5780,33 @@ function initImageLightbox() {
   // 笔刷按钮
   const penBtn = document.getElementById('image-brush-pen');
   const hlBtn = document.getElementById('image-brush-highlight');
+  const eraserBtn = document.getElementById('image-brush-eraser');
   const undoBtn = document.getElementById('image-brush-undo');
   const clearBtn = document.getElementById('image-brush-clear');
   const saveBtn = document.getElementById('image-brush-save');
   const colorInput = document.getElementById('image-brush-color');
   const sizeInput = document.getElementById('image-brush-size');
+  function syncImageToolBtns(tool) {
+    penBtn && penBtn.setAttribute('aria-pressed', tool === 'pen' ? 'true' : 'false');
+    hlBtn && hlBtn.setAttribute('aria-pressed', tool === 'highlight' ? 'true' : 'false');
+    eraserBtn && eraserBtn.setAttribute('aria-pressed', tool === 'eraser' ? 'true' : 'false');
+  }
   if (penBtn) penBtn.addEventListener('click', () => {
     if (imageLightboxState.brush) {
       imageLightboxState.brush.setTool('pen');
-      penBtn.setAttribute('aria-pressed', 'true');
-      hlBtn.setAttribute('aria-pressed', 'false');
+      syncImageToolBtns('pen');
     }
   });
   if (hlBtn) hlBtn.addEventListener('click', () => {
     if (imageLightboxState.brush) {
       imageLightboxState.brush.setTool('highlight');
-      penBtn.setAttribute('aria-pressed', 'false');
-      hlBtn.setAttribute('aria-pressed', 'true');
+      syncImageToolBtns('highlight');
+    }
+  });
+  if (eraserBtn) eraserBtn.addEventListener('click', () => {
+    if (imageLightboxState.brush) {
+      imageLightboxState.brush.setTool('eraser');
+      syncImageToolBtns('eraser');
     }
   });
   if (undoBtn) undoBtn.addEventListener('click', () => {
