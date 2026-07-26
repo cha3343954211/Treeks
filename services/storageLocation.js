@@ -15,7 +15,6 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { db } = require('../db');
 
 // 项目根目录
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -23,6 +22,15 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 const DEFAULT_DB_DIR = path.join(PROJECT_ROOT, 'data');
 // 默认上传目录（项目内）
 const DEFAULT_UPLOAD_DIR = path.join(PROJECT_ROOT, 'public', 'uploads');
+
+// ⚠️ 必须惰性 require db.js：避免循环依赖导致 db.js 在
+// TREEKS_RUNTIME_DB_DIR 设置前就用默认路径打开 DB，
+// 进而使 storage_path 配置永远不生效。
+// 早期（模块加载时）就 require db.js 会让 db.js 顶层执行
+// new Database(DEFAULT_DB_DIR/...)，完全绕过 bootstrapStorageConfig() 设置的 env 变量。
+function getDb() {
+  return require('../db').db;
+}
 
 /**
  * 启动时引导：在 db.js 加载前读取自定义存储位置并设置 env 变量
@@ -105,7 +113,7 @@ function getRuntimeUploadDir() {
  * @returns {{ customPath: string|null, dbDir: string, uploadDir: string, isCustom: boolean }}
  */
 function getStorageConfig() {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('storage_path');
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get('storage_path');
   const customPath = row ? row.value : null;
   const isCustom = !!customPath;
   // 运行时实际使用路径：env 优先（启动时已根据配置设置）
@@ -233,7 +241,7 @@ function switchStorageLocation(targetPath, opts = {}) {
   if (migrate) {
     // 1. 迁移数据库文件（关闭 WAL 后用 backup API 安全复制）
     try {
-      const backup = db.backup(path.join(newDbDir, 'treeks.db'));
+      const backup = getDb().backup(path.join(newDbDir, 'treeks.db'));
       backup.transfer(0, -1);
       backup.finish();
       result.migrated.db = true;
@@ -263,7 +271,7 @@ function switchStorageLocation(targetPath, opts = {}) {
   }
 
   // 3. 写入配置
-  db.prepare(
+  getDb().prepare(
     `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now','localtime'))
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
   ).run('storage_path', abs);
@@ -280,7 +288,7 @@ function resetStorageLocation() {
   if (!config.isCustom) {
     return { reset: false, message: '当前已是默认位置' };
   }
-  db.prepare('DELETE FROM settings WHERE key = ?').run('storage_path');
+  getDb().prepare('DELETE FROM settings WHERE key = ?').run('storage_path');
   return {
     reset: true,
     previousPath: config.customPath,
