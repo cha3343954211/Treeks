@@ -9166,3 +9166,513 @@ html, body {
     flex: 1;
   }
 }
+
+/* ============ 移动端体验全面改进（v2） ============ */
+/* 设计原则：
+   1. 触摸目标 ≥ 44x44px（WCAG / Apple HIG 推荐）
+   2. 文字字号 ≥ 12px（移动端最小可读字号）
+   3. 安全区域适配（iPhone 刘海屏/底部 Home Indicator）
+   4. 简化断点为 3 档：≤600px（手机）、601-900px（平板）、>900px（桌面）
+   5. 优化横屏布局，避免内容被键盘遮挡
+*/
+
+/* ---- 安全区域适配：使用 env() 函数 ---- */
+:root {
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+}
+
+/* ---- 1. 触摸目标尺寸统一升级（≥44px） ---- */
+@media (max-width: 900px) {
+  /* 按钮触摸目标统一升级 */
+  .btn-sm,
+  .modal-close,
+  .tool-btn,
+  .mobile-menu-btn,
+  .nav-item,
+  .icon-btn,
+  .fab-trigger,
+  .editor-toolbar button,
+  .brush-toolbar button,
+  .att-file-item,
+  .conv-item,
+  .msg-file-attach-btn,
+  .filter-select,
+  .filter-date,
+  .search-input {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* 文字内容仍保持紧凑 */
+  .btn-sm {
+    padding: 8px 14px;
+  }
+  /* SVG 图标视觉尺寸略增大 */
+  .mobile-menu-btn svg,
+  .modal-close svg {
+    width: 22px;
+    height: 22px;
+  }
+  /* nav-item 内边距适配触摸 */
+  .nav-item {
+    padding: 12px 14px;
+  }
+}
+
+/* ---- 2. 文字字号优化 ---- */
+@media (max-width: 768px) {
+  /* 元数据字号从 11px 提升至 12px */
+  .diary-card-meta,
+  .diary-card-date,
+  .file-meta,
+  .msg-time,
+  .att-file-meta,
+  .conv-time {
+    font-size: 12px;
+  }
+  /* 主要可读内容字号 */
+  .diary-card-title {
+    font-size: 16px;
+  }
+  .diary-card-preview {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+}
+
+/* ---- 3. mobile-topbar 安全区域适配 ---- */
+.mobile-topbar {
+  padding-top: var(--safe-area-inset-top);
+  box-sizing: border-box;
+}
+
+/* 底部固定元素适配 Home Indicator */
+.bottom-fixed,
+.fab-container,
+.msg-input-bar,
+.editor-bottom-bar {
+  padding-bottom: var(--safe-area-inset-bottom);
+  box-sizing: border-box;
+}
+
+/* ---- 4. 模态弹窗移动端优化 ---- */
+@media (max-width: 768px) {
+  /* 模态不再全屏遮挡 mobile-topbar，保留顶部 56px */
+  .modal-content-fullscreen {
+    top: 56px;
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
+    border-radius: 12px 12px 0 0;
+  }
+  /* 模态头部支持触摸拖拽关闭的视觉提示 */
+  .modal-header::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 0 auto 8px;
+  }
+  /* 模态从底部滑入动画 */
+  .modal-content {
+    animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes modalSlideUp {
+    from { transform: translateY(100%); opacity: 0.5; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+}
+
+/* ---- 5. 工具栏横向滚动提示 ---- */
+@media (max-width: 900px) {
+  /* 编辑器工具栏：保留滚动条但缩小，提示用户可滑动 */
+  .editor-toolbar {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+  }
+  .editor-toolbar::-webkit-scrollbar {
+    display: block;
+    height: 4px;
+  }
+  .editor-toolbar::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+  }
+  .editor-toolbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  /* 工具按钮在滚动时对齐 */
+  .editor-toolbar button {
+    scroll-snap-align: start;
+    flex-shrink: 0;
+  }
+
+  /* 笔刷工具栏：从隐藏次要工具改为横向滚动展示 */
+  .brush-toolbar {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+  }
+  .brush-secondary-tool {
+    display: flex !important;  /* 不再隐藏，改为可滚动访问 */
+    flex-shrink: 0;
+  }
+  .brush-toolbar button {
+    flex-shrink: 0;
+    scroll-snap-align: start;
+  }
+}
+
+/* ---- 6. 顶部搜索栏/过滤器移动端优化 ---- */
+@media (max-width: 768px) {
+  /* topbar-actions 改为可横向滚动，避免多次换行 */
+  .topbar-actions,
+  .diary-list-header,
+  .files-header {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+  .topbar-actions::-webkit-scrollbar,
+  .diary-list-header::-webkit-scrollbar,
+  .files-header::-webkit-scrollbar {
+    display: none;
+  }
+  /* 子元素不收缩 */
+  .topbar-actions > *,
+  .diary-list-header > *,
+  .files-header > * {
+    flex-shrink: 0;
+  }
+  /* 搜索框固定最小宽度，避免被挤压 */
+  .search-input {
+    min-width: 160px;
+    width: 160px;
+  }
+}
+
+/* ---- 7. 日记列表/卡片移动端优化 ---- */
+@media (max-width: 600px) {
+  /* 卡片增加触摸反馈 */
+  .diary-card {
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.1s ease, box-shadow 0.15s ease;
+  }
+  .diary-card:active {
+    transform: scale(0.98);
+  }
+  /* 卡片间距更紧凑 */
+  .diary-list {
+    gap: 10px;
+    padding: 12px;
+  }
+}
+
+/* ---- 8. 编辑器移动端优化 ---- */
+@media (max-width: 768px) {
+  /* 编辑器内容区域适配软键盘弹出 */
+  .editor-content {
+    /* 使用 dvh（dynamic viewport height）适配移动端浏览器 UI 占用 */
+    min-height: 40dvh;
+  }
+  /* 编辑器底部工具栏适配 Home Indicator */
+  .editor-bottom-bar {
+    padding-bottom: calc(8px + var(--safe-area-inset-bottom));
+  }
+  /* 文本输入框字号 ≥16px 防止 iOS Safari 自动放大 */
+  .editor-content[contenteditable],
+  .editor-title-input,
+  textarea,
+  input[type="text"],
+  input[type="password"],
+  .search-input,
+  .filter-select,
+  .filter-date {
+    font-size: 16px;
+  }
+  /* 标题输入框略大 */
+  .editor-title-input {
+    font-size: 18px;
+  }
+}
+
+/* ---- 9. 横屏优化（手机横屏 / 小高度窗口） ---- */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+  /* 横屏时侧边栏改为更窄的图标条 */
+  .sidebar {
+    width: 56px;
+  }
+  .sidebar .nav-text,
+  .sidebar .nav-badge,
+  .sidebar .sidebar-section-title {
+    display: none;
+  }
+  /* 编辑器分屏改为上下布局 */
+  .editor-split {
+    flex-direction: column;
+  }
+  .editor-split > * {
+    flex: 1;
+    min-height: 0;
+  }
+  /* 模态在横屏时占据更多宽度 */
+  .modal-content {
+    max-width: 95vw;
+    max-height: 95vh;
+  }
+}
+
+/* ---- 10. 移动端禁用文本选择（避免长按弹出菜单干扰） ---- */
+@media (hover: none) and (pointer: coarse) {
+  .nav-item,
+  .btn,
+  .tool-btn,
+  .editor-toolbar button,
+  .brush-toolbar button,
+  .mobile-menu-btn,
+  .modal-close,
+  .fab-trigger,
+  .icon-btn,
+  .diary-card,
+  .conv-item,
+  .att-file-item,
+  .msg-file-attach-btn {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* 内容区域仍允许选择（便于复制） */
+  .diary-content,
+  .editor-content,
+  .msg-content,
+  .msg-input,
+  textarea,
+  input {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+}
+
+/* ---- 11. 长按反馈（active 状态） ---- */
+@media (hover: none) and (pointer: coarse) {
+  .nav-item:active,
+  .btn:active,
+  .diary-card:active,
+  .conv-item:active,
+  .att-file-item:active,
+  .mobile-menu-btn:active {
+    background: var(--hover);
+    transform: scale(0.97);
+    transition: transform 0.1s, background 0.1s;
+  }
+}
+
+/* ---- 12. 移动端图片网格优化 ---- */
+@media (max-width: 480px) {
+  /* 图片网格在最小屏幕保持 2 列，但增加间距 */
+  .image-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .image-grid-item {
+    aspect-ratio: 1;
+  }
+}
+
+/* ---- 13. 消息输入框适配软键盘 ---- */
+@media (max-width: 768px) {
+  .msg-input-bar {
+    /* 使用 sticky 而非 fixed，避免软键盘弹出时遮挡 */
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-elevated);
+    padding-bottom: calc(8px + var(--safe-area-inset-bottom));
+    z-index: 10;
+  }
+  .msg-input {
+    font-size: 16px;  /* ≥16px 防 iOS 自动放大 */
+  }
+}
+
+/* ---- 14. 滚动平滑（移动端） ---- */
+@media (hover: none) and (pointer: coarse) {
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ---- 15. 防止移动端图片/媒体溢出 ---- */
+img,
+video,
+canvas,
+iframe {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---- 16. 加载状态骨架屏（移动端） ---- */
+@media (max-width: 768px) {
+  .loading-skeleton {
+    background: linear-gradient(90deg, var(--hover) 25%, var(--border) 50%, var(--hover) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s infinite;
+    border-radius: var(--radius-sm);
+  }
+  @keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+}
+
+/* ---- 17. 移动端手势提示（侧边栏抽屉） ---- */
+@media (max-width: 768px) {
+  /* 侧边栏抽屉打开时增加阴影深度 */
+  .sidebar.open {
+    box-shadow: -4px 0 24px rgba(0,0,0,0.2), 0 0 0 100vmax rgba(0,0,0,0.3);
+  }
+  /* 抽屉滑入动画 */
+  .sidebar {
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    transform: translateX(-100%);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  /* 遮罩淡入 */
+  .sidebar-overlay {
+    opacity: 0;
+    transition: opacity 0.25s;
+    pointer-events: none;
+  }
+  .sidebar-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* ---- 18. 移动端 toast 适配 ---- */
+@media (max-width: 768px) {
+  .toast {
+    /* toast 在移动端显示在顶部，避免被软键盘遮挡 */
+    top: calc(16px + var(--safe-area-inset-top));
+    bottom: auto;
+    max-width: calc(100vw - 32px);
+    font-size: 14px;
+    padding: 12px 16px;
+  }
+}
+
+/* ---- 19. 表单输入框在移动端的优化 ---- */
+@media (max-width: 768px) {
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  input[type="search"],
+  input[type="date"],
+  input[type="time"],
+  select,
+  textarea {
+    /* 输入框高度 ≥ 44px */
+    min-height: 44px;
+    font-size: 16px;  /* 防 iOS 自动放大 */
+    border-radius: var(--radius-sm);
+  }
+  /* 复选框/单选框触摸目标增大 */
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+  }
+  /* label 增大触摸区 */
+  label {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+/* ---- 20. 移动端管理后台优化 ---- */
+@media (max-width: 768px) {
+  /* 管理后台表格改为可横向滚动 */
+  .admin-table,
+  .admin-data-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    display: block;
+    white-space: nowrap;
+  }
+  .admin-table table,
+  .admin-data-table table {
+    min-width: 600px;
+  }
+}
+
+/* ---- 21. 移动端日历视图优化 ---- */
+@media (max-width: 600px) {
+  /* 日历单元格最小高度 */
+  .calendar-cell {
+    min-height: 60px;
+    padding: 4px;
+  }
+  .calendar-day {
+    font-size: 13px;
+  }
+  .calendar-event {
+    font-size: 10px;
+    padding: 2px 4px;
+  }
+}
+
+/* ---- 22. 移动端好友/用户列表优化 ---- */
+@media (max-width: 768px) {
+  .user-list-item,
+  .friend-item {
+    /* 增大行高便于触摸 */
+    min-height: 56px;
+    padding: 12px;
+  }
+  .user-avatar {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* ---- 23. 防止移动端横向滚动溢出 ---- */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* 防止元素超出视口 */
+.app-container,
+.main-content,
+.editor-container,
+.messages-layout {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* ---- 24. 移动端性能优化：减少动画 ---- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

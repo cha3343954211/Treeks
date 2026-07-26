@@ -67,14 +67,16 @@ function extractToken(req) {
 }
 
 // 校验 token 并返回用户信息（不写入 req.user，不阻断请求）
+// 注意：is_admin 从数据库实时读取，而非 token 中的旧值
+//   这样即使管理员在登录后被授予/撤销权限，也能立即生效
 function verifyToken(req) {
   const token = extractToken(req);
   if (!token) return null;
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const row = db.prepare('SELECT status FROM users WHERE id = ?').get(decoded.id);
+    const row = db.prepare('SELECT id, username, is_admin, status FROM users WHERE id = ?').get(decoded.id);
     if (!row || row.status === 'disabled') return null;
-    return { id: decoded.id, username: decoded.username, is_admin: !!decoded.is_admin };
+    return { id: row.id, username: row.username, is_admin: !!row.is_admin };
   } catch (err) {
     return null;
   }
@@ -91,15 +93,17 @@ function authRequired(req, res, next) {
 }
 
 // 管理员校验中间件（需在 authRequired 之后使用）
+// 完全依赖数据库实时查询，避免使用 token 中的旧 is_admin 值
 function adminRequired(req, res, next) {
-  if (!req.user || !req.user.is_admin) {
-    return res.status(403).json({ error: '无权限访问，需要管理员账户' });
+  if (!req.user) {
+    return res.status(401).json({ error: '未登录' });
   }
-  // 二次校验数据库状态
   const row = db.prepare('SELECT is_admin, status FROM users WHERE id = ?').get(req.user.id);
   if (!row || row.is_admin !== 1 || row.status !== 'active') {
-    return res.status(403).json({ error: '管理员账户已被停用或撤销' });
+    return res.status(403).json({ error: '无权限访问，需要管理员账户' });
   }
+  // 同步更新 req.user 中的 is_admin（基于数据库）
+  req.user.is_admin = true;
   next();
 }
 

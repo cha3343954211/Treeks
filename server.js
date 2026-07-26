@@ -14,6 +14,9 @@ const { initDatabase } = require('./db');
 // 初始化数据库（必须在加载 middleware/auth 之前完成，因为 auth 在加载时会读写 settings 表）
 initDatabase();
 
+// 启动自动备份服务（初始化数据库后立即启动）
+require('./services/backup').initBackup();
+
 // auth 中间件需在 DB 初始化后加载（内部 resolveJwtSecret 会查询 settings 表）
 const { verifyToken } = require('./middleware/auth');
 
@@ -26,6 +29,72 @@ const uploadDir = getRuntimeUploadDir();
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
+
+// 启动时数据目录一致性检查：确保 DB 目录、上传目录均存在且可写
+// 防止因配置错误/磁盘故障导致数据写入失败
+function checkDataDirConsistency() {
+  const dbDir = require('./services/storageLocation').getRuntimeDbDir();
+  const uploadDirRuntime = getRuntimeUploadDir();
+  const issues = [];
+
+  // 1) DB 目录检查
+  if (!fs.existsSync(dbDir)) {
+    try {
+      fs.mkdirSync(dbDir, { recursive: true });
+      console.warn(`[Startup] DB 目录不存在，已自动创建: ${dbDir}`);
+    } catch (e) {
+      issues.push(`DB 目录无法创建: ${dbDir} (${e.message})`);
+    }
+  }
+  if (fs.existsSync(dbDir)) {
+    try {
+      const testFile = path.join(dbDir, '.write-test-' + Date.now());
+      fs.writeFileSync(testFile, 'ok');
+      fs.unlinkSync(testFile);
+    } catch (e) {
+      issues.push(`DB 目录不可写: ${dbDir} (${e.message})`);
+    }
+  }
+
+  // 2) 上传目录检查
+  if (!fs.existsSync(uploadDirRuntime)) {
+    try {
+      fs.mkdirSync(uploadDirRuntime, { recursive: true });
+      console.warn(`[Startup] 上传目录不存在，已自动创建: ${uploadDirRuntime}`);
+    } catch (e) {
+      issues.push(`上传目录无法创建: ${uploadDirRuntime} (${e.message})`);
+    }
+  }
+  if (fs.existsSync(uploadDirRuntime)) {
+    try {
+      const testFile = path.join(uploadDirRuntime, '.write-test-' + Date.now());
+      fs.writeFileSync(testFile, 'ok');
+      fs.unlinkSync(testFile);
+    } catch (e) {
+      issues.push(`上传目录不可写: ${uploadDirRuntime} (${e.message})`);
+    }
+  }
+
+  // 3) 备份目录检查
+  const backupDir = path.join(dbDir, 'backups');
+  if (!fs.existsSync(backupDir)) {
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+    } catch (e) {
+      issues.push(`备份目录无法创建: ${backupDir} (${e.message})`);
+    }
+  }
+
+  if (issues.length > 0) {
+    console.error('[Startup] ⚠ 数据目录一致性检查失败：');
+    issues.forEach(i => console.error('  - ' + i));
+    console.error('[Startup] 请立即修复上述问题，否则数据可能丢失或服务异常');
+  } else {
+    console.log(`[Startup] 数据目录一致性检查通过 (DB: ${dbDir}, Uploads: ${uploadDirRuntime})`);
+  }
+  return issues;
+}
+checkDataDirConsistency();
 
 // 中间件
 app.use(cors());

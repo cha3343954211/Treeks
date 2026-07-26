@@ -71,45 +71,73 @@ function scanRootJunk() {
 }
 
 // ===== 2. 扫描孤儿上传文件 =====
-// 孤儿文件：存在于 uploads/<uid>/ 但 images 表中没有对应记录
+// 孤儿文件：存在于 uploads/<uid>/ 但数据库中没有任何文件记录（files/images/diaries.pdf_filename 均无引用）
+// 注意：必须同时查 files 表和 images 表，因为：
+//  - 旧数据仅在 images 表
+//  - 新数据走 files 表（kind=image/pdf/text/document/other）
+//  - diaries.pdf_filename 字段也引用了部分 PDF 文件名（旧 PDF 绑定）
 function scanOrphanUploads() {
   const items = [];
   const UPLOADS_DIR = getUploadsDir();
   if (!fs.existsSync(UPLOADS_DIR)) return items;
 
-  // 获取所有数据库中记录的图片 (user_id + filename)
+  // 收集所有数据库中"已知文件名"（按 user_id 分组）
+  // 1) files 表：所有 kind 的文件
+  const dbFiles = db.prepare('SELECT user_id, filename FROM files').all();
+  // 2) images 表：兼容旧数据
   const dbImages = db.prepare('SELECT user_id, filename FROM images').all();
-  const dbSet = new Set(dbImages.map(i => `${i.user_id}/${i.filename}`));
+  // 3) diaries.pdf_filename：旧 PDF 绑定（filename 字段，user_id 即日记所有者）
+  const dbPdfs = db.prepare('SELECT user_id, pdf_filename AS filename FROM diaries WHERE pdf_filename IS NOT NULL').all();
+
+  // 合并：user_id -> Set<filename>
+  const userFileMap = new Map();
+  const addToMap = (uid, filename) => {
+    if (!uid || !filename) return;
+    if (!userFileMap.has(uid)) userFileMap.set(uid, new Set());
+    userFileMap.get(uid).add(filename);
+  };
+  dbFiles.forEach(f => addToMap(f.user_id, f.filename));
+  dbImages.forEach(i => addToMap(i.user_id, i.filename));
+  dbPdfs.forEach(p => addToMap(p.user_id, p.filename));
 
   const userDirs = fs.readdirSync(UPLOADS_DIR, { withFileTypes: true })
     .filter(e => e.isDirectory());
 
   for (const dir of userDirs) {
-    const uid = dir.name;
-    const userDir = path.join(UPLOADS_DIR, uid);
-    let files;
-    try { files = fs.readdirSync(userDir, { withFileTypes: true }); }
-    catch (_) { continue; }
-
-    for (const f of files) {
-      if (!f.isFile()) continue;
-      // 跳过 .gitkeep 等占位文件
-      if (f.name.startsWith('.')) continue;
-      const key = `${uid}/${f.name}`;
-      if (!dbSet.has(key)) {
-        try {
-          const full = path.join(userDir, f.name);
-          const stat = fs.statSync(full);
-          items.push({
-            path: `uploads/${uid}/${f.name}`,
-            absPath: full,
-            size: stat.size,
-            mtime: stat.mtime,
-            type: 'orphan-upload'
-          });
-        } catch (_) {}
+    const uid = parseInt(dir.name, 10);
+    const uidStr = dir.name;
+    // 目录名必须是数字（用户 ID），否则跳过（如 _pending 等系统目录）
+    if (!Number.isInteger(uid)) continue;
+    const userDir = path.join(UPLOADS_DIR, uidStr);
+    // 递归扫描该用户目录下所有文件（包含 images/、pdf/、texts/、docs/、other/ 子目录）
+    const walkDir = (subDir, relPrefix = '') => {
+      let entries;
+      try { entries = fs.readdirSync(subDir, { withFileTypes: true }); }
+      catch (_) { return; }
+      for (const e of entries) {
+        const full = path.join(subDir, e.name);
+        const rel = relPrefix ? `${relPrefix}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          walkDir(full, rel);
+        } else if (e.isFile() && !e.name.startsWith('.')) {
+          // 检查 filename 是否被任何表引用
+          const knownSet = userFileMap.get(uid);
+          if (!knownSet || !knownSet.has(e.name)) {
+            try {
+              const stat = fs.statSync(full);
+              items.push({
+                path: `uploads/${uidStr}/${rel}`,
+                absPath: full,
+                size: stat.size,
+                mtime: stat.mtime,
+                type: 'orphan-upload'
+              });
+            } catch (_) {}
+          }
+        }
       }
-    }
+    };
+    walkDir(userDir);
   }
   return items;
 }

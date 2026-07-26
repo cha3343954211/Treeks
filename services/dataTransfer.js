@@ -229,12 +229,16 @@ function importUserData(userId, data, options = {}) {
     if (Array.isArray(data.images) && options.importImageMeta) {
       for (const img of data.images) {
         try {
+          const imgFilename = img.filename || `imported-${Date.now()}.bin`;
+          // URL 策略：优先使用原始 url；若缺失则按新规则拼接
+          // 注意：原代码 `/uploads/${userId}/${img.filename}` || img.url 始终为真，导致 img.url 永远不会被使用
+          const imgUrl = (typeof img.url === 'string' && img.url) ? img.url : `/uploads/${userId}/${imgFilename}`;
           insertImage.run(
             userId,
-            img.filename || `imported-${Date.now()}.bin`,
+            imgFilename,
             img.original_name || null,
             img.size || 0,
-            `/uploads/${userId}/${img.filename}` || img.url,
+            imgUrl,
             img.created_at || new Date().toISOString()
           );
           result.images++;

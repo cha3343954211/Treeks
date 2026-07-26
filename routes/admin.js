@@ -409,10 +409,10 @@ router.post('/storage-location/validate', (req, res) => {
 });
 
 // 切换存储位置（迁移数据 + 写入配置）
-router.post('/storage-location/switch', (req, res) => {
+router.post('/storage-location/switch', async (req, res) => {
   try {
     const { targetPath, migrate = true } = req.body || {};
-    const result = storageLocation.switchStorageLocation(targetPath, { migrate });
+    const result = await storageLocation.switchStorageLocation(targetPath, { migrate });
     logAction(req.user.id, 'switch_storage_location', targetPath, result);
     res.json({
       message: '存储位置已切换，需要重启服务才能生效',
@@ -518,6 +518,85 @@ router.post('/import', importUpload.single('file'), (req, res) => {
   } catch (e) {
     console.error('[Import Error]', e);
     res.status(500).json({ error: '导入失败: ' + e.message });
+  }
+});
+
+// ===== 数据库备份管理 =====
+const backupService = require('../services/backup');
+const path = require('path');
+const fs = require('fs');
+
+// 列出所有备份
+router.get('/backups', (req, res) => {
+  try {
+    const backups = backupService.listBackups();
+    res.json({ items: backups });
+  } catch (e) {
+    res.status(500).json({ error: '获取备份列表失败: ' + e.message });
+  }
+});
+
+// 立即创建备份
+router.post('/backups/create', async (req, res) => {
+  try {
+    const result = await backupService.performBackup();
+    if (result.ok) {
+      logAction(req.user.id, 'backup_create', result.file, { size: result.size });
+      res.status(201).json({ message: '备份已创建', ...result });
+    } else {
+      res.status(400).json({ error: result.error || '备份失败' });
+    }
+  } catch (e) {
+    res.status(500).json({ error: '备份失败: ' + e.message });
+  }
+});
+
+// 下载备份文件
+router.get('/backups/download/:filename', (req, res) => {
+  const filename = req.params.filename;
+  if (!/^treeks_(?:prerestore_)?\d{8}_\d{6}\.db$/.test(filename)) {
+    return res.status(400).json({ error: '文件名格式非法' });
+  }
+  const backupDir = backupService.getBackupDir();
+  const filePath = path.join(backupDir, filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '备份文件不存在' });
+  }
+  logAction(req.user.id, 'backup_download', filename, {});
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  fs.createReadStream(filePath).pipe(res);
+});
+
+// 从备份恢复（危险操作：会替换当前数据库）
+router.post('/backups/restore/:filename', async (req, res) => {
+  const filename = req.params.filename;
+  const result = await backupService.restoreFromBackup(filename);
+  logAction(req.user.id, 'backup_restore', filename, { result });
+  if (result.ok) {
+    res.json({ message: result.message });
+  } else {
+    res.status(400).json({ error: result.message });
+  }
+});
+
+// 删除备份文件
+router.delete('/backups/:filename', (req, res) => {
+  const filename = req.params.filename;
+  if (!/^treeks_(?:prerestore_)?\d{8}_\d{6}\.db$/.test(filename)) {
+    return res.status(400).json({ error: '文件名格式非法' });
+  }
+  const backupDir = backupService.getBackupDir();
+  const filePath = path.join(backupDir, filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '备份文件不存在' });
+  }
+  try {
+    fs.unlinkSync(filePath);
+    logAction(req.user.id, 'backup_delete', filename, {});
+    res.json({ message: '备份已删除' });
+  } catch (e) {
+    res.status(500).json({ error: '删除失败: ' + e.message });
   }
 });
 

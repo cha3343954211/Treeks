@@ -6312,6 +6312,98 @@ function bindEvents() {
   // 暴露给其他模块使用（如点击导航后关闭）
   window.__closeSidebarDrawer = closeSidebarDrawer;
 
+  // ===== 移动端手势：边缘滑动打开/关闭侧边栏 =====
+  // 设计：从屏幕左边缘右滑打开抽屉；从抽屉右侧左滑关闭抽屉
+  // 仅在 ≤768px 屏幕宽度下启用，避免影响桌面端
+  let touchStartX = 0, touchStartY = 0, touchStartTime = 0, isTrackingSwipe = false;
+  const EDGE_SWIPE_THRESHOLD = 30;     // 触发边缘滑动的最小距离（从屏幕边缘起）
+  const EDGE_SWIPE_DISTANCE = 60;      // 滑动距离阈值
+  const EDGE_SWIPE_VERTICAL_TOLERANCE = 50; // 垂直方向容忍度（防止上下滑动误触发）
+
+  document.addEventListener('touchstart', (e) => {
+    if (window.innerWidth > 768) return;
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    touchStartTime = Date.now();
+    // 仅在抽屉关闭时跟踪左边缘滑动；在抽屉打开时跟踪任意滑动（用于关闭）
+    const isOpen = sidebarEl && sidebarEl.classList.contains('open');
+    if (!isOpen && t.clientX <= EDGE_SWIPE_THRESHOLD) {
+      isTrackingSwipe = true;
+    } else if (isOpen) {
+      isTrackingSwipe = true;
+    } else {
+      isTrackingSwipe = false;
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', (e) => {
+    if (window.innerWidth > 768 || !isTrackingSwipe) {
+      isTrackingSwipe = false;
+      return;
+    }
+    isTrackingSwipe = false;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    const elapsed = Date.now() - touchStartTime;
+    // 必须是横向滑动（|dx| > |dy|）且时间在 800ms 内
+    if (Math.abs(dx) < EDGE_SWIPE_DISTANCE) return;
+    if (Math.abs(dy) > EDGE_SWIPE_VERTICAL_TOLERANCE) return;
+    if (elapsed > 800) return;
+    const isOpen = sidebarEl && sidebarEl.classList.contains('open');
+    // 右滑 + 抽屉关闭 → 打开
+    if (dx > 0 && !isOpen) {
+      toggleSidebarDrawer();
+    }
+    // 左滑 + 抽屉打开 → 关闭
+    else if (dx < 0 && isOpen) {
+      closeSidebarDrawer();
+    }
+  }, { passive: true });
+
+  // ===== 移动端：双指捏合调整字体大小（在日记内容区） =====
+  let lastPinchDistance = 0;
+  let currentFontSize = 16;
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      lastPinchDistance = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    }
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 2 || !lastPinchDistance) return;
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const scale = dist / lastPinchDistance;
+    // 仅在日记内容视图中生效
+    const contentEl = document.querySelector('.diary-content');
+    if (!contentEl) return;
+    let newSize = Math.round(currentFontSize * scale);
+    newSize = Math.max(12, Math.min(28, newSize));
+    if (newSize !== currentFontSize) {
+      contentEl.style.fontSize = newSize + 'px';
+      try { localStorage.setItem('treeks:diary-font-size', String(newSize)); } catch (_) {}
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', () => {
+    lastPinchDistance = 0;
+    currentFontSize = parseInt(localStorage.getItem('treeks:diary-font-size') || '16', 10);
+  }, { passive: true });
+  // 恢复上次字号
+  try {
+    const saved = parseInt(localStorage.getItem('treeks:diary-font-size') || '0', 10);
+    if (saved >= 12 && saved <= 28) {
+      currentFontSize = saved;
+    }
+  } catch (_) {}
+
   // 移动端：顶栏新建日记按钮
   const btnNewDiaryMobile = document.getElementById('btn-new-diary-mobile');
   if (btnNewDiaryMobile) {

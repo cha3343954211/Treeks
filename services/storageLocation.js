@@ -204,7 +204,7 @@ function copyDirRecursive(src, dest) {
  * @param {string} targetPath - 用户指定的目标根目录
  * @param {object} opts - { migrate: boolean } 是否迁移现有数据
  */
-function switchStorageLocation(targetPath, opts = {}) {
+async function switchStorageLocation(targetPath, opts = {}) {
   const { migrate = true } = opts;
   const validation = validateTargetPath(targetPath);
   if (!validation.ok) {
@@ -231,11 +231,10 @@ function switchStorageLocation(targetPath, opts = {}) {
   };
 
   if (migrate) {
-    // 1. 迁移数据库文件（关闭 WAL 后用 backup API 安全复制）
+    // 1. 迁移数据库文件（使用 backup API 安全复制，自动处理 WAL）
     try {
-      const backup = db.backup(path.join(newDbDir, 'treeks.db'));
-      backup.transfer(0, -1);
-      backup.finish();
+      // better-sqlite3 的 db.backup() 返回 Promise（异步）
+      await db.backup(path.join(newDbDir, 'treeks.db'));
       result.migrated.db = true;
     } catch (e) {
       // backup 失败则降级为 copyFileSync（但需跳过 wal/shm）
