@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { db } = require('../db');
 
 // 项目根目录
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -104,7 +105,6 @@ function getRuntimeUploadDir() {
  * @returns {{ customPath: string|null, dbDir: string, uploadDir: string, isCustom: boolean }}
  */
 function getStorageConfig() {
-  const { db } = require('../db');
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('storage_path');
   const customPath = row ? row.value : null;
   const isCustom = !!customPath;
