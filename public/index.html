@@ -13,6 +13,10 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <!-- PDF.js（PDF 阅读 + 笔刷标注）：使用 UMD 旧版构建以便全局变量 pdfjsLib 可用 -->
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
+  <!-- mammoth.js（docx → HTML 转换）：用于 Word 文档预览 -->
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <!-- SheetJS（xlsx 解析）：用于 Excel 表格预览 -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <div id="app">
@@ -665,7 +669,7 @@
           <div id="stats-content" class="stats-content"></div>
         </div>
 
-        <!-- 我的文件视图（包含图片与 PDF） -->
+        <!-- 我的文件视图（包含图片、PDF、文本、Office 文档等） -->
         <div id="view-files" class="content-view">
           <div class="content-header">
             <h2>我的文件</h2>
@@ -674,11 +678,13 @@
                 <button class="files-filter-btn active" data-filter="all" title="显示所有文件">全部</button>
                 <button class="files-filter-btn" data-filter="image" title="仅显示图片">图片</button>
                 <button class="files-filter-btn" data-filter="pdf" title="仅显示 PDF">PDF</button>
+                <button class="files-filter-btn" data-filter="document" title="Word/Excel/PPT 文档">文档</button>
+                <button class="files-filter-btn" data-filter="text" title="文本/代码/数据文件">文本</button>
               </div>
-              <label class="btn btn-primary" id="btn-upload-files" title="上传图片或 PDF（最大 50MB）">
+              <label class="btn btn-primary" id="btn-upload-files" title="支持图片、PDF、Word/Excel/PPT、文本/代码文件（最大 50MB）">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                 上传文件
-                <input type="file" accept="image/*,application/pdf,.pdf" multiple style="display:none;" id="files-upload-input">
+                <input type="file" accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.py,.java,.go,.rs,.sh,.sql,.env,.toml,.yml,.yaml,.ini,.conf" multiple style="display:none;" id="files-upload-input">
               </label>
             </div>
           </div>
@@ -1055,6 +1061,94 @@
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           导出
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 独立 PDF 阅读器（不与任何日记绑定，从「我的文件」直接打开） -->
+  <div id="pdf-viewer-modal" class="modal pdf-viewer-modal" style="display:none;">
+    <div class="modal-backdrop" data-close="pdf-viewer"></div>
+    <div class="modal-content modal-content-fullscreen">
+      <div class="pdf-viewer-modal-header">
+        <div class="pdf-viewer-title">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span id="pdf-viewer-modal-filename" title="">未命名.pdf</span>
+        </div>
+        <div class="pdf-viewer-toolbar">
+          <button class="btn btn-ghost btn-sm" id="pdf-viewer-prev" title="上一页">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="pdf-page-info">
+            <input type="number" id="pdf-viewer-page-input" min="1" value="1" class="pdf-page-input">
+            <span>/ <span id="pdf-viewer-page-total">0</span></span>
+          </span>
+          <button class="btn btn-ghost btn-sm" id="pdf-viewer-next" title="下一页">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="pdf-zoom">
+            <button class="btn btn-ghost btn-sm" id="pdf-viewer-zoom-out" title="缩小">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <span class="pdf-zoom-value" id="pdf-viewer-zoom-value">100%</span>
+            <button class="btn btn-ghost btn-sm" id="pdf-viewer-zoom-in" title="放大">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/><line x1="8" y1="11" x2="11" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg>
+            </button>
+            <button class="btn btn-ghost btn-sm" id="pdf-viewer-fit" title="适应宽度">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/></svg>
+            </button>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="pdf-viewer-download" title="下载">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+        </div>
+        <button class="modal-close" data-close="pdf-viewer" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="pdf-viewer-modal-body" id="pdf-viewer-modal-body">
+        <div class="pdf-viewer-loading" id="pdf-viewer-loading">PDF 加载中…</div>
+        <div class="pdf-viewer-page-host" id="pdf-viewer-page-host">
+          <canvas id="pdf-viewer-canvas" class="pdf-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 统一文件查看/编辑模态框（文本编辑器、文档预览、表格预览） -->
+  <div id="file-viewer-modal" class="modal file-viewer-modal" style="display:none;">
+    <div class="modal-backdrop" data-close="file-viewer"></div>
+    <div class="modal-content modal-content-fullscreen">
+      <div class="file-viewer-modal-header">
+        <div class="file-viewer-title">
+          <span id="file-viewer-icon"></span>
+          <span id="file-viewer-modal-filename" title="">未命名</span>
+          <span class="file-viewer-kind" id="file-viewer-modal-kind"></span>
+        </div>
+        <div class="file-viewer-toolbar" id="file-viewer-toolbar">
+          <button class="btn btn-ghost btn-sm" id="file-viewer-save" title="保存 (Ctrl+S)" style="display:none;">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            <span>保存</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="file-viewer-download" title="下载">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+        </div>
+        <button class="modal-close" data-close="file-viewer" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="file-viewer-modal-body" id="file-viewer-modal-body">
+        <div class="file-viewer-loading" id="file-viewer-loading">文件加载中…</div>
+        <!-- 文本编辑器 -->
+        <div class="file-viewer-text-host" id="file-viewer-text-host" style="display:none;">
+          <textarea id="file-viewer-textarea" class="file-viewer-textarea" spellcheck="false" wrap="off"></textarea>
+          <div class="file-viewer-status" id="file-viewer-status">就绪</div>
+        </div>
+        <!-- 文档预览（docx/rtf 等，已转换为 HTML） -->
+        <div class="file-viewer-doc-host" id="file-viewer-doc-host" style="display:none;">
+          <div class="file-viewer-doc-content" id="file-viewer-doc-content"></div>
+        </div>
+        <!-- 表格预览（xlsx，已转换为 HTML 表格） -->
+        <div class="file-viewer-sheet-host" id="file-viewer-sheet-host" style="display:none;">
+          <div class="file-viewer-sheet-tabs" id="file-viewer-sheet-tabs"></div>
+          <div class="file-viewer-sheet-content" id="file-viewer-sheet-content"></div>
+        </div>
       </div>
     </div>
   </div>

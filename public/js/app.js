@@ -3858,6 +3858,633 @@ function hideHeatmapTooltip() {
   if (heatmapTooltipEl) heatmapTooltipEl.classList.remove('show');
 }
 
+// ===== 独立 PDF 阅读器（不与任何日记绑定） =====
+const pdfViewerState = {
+  pdfDoc: null,
+  url: '',
+  filename: '',
+  pageNum: 1,
+  totalPages: 0,
+  scale: 1.2,
+  renderTask: null,
+  bound: false,        // 是否已绑定事件（避免重复）
+  fitWidth: false      // 是否启用适应宽度
+};
+
+// 打开 PDF 阅读器模态框
+async function openPdfViewerModal(url, filename) {
+  if (typeof pdfjsLib === 'undefined') {
+    toast('PDF.js 未加载，请检查网络', 'error');
+    return;
+  }
+  setupPdfJsWorker();
+  const modal = document.getElementById('pdf-viewer-modal');
+  if (!modal) return;
+  // 重置 UI
+  const fnEl = document.getElementById('pdf-viewer-modal-filename');
+  if (fnEl) { fnEl.textContent = filename || '未命名.pdf'; fnEl.title = filename || ''; }
+  const totalEl = document.getElementById('pdf-viewer-page-total');
+  if (totalEl) totalEl.textContent = '0';
+  const inputEl = document.getElementById('pdf-viewer-page-input');
+  if (inputEl) inputEl.value = 1;
+  const zoomEl = document.getElementById('pdf-viewer-zoom-value');
+  if (zoomEl) zoomEl.textContent = Math.round(pdfViewerState.scale * 100) + '%';
+  const loading = document.getElementById('pdf-viewer-loading');
+  if (loading) loading.style.display = '';
+  // 显示模态框
+  modal.style.display = '';
+  document.body.style.overflow = 'hidden';
+  // 绑定事件（仅一次）
+  if (!pdfViewerState.bound) {
+    bindPdfViewerEvents();
+    pdfViewerState.bound = true;
+  }
+  // 加载 PDF
+  const ok = await loadPdfForViewer(url, filename);
+  if (!ok) {
+    closePdfViewerModal();
+  }
+}
+
+// 关闭 PDF 阅读器
+function closePdfViewerModal() {
+  const modal = document.getElementById('pdf-viewer-modal');
+  if (modal) modal.style.display = 'none';
+  document.body.style.overflow = '';
+  if (pdfViewerState.renderTask) {
+    try { pdfViewerState.renderTask.cancel(); } catch (_) {}
+    pdfViewerState.renderTask = null;
+  }
+  if (pdfViewerState.pdfDoc) {
+    try { pdfViewerState.pdfDoc.destroy(); } catch (_) {}
+    pdfViewerState.pdfDoc = null;
+  }
+  pdfViewerState.pageNum = 1;
+  pdfViewerState.totalPages = 0;
+  pdfViewerState.url = '';
+  pdfViewerState.filename = '';
+  const loading = document.getElementById('pdf-viewer-loading');
+  if (loading) loading.style.display = '';
+  // 清空 canvas
+  const canvas = document.getElementById('pdf-viewer-canvas');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx && ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+// 加载 PDF 到阅读器
+async function loadPdfForViewer(pdfUrl, filename) {
+  // 卸载旧文档
+  if (pdfViewerState.pdfDoc) {
+    try { pdfViewerState.pdfDoc.destroy(); } catch (_) {}
+    pdfViewerState.pdfDoc = null;
+  }
+  const canvas = document.getElementById('pdf-viewer-canvas');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx && ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  try {
+    const token = state.token;
+    const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+    const resp = await fetch(pdfUrl, { headers, credentials: 'include' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    const buf = await resp.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: buf });
+    const pdf = await loadingTask.promise;
+    pdfViewerState.pdfDoc = pdf;
+    pdfViewerState.url = pdfUrl;
+    pdfViewerState.filename = filename || '';
+    pdfViewerState.totalPages = pdf.numPages;
+    pdfViewerState.pageNum = 1;
+    // 更新 UI
+    const totalEl = document.getElementById('pdf-viewer-page-total');
+    if (totalEl) totalEl.textContent = pdf.numPages;
+    const inputEl = document.getElementById('pdf-viewer-page-input');
+    if (inputEl) { inputEl.max = pdf.numPages; inputEl.value = 1; }
+    // 隐藏 loading
+    const loading = document.getElementById('pdf-viewer-loading');
+    if (loading) loading.style.display = 'none';
+    // 渲染首页
+    await renderPdfViewerPage(1);
+    return true;
+  } catch (err) {
+    console.error('PDF 加载失败:', err);
+    toast('PDF 加载失败：' + (err.message || '未知错误'), 'error');
+    return false;
+  }
+}
+
+// 渲染指定页
+async function renderPdfViewerPage(num) {
+  if (!pdfViewerState.pdfDoc) return;
+  num = Math.max(1, Math.min(pdfViewerState.totalPages, num));
+  pdfViewerState.pageNum = num;
+  const pageInput = document.getElementById('pdf-viewer-page-input');
+  if (pageInput) pageInput.value = num;
+  // 取消上一次渲染
+  if (pdfViewerState.renderTask) {
+    try { pdfViewerState.renderTask.cancel(); } catch (_) {}
+    pdfViewerState.renderTask = null;
+  }
+  const page = await pdfViewerState.pdfDoc.getPage(num);
+  // 计算可用宽度（用于适应宽度）
+  let scale = pdfViewerState.scale;
+  if (pdfViewerState.fitWidth) {
+    const host = document.getElementById('pdf-viewer-page-host');
+    const baseViewport = page.getViewport({ scale: 1 });
+    const availW = (host ? host.clientWidth - 32 : 800);
+    scale = Math.max(0.5, Math.min(3, availW / baseViewport.width));
+  }
+  const viewport = page.getViewport({ scale });
+  const canvas = document.getElementById('pdf-viewer-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(viewport.width * dpr);
+  canvas.height = Math.floor(viewport.height * dpr);
+  canvas.style.width = viewport.width + 'px';
+  canvas.style.height = viewport.height + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  pdfViewerState.renderTask = page.render({
+    canvasContext: ctx,
+    viewport: page.getViewport({ scale: scale * dpr })
+  });
+  try {
+    await pdfViewerState.renderTask.promise;
+  } catch (e) {
+    if (e.name !== 'RenderingCancelledException') console.warn('PDF 渲染错误', e);
+  } finally {
+    pdfViewerState.renderTask = null;
+  }
+  // 更新缩放显示（fit 时显示实际缩放）
+  const zoomEl = document.getElementById('pdf-viewer-zoom-value');
+  if (zoomEl) zoomEl.textContent = Math.round(scale * 100) + '%';
+}
+
+// 设置缩放
+function setPdfViewerScale(s) {
+  pdfViewerState.scale = Math.max(0.5, Math.min(3, s));
+  pdfViewerState.fitWidth = false;
+  const zoomEl = document.getElementById('pdf-viewer-zoom-value');
+  if (zoomEl) zoomEl.textContent = Math.round(pdfViewerState.scale * 100) + '%';
+  if (pdfViewerState.pdfDoc) renderPdfViewerPage(pdfViewerState.pageNum);
+}
+
+// 绑定 PDF 阅读器事件
+function bindPdfViewerEvents() {
+  document.getElementById('pdf-viewer-prev').addEventListener('click', () => {
+    if (!pdfViewerState.pdfDoc) return;
+    renderPdfViewerPage(pdfViewerState.pageNum - 1);
+  });
+  document.getElementById('pdf-viewer-next').addEventListener('click', () => {
+    if (!pdfViewerState.pdfDoc) return;
+    renderPdfViewerPage(pdfViewerState.pageNum + 1);
+  });
+  document.getElementById('pdf-viewer-zoom-in').addEventListener('click', () => {
+    setPdfViewerScale(pdfViewerState.scale + 0.1);
+  });
+  document.getElementById('pdf-viewer-zoom-out').addEventListener('click', () => {
+    setPdfViewerScale(pdfViewerState.scale - 0.1);
+  });
+  document.getElementById('pdf-viewer-fit').addEventListener('click', () => {
+    pdfViewerState.fitWidth = true;
+    if (pdfViewerState.pdfDoc) renderPdfViewerPage(pdfViewerState.pageNum);
+  });
+  const pageInput = document.getElementById('pdf-viewer-page-input');
+  if (pageInput) {
+    pageInput.addEventListener('change', (e) => {
+      if (!pdfViewerState.pdfDoc) return;
+      const n = parseInt(e.target.value, 10);
+      if (!isNaN(n) && n >= 1 && n <= pdfViewerState.totalPages) {
+        renderPdfViewerPage(n);
+      } else {
+        e.target.value = pdfViewerState.pageNum;
+      }
+    });
+  }
+  document.getElementById('pdf-viewer-download').addEventListener('click', () => {
+    if (!pdfViewerState.url) return;
+    const a = document.createElement('a');
+    a.href = pdfViewerState.url;
+    a.download = pdfViewerState.filename || 'document.pdf';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+  // 关闭按钮
+  document.querySelectorAll('[data-close="pdf-viewer"]').forEach(el => {
+    el.addEventListener('click', closePdfViewerModal);
+  });
+  // ESC 关闭
+  document.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('pdf-viewer-modal');
+    if (!modal || modal.style.display === 'none') return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closePdfViewerModal();
+    } else if (e.key === 'ArrowLeft' || (e.ctrlKey && e.key === 'PageUp')) {
+      e.preventDefault();
+      if (pdfViewerState.pdfDoc) renderPdfViewerPage(pdfViewerState.pageNum - 1);
+    } else if (e.key === 'ArrowRight' || (e.ctrlKey && e.key === 'PageDown')) {
+      e.preventDefault();
+      if (pdfViewerState.pdfDoc) renderPdfViewerPage(pdfViewerState.pageNum + 1);
+    } else if (e.ctrlKey && (e.key === '+' || e.key === '=')) {
+      e.preventDefault();
+      setPdfViewerScale(pdfViewerState.scale + 0.1);
+    } else if (e.ctrlKey && e.key === '-') {
+      e.preventDefault();
+      setPdfViewerScale(pdfViewerState.scale - 0.1);
+    } else if (e.ctrlKey && e.key === '0') {
+      e.preventDefault();
+      setPdfViewerScale(1.0);
+    }
+  });
+  // 窗口尺寸变化时，若处于 fit 模式则重排
+  window.addEventListener('resize', () => {
+    const modal = document.getElementById('pdf-viewer-modal');
+    if (!modal || modal.style.display === 'none') return;
+    if (pdfViewerState.fitWidth && pdfViewerState.pdfDoc) {
+      renderPdfViewerPage(pdfViewerState.pageNum);
+    }
+  });
+}
+
+// ===== 统一文件查看/编辑模态框（文本/文档/表格） =====
+const fileViewerState = {
+  id: null,
+  kind: null,           // 'text' | 'document' | 'other'
+  filename: '',
+  originalName: '',
+  url: '',
+  size: 0,
+  dirty: false,         // 文本是否有未保存修改
+  sheets: [],           // xlsx 工作表缓存
+  currentSheet: 0
+};
+
+// 打开文件查看/编辑模态框（根据 fileId 自动判断类型）
+async function openFileViewerModal(fileId) {
+  try {
+    const data = await api(`/api/upload/files`);
+    const f = (data.items || []).find(x => x.id === fileId);
+    if (!f) {
+      toast('文件不存在', 'error');
+      return;
+    }
+    await openFileViewerFromMeta(f);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+// 直接用文件元信息打开（避免再次请求）
+async function openFileViewerFromMeta(f) {
+  fileViewerState.id = f.id;
+  fileViewerState.kind = f.kind;
+  fileViewerState.filename = f.filename;
+  fileViewerState.originalName = f.original_name || f.filename;
+  fileViewerState.url = f.url;
+  fileViewerState.size = f.size;
+  fileViewerState.dirty = false;
+  fileViewerState.sheets = [];
+  fileViewerState.currentSheet = 0;
+  // 重置 UI
+  const modal = document.getElementById('file-viewer-modal');
+  if (!modal) return;
+  const fnEl = document.getElementById('file-viewer-modal-filename');
+  if (fnEl) { fnEl.textContent = fileViewerState.originalName; fnEl.title = fileViewerState.originalName; }
+  const kindEl = document.getElementById('file-viewer-modal-kind');
+  if (kindEl) kindEl.textContent = kindLabel(f.kind, fileViewerState.originalName);
+  const iconEl = document.getElementById('file-viewer-icon');
+  if (iconEl) iconEl.innerHTML = kindIcon(f.kind);
+  const saveBtn = document.getElementById('file-viewer-save');
+  if (saveBtn) saveBtn.style.display = f.kind === 'text' ? '' : 'none';
+  const loading = document.getElementById('file-viewer-loading');
+  const textHost = document.getElementById('file-viewer-text-host');
+  const docHost = document.getElementById('file-viewer-doc-host');
+  const sheetHost = document.getElementById('file-viewer-sheet-host');
+  if (loading) loading.style.display = '';
+  if (textHost) textHost.style.display = 'none';
+  if (docHost) docHost.style.display = 'none';
+  if (sheetHost) sheetHost.style.display = 'none';
+  const status = document.getElementById('file-viewer-status');
+  if (status) status.textContent = '就绪';
+  // 显示模态框
+  modal.style.display = '';
+  document.body.style.overflow = 'hidden';
+  // 绑定事件（仅一次）
+  if (!fileViewerState.bound) {
+    bindFileViewerEvents();
+    fileViewerState.bound = true;
+  }
+  // 按类型加载
+  try {
+    if (f.kind === 'text') {
+      await loadTextFile(f);
+    } else if (f.kind === 'document') {
+      // xlsx/xls 用 SheetJS 解析表格，docx 用 mammoth
+      const ext = (f.original_name || f.filename || '').toLowerCase();
+      if (/\.(xlsx|xls|xlsb|ods)$/i.test(ext)) {
+        await loadSheetFile(f);
+      } else {
+        await loadDocumentFile(f);
+      }
+    } else if (f.kind === 'other') {
+      // 其他类型不支持预览，仅提供下载
+      showDownloadOnly(f);
+    } else {
+      toast('暂不支持该类型文件的预览', 'info');
+    }
+  } catch (e) {
+    console.error('文件加载失败:', e);
+    if (loading) {
+      loading.textContent = '加载失败：' + (e.message || '未知错误');
+    }
+  }
+}
+
+// 加载文本文件
+async function loadTextFile(f) {
+  const data = await api(`/api/upload/file/${f.id}/text`);
+  const textHost = document.getElementById('file-viewer-text-host');
+  const ta = document.getElementById('file-viewer-textarea');
+  const loading = document.getElementById('file-viewer-loading');
+  if (loading) loading.style.display = 'none';
+  if (textHost) textHost.style.display = '';
+  if (ta) {
+    ta.value = data.content || '';
+    fileViewerState.dirty = false;
+    updateFileViewerStatus('已加载 · ' + (data.size || 0) + ' 字节');
+    setTimeout(() => ta.focus(), 50);
+  }
+}
+
+// 加载文档（docx/rtf 等）→ mammoth 转换为 HTML
+async function loadDocumentFile(f) {
+  const loading = document.getElementById('file-viewer-loading');
+  const docHost = document.getElementById('file-viewer-doc-host');
+  const docContent = document.getElementById('file-viewer-doc-content');
+  if (loading) loading.textContent = '文档解析中…';
+  // 获取原始 ArrayBuffer
+  const token = state.token;
+  const resp = await fetch(f.url, {
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+    credentials: 'include'
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const buf = await resp.arrayBuffer();
+  if (typeof mammoth === 'undefined') {
+    throw new Error('mammoth.js 未加载');
+  }
+  // docx 用 mammoth，其他格式给出友好提示
+  const ext = (f.original_name || f.filename || '').toLowerCase();
+  let html = '';
+  if (ext.endsWith('.docx')) {
+    const result = await mammoth.convertToHtml({ arrayBuffer: buf });
+    html = result.value || '';
+  } else if (ext.endsWith('.doc')) {
+    // 老版本 .doc 不被 mammoth 支持，提示用户
+    throw new Error('暂不支持 .doc 二进制格式，请使用 .docx');
+  } else if (ext.endsWith('.rtf')) {
+    // RTF 简单转 HTML（用浏览器文本流）
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const text = decoder.decode(buf);
+    html = `<pre style="white-space:pre-wrap;font-family:inherit;">${escapeHtml(text)}</pre>`;
+  } else if (ext.endsWith('.pptx') || ext.endsWith('.ppt')) {
+    throw new Error('PPT 暂不支持在线预览，请下载后用 PowerPoint 查看');
+  } else {
+    // 尝试作为纯文本
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const text = decoder.decode(buf);
+    html = `<pre style="white-space:pre-wrap;font-family:inherit;">${escapeHtml(text)}</pre>`;
+  }
+  if (loading) loading.style.display = 'none';
+  if (docHost) docHost.style.display = '';
+  if (docContent) docContent.innerHTML = html;
+}
+
+// 加载表格（xlsx 等）→ SheetJS 解析
+async function loadSheetFile(f) {
+  const loading = document.getElementById('file-viewer-loading');
+  const sheetHost = document.getElementById('file-viewer-sheet-host');
+  const sheetTabs = document.getElementById('file-viewer-sheet-tabs');
+  const sheetContent = document.getElementById('file-viewer-sheet-content');
+  if (loading) loading.textContent = '表格解析中…';
+  const token = state.token;
+  const resp = await fetch(f.url, {
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+    credentials: 'include'
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const buf = await resp.arrayBuffer();
+  if (typeof XLSX === 'undefined') {
+    throw new Error('SheetJS 未加载');
+  }
+  const workbook = XLSX.read(buf, { type: 'array' });
+  fileViewerState.sheets = workbook.SheetNames.map(name => ({
+    name,
+    html: renderSheetToHtml(workbook.Sheets[name])
+  }));
+  if (fileViewerState.sheets.length === 0) {
+    throw new Error('工作表为空');
+  }
+  if (loading) loading.style.display = 'none';
+  if (sheetHost) sheetHost.style.display = '';
+  // 渲染 tabs
+  if (sheetTabs) {
+    sheetTabs.innerHTML = fileViewerState.sheets.map((s, i) =>
+      `<button class="sheet-tab${i === 0 ? ' active' : ''}" data-idx="${i}">${escapeHtml(s.name)}</button>`
+    ).join('');
+    sheetTabs.querySelectorAll('.sheet-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sheetTabs.querySelectorAll('.sheet-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const idx = parseInt(btn.dataset.idx, 10);
+        fileViewerState.currentSheet = idx;
+        if (sheetContent) sheetContent.innerHTML = fileViewerState.sheets[idx].html;
+      });
+    });
+  }
+  if (sheetContent) sheetContent.innerHTML = fileViewerState.sheets[0].html;
+}
+
+// 把 SheetJS 工作表转为 HTML 表格
+function renderSheetToHtml(ws) {
+  if (!ws) return '<p style="color:var(--fg-muted);">空表</p>';
+  // 用 sheet_to_html 但要包到我们的容器
+  const raw = XLSX.utils.sheet_to_html(ws, { editable: false });
+  // 去掉 XLSX 注入的全局 ID 防止冲突
+  return raw.replace(/id="[^"]*"/g, '');
+}
+
+// 关闭
+function closeFileViewerModal() {
+  const modal = document.getElementById('file-viewer-modal');
+  if (modal) modal.style.display = 'none';
+  document.body.style.overflow = '';
+  // 如果有未保存修改，提示
+  if (fileViewerState.dirty && fileViewerState.kind === 'text') {
+    // 不强提示，由用户主动 Ctrl+S 或点击保存
+  }
+  fileViewerState.id = null;
+  fileViewerState.dirty = false;
+}
+
+// 文件图标（按 kind）
+function kindIcon(kind) {
+  const icons = {
+    text: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>',
+    document: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    pdf: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    image: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+    other: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>'
+  };
+  return icons[kind] || icons.other;
+}
+
+function kindLabel(kind, name) {
+  // 先按 kind 分类，再根据扩展名细分
+  if (kind === 'document' && name) {
+    if (/\.(xlsx|xls|xlsb|ods)$/i.test(name)) return '表格';
+    if (/\.(pptx|ppt|odp)$/i.test(name)) return '幻灯片';
+    if (/\.(docx|doc|odt|rtf)$/i.test(name)) return '文档';
+    return '文档';
+  }
+  const labels = {
+    text: '文本',
+    document: '文档',
+    pdf: 'PDF',
+    image: '图片',
+    other: '文件'
+  };
+  return labels[kind] || '文件';
+}
+
+// 仅下载模式
+function showDownloadOnly(f) {
+  const loading = document.getElementById('file-viewer-loading');
+  if (loading) {
+    loading.innerHTML = `<div style="text-align:center;">
+      <p>此文件类型不支持在线预览</p>
+      <button class="btn btn-primary" id="file-viewer-download-only">下载文件</button>
+    </div>`;
+    const btn = document.getElementById('file-viewer-download-only');
+    if (btn) btn.addEventListener('click', () => downloadFile(f));
+  }
+}
+
+// 下载文件
+function downloadFile(f) {
+  if (!f.url) return;
+  // 文本/文档/其他：通过 fetch + Authorization 头获取 blob
+  if (f.kind === 'text' || f.kind === 'document' || f.kind === 'other') {
+    const token = state.token;
+    fetch(f.url, { headers: token ? { 'Authorization': 'Bearer ' + token } : {}, credentials: 'include' })
+      .then(r => r.blob())
+      .then(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = f.original_name || f.filename || 'file';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+      })
+      .catch(e => toast('下载失败：' + e.message, 'error'));
+  } else {
+    // 图片/PDF：直接下载
+    const a = document.createElement('a');
+    a.href = f.url;
+    a.download = f.original_name || f.filename || 'file';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+}
+
+// 更新状态栏
+function updateFileViewerStatus(text) {
+  const status = document.getElementById('file-viewer-status');
+  if (status) status.textContent = text;
+}
+
+// 保存文本
+async function saveTextFile() {
+  if (fileViewerState.kind !== 'text' || !fileViewerState.id) return;
+  const ta = document.getElementById('file-viewer-textarea');
+  if (!ta) return;
+  try {
+    updateFileViewerStatus('保存中…');
+    await api(`/api/upload/file/${fileViewerState.id}/text`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content: ta.value })
+    });
+    fileViewerState.dirty = false;
+    updateFileViewerStatus('已保存 · ' + ta.value.length + ' 字符 · ' + new Date().toLocaleTimeString());
+    toast('已保存', 'success');
+  } catch (e) {
+    updateFileViewerStatus('保存失败：' + e.message);
+    toast(e.message, 'error');
+  }
+}
+
+// 绑定事件
+function bindFileViewerEvents() {
+  // 关闭
+  document.querySelectorAll('[data-close="file-viewer"]').forEach(el => {
+    el.addEventListener('click', () => {
+      if (fileViewerState.dirty) {
+        showModal('有未保存的修改', '是否保存当前修改？', async () => {
+          await saveTextFile();
+          closeFileViewerModal();
+        }, { confirmText: '保存并关闭' });
+        // 这里简化：直接关闭时再次弹原生确认
+      } else {
+        closeFileViewerModal();
+      }
+    });
+  });
+  // 保存
+  document.getElementById('file-viewer-save').addEventListener('click', saveTextFile);
+  // 下载
+  document.getElementById('file-viewer-download').addEventListener('click', () => {
+    if (!fileViewerState.id) return;
+    downloadFile({
+      id: fileViewerState.id,
+      kind: fileViewerState.kind,
+      url: fileViewerState.url,
+      filename: fileViewerState.filename,
+      original_name: fileViewerState.originalName
+    });
+  });
+  // 文本输入
+  const ta = document.getElementById('file-viewer-textarea');
+  if (ta) {
+    ta.addEventListener('input', () => {
+      fileViewerState.dirty = true;
+      const lines = ta.value.split('\n').length;
+      updateFileViewerStatus(`编辑中 · ${lines} 行 · ${ta.value.length} 字符`);
+    });
+  }
+  // 键盘快捷键
+  document.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('file-viewer-modal');
+    if (!modal || modal.style.display === 'none') return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      const closeEl = document.querySelector('[data-close="file-viewer"]');
+      if (closeEl) closeEl.click();
+    } else if (e.ctrlKey && e.key === 's') {
+      e.preventDefault();
+      if (fileViewerState.kind === 'text') saveTextFile();
+    }
+  });
+}
+
 // ===== 我的文件（图片 + PDF） =====
 let currentFileFilter = 'all';
 
@@ -3883,15 +4510,20 @@ async function refreshFiles() {
     ]);
     renderFilesStorageBar(storage);
     if (!data.items || !data.items.length) {
-      const emptyText = currentFileFilter === 'pdf' ? '暂无 PDF'
-        : currentFileFilter === 'image' ? '暂无图片'
-        : '还没有任何文件';
-      const hint = currentFileFilter === 'all' ? '点击右上角"上传文件"按钮开始上传' : '切换到"全部"或上传文件试试';
+      const emptyMap = {
+        all: { title: '还没有任何文件', hint: '点击右上角"上传文件"按钮开始上传' },
+        image: { title: '暂无图片', hint: '切换到"全部"或上传图片试试' },
+        pdf: { title: '暂无 PDF', hint: '切换到"全部"或上传 PDF 试试' },
+        document: { title: '暂无文档', hint: '上传 Word/Excel/PPT 文件试试' },
+        text: { title: '暂无文本文件', hint: '上传 txt/md/json/csv 等文件试试' },
+        other: { title: '暂无其他文件', hint: '切换到"全部"试试' }
+      };
+      const e = emptyMap[currentFileFilter] || emptyMap.all;
       grid.innerHTML = `
         <div class="empty-state" style="grid-column: 1 / -1;">
           <div class="empty-state-illustration">${ILLUSTRATIONS.emptyImage}</div>
-          <h3>${emptyText}</h3>
-          <p>${hint}</p>
+          <h3>${e.title}</h3>
+          <p>${e.hint}</p>
         </div>`;
       return;
     }
@@ -3904,19 +4536,42 @@ async function refreshFiles() {
 
 // 渲染单个文件项
 function renderFileItem(f) {
-  const isPdf = f.kind === 'pdf';
-  const isImg = f.kind === 'image';
+  const kind = f.kind || 'other';
+  const isPdf = kind === 'pdf';
+  const isImg = kind === 'image';
+  const isText = kind === 'text';
+  const isDoc = kind === 'document';
   const name = f.original_name || f.filename || '未命名';
   const sizeText = formatFileSize(f.size);
   const dateText = formatDate(f.created_at);
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  // 细分文档类型：表格 vs 文档
+  const isSheet = /\.(xlsx|xls|xlsb|ods)$/i.test(name);
+  const isPpt = /\.(pptx|ppt|odp)$/i.test(name);
+  const isWord = /\.(docx|doc|odt|rtf)$/i.test(name);
   // 缩略图
   let thumb;
+  let badgeLabel = ext.toUpperCase() || (isPdf ? 'PDF' : isImg ? 'IMG' : isText ? 'TXT' : 'FILE');
   if (isImg) {
     thumb = `<img src="${escapeHtml(f.url)}" alt="${escapeHtml(name)}" loading="lazy">`;
   } else if (isPdf) {
-    thumb = `<div class="file-pdf-icon">${escapeHtml(name)}</div>`;
+    badgeLabel = 'PDF';
+    thumb = `<div class="file-pdf-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
+  } else if (isDoc && isSheet) {
+    badgeLabel = 'XLS';
+    thumb = `<div class="file-pdf-icon file-doc-icon file-sheet-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
+  } else if (isDoc && isPpt) {
+    badgeLabel = 'PPT';
+    thumb = `<div class="file-pdf-icon file-doc-icon file-ppt-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
+  } else if (isDoc && isWord) {
+    badgeLabel = 'DOC';
+    thumb = `<div class="file-pdf-icon file-doc-icon file-word-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
+  } else if (isDoc) {
+    thumb = `<div class="file-pdf-icon file-doc-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
+  } else if (isText) {
+    thumb = `<div class="file-pdf-icon file-text-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel || 'TXT')}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
   } else {
-    thumb = `<div class="file-pdf-icon">FILE</div>`;
+    thumb = `<div class="file-pdf-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
   }
   // 操作按钮
   const actions = [];
@@ -3929,20 +4584,21 @@ function renderFileItem(f) {
     actions.push(`<button class="file-action bind-pdf-btn" data-id="${f.id}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}" title="绑定到当前日记">
       <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
     </button>`);
-    actions.push(`<button class="file-action open-pdf-btn" data-url="${escapeHtml(f.url)}" title="预览">
-      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-    </button>`);
   }
+  // 所有类型都有预览按钮（点击 file-item 时也会触发，这里显式提供）
+  actions.push(`<button class="file-action open-file-btn" data-id="${f.id}" title="打开/预览">
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+  </button>`);
   actions.push(`<button class="file-action danger del-file-btn" data-id="${f.id}" data-name="${escapeHtml(name)}" title="删除">
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
   </button>`);
 
   return `
-    <div class="file-item file-${f.kind}" data-id="${f.id}" data-kind="${f.kind}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}">
+    <div class="file-item file-${kind}" data-id="${f.id}" data-kind="${kind}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}" data-meta='${escapeHtml(JSON.stringify({id:f.id,kind,url:f.url,filename:f.filename,original_name:f.original_name,size:f.size,mime_type:f.mime_type}))}'>
       ${thumb}
       <div class="file-info" title="${escapeHtml(name)} · ${sizeText} · ${dateText}">
         <span class="file-name">${escapeHtml(truncateName(name, 22))}</span>
-        <span class="file-meta">${sizeText}</span>
+        <span class="file-meta">${sizeText} · ${kindLabel(kind, name)}</span>
       </div>
       <div class="file-item-actions">
         ${actions.join('')}
@@ -3984,6 +4640,21 @@ function renderFilesStorageBar(storage) {
   `;
 }
 
+// 打开文件查看器（按 kind 路由到对应查看器）
+function openFileByKind(f) {
+  if (!f) return;
+  if (f.kind === 'image') {
+    if (typeof openImageLightbox === 'function') openImageLightbox(f.url, f.original_name || f.filename);
+    else window.open(f.url, '_blank');
+  } else if (f.kind === 'pdf') {
+    openPdfViewerModal(f.url, f.original_name || f.filename);
+  } else if (f.kind === 'text' || f.kind === 'document' || f.kind === 'other') {
+    openFileViewerFromMeta(f);
+  } else {
+    window.open(f.url, '_blank');
+  }
+}
+
 // 绑定文件项事件（点击、按钮）
 function bindFileItemEvents(grid) {
   grid.querySelectorAll('.copy-md-btn').forEach(b => b.addEventListener('click', e => {
@@ -4002,9 +4673,19 @@ function bindFileItemEvents(grid) {
       } catch (e) { toast(e.message, 'error'); }
     }, { danger: true, confirmText: '删除' });
   }));
+  // 兼容旧版 open-pdf-btn（如果存在）
   grid.querySelectorAll('.open-pdf-btn').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
-    window.open(b.dataset.url, '_blank');
+    openPdfViewerModal(b.dataset.url, b.closest('.file-item')?.dataset.name || '');
+  }));
+  // 统一打开按钮
+  grid.querySelectorAll('.open-file-btn').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const item = b.closest('.file-item');
+    if (!item) return;
+    let meta = {};
+    try { meta = JSON.parse(item.dataset.meta || '{}'); } catch (_) {}
+    openFileByKind(meta);
   }));
   // 绑定到当前日记
   grid.querySelectorAll('.bind-pdf-btn').forEach(b => b.addEventListener('click', async e => {
@@ -4028,23 +4709,13 @@ function bindFileItemEvents(grid) {
       toast(err.message, 'error');
     }
   }));
-  // 点击文件项：图片打开预览 / PDF 打开预览
+  // 点击文件项：按 kind 打开对应查看器
   grid.querySelectorAll('.file-item').forEach(item => {
     item.addEventListener('click', e => {
-      // 避免点按钮时触发
       if (e.target.closest('.file-item-actions')) return;
-      const kind = item.dataset.kind;
-      const url = item.dataset.url;
-      const name = item.dataset.name;
-      if (kind === 'image') {
-        if (typeof openImageLightbox === 'function') openImageLightbox(url, name);
-        else window.open(url, '_blank');
-      } else if (kind === 'pdf') {
-        // 跳到 PDF 预览：直接打开新窗口
-        window.open(url, '_blank');
-      } else {
-        window.open(url, '_blank');
-      }
+      let meta = {};
+      try { meta = JSON.parse(item.dataset.meta || '{}'); } catch (_) {}
+      openFileByKind(meta);
     });
   });
 }

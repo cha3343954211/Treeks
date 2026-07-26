@@ -10,19 +10,32 @@ const { getRuntimeUploadDir, DEFAULT_UPLOAD_DIR } = require('../services/storage
 const router = express.Router();
 
 // 通用文件存储配置：所有用户文件统一存到 USER_ID/ 目录下
-// 通过文件扩展名分子目录（images / pdf / other）
+// 通过文件扩展名分子目录（images / pdf / texts / docs / other）
+// 文件类型与 kind/subdir 映射
+const TEXT_EXTS = /\.(txt|md|markdown|json|ya?ml|csv|tsv|log|ini|conf|xml|html?|css|scss|sass|less|js|jsx|ts|tsx|vue|svelte|py|java|kt|swift|rb|go|rs|php|sh|bat|sql|env|toml)$/i;
+const DOC_EXTS = /\.(docx?|xlsx?|xlsb?|pptx?|odt|ods|odp|rtf)$/i;
+const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|svg)$/i;
+const PDF_EXTS = /\.pdf$/i;
+
+function classifyFile(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  if (IMAGE_EXTS.test(ext)) return { kind: 'image', subdir: 'images' };
+  if (PDF_EXTS.test(ext)) return { kind: 'pdf', subdir: 'pdf' };
+  if (TEXT_EXTS.test(ext)) return { kind: 'text', subdir: 'texts' };
+  if (DOC_EXTS.test(ext)) return { kind: 'document', subdir: 'docs' };
+  return { kind: 'other', subdir: 'other' };
+}
+
 const userFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    let subdir = 'other';
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (/\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(ext)) subdir = 'images';
-    else if (ext === '.pdf') subdir = 'pdf';
+    const { subdir } = classifyFile(file.originalname);
     const userDir = path.join(getRuntimeUploadDir(), String(req.user.id), subdir);
     if (!fs.existsSync(userDir)) {
       fs.mkdirSync(userDir, { recursive: true });
     }
-    // 把 subdir 挂到 req 上，让后续路由识别
+    // 把 subdir/kind 挂到 req 上，让后续路由识别
     req._fileSubdir = subdir;
+    req._fileKind = classifyFile(file.originalname).kind;
     cb(null, userDir);
   },
   filename: (req, file, cb) => {
@@ -94,16 +107,19 @@ const pdfUpload = multer({
   }
 });
 
-// 通用文件上传（用于"我的文件"页面）
+// 通用文件上传（用于"我的文件"页面）：支持图片 / PDF / 文本 / Office 文档
 const generalFileUpload = multer({
   storage: userFileStorage,
   limits: {
     fileSize: (parseInt(process.env.MAX_PDF_SIZE, 10) || 50) * 1024 * 1024
   },
   fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (/\.(jpe?g|png|gif|webp|bmp|svg|pdf)$/i.test(ext)) cb(null, true);
-    else cb(new Error('仅支持图片(jpg/png/gif/webp/bmp/svg)与 PDF 格式'));
+    const { kind } = classifyFile(file.originalname);
+    if (kind === 'other') {
+      cb(new Error('暂不支持该文件类型（支持：图片、PDF、文本/代码、Word/Excel/PPT）'));
+      return;
+    }
+    cb(null, true);
   }
 });
 
@@ -130,7 +146,7 @@ function formatBytes(n) {
 
 // ===== 通用文件 API（"我的文件"页面） =====
 
-// 上传单个文件（图片或 PDF）
+// 上传单个文件（图片 / PDF / 文本 / 文档）
 router.post('/file', generalFileUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '未接收到文件' });
   try {
@@ -139,25 +155,36 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
     try { fs.unlinkSync(req.file.path); } catch (_) {}
     return res.status(400).json({ error: e.message });
   }
-  const ext = path.extname(req.file.originalname).toLowerCase();
-  const isImage = /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(ext);
-  const isPdf = ext === '.pdf';
-  const kind = isImage ? 'image' : (isPdf ? 'pdf' : 'other');
-  // 取子目录：图片 → images，PDF → pdf，其他 → other
-  const subdir = req._fileSubdir || (isImage ? 'images' : isPdf ? 'pdf' : 'other');
+  const { kind } = classifyFile(req.file.originalname);
+  // 取子目录：图片 → images，PDF → pdf，文本 → texts，文档 → docs，其他 → other
+  const subdir = req._fileSubdir || (kind === 'image' ? 'images' : kind === 'pdf' ? 'pdf' : kind === 'text' ? 'texts' : kind === 'document' ? 'docs' : 'other');
   // URL 策略：
-  //  - PDF：使用鉴权接口 /api/upload/pdf/<filename>（避免公开访问用户私有文件）
-  //  - 图片/其他：使用 /uploads 静态服务（带子目录路径）
+  //  - PDF：使用鉴权接口 /api/upload/pdf/<filename>
+  //  - 文本/文档：使用鉴权接口 /api/upload/file/<id>/raw（按 ID 鉴权，避免泄露文件结构）
+  //  - 图片：使用 /uploads 静态服务（带子目录路径）
   //  - 兼容：旧版图片可能存在 USER_ID/ 下，URL 不带子目录；新版带子目录
-  const url = isPdf
-    ? `/api/upload/pdf/${req.file.filename}`
-    : `/uploads/${req.user.id}/${subdir}/${req.file.filename}`;
+  let url;
+  if (kind === 'pdf') {
+    url = `/api/upload/pdf/${req.file.filename}`;
+  } else if (kind === 'image') {
+    url = `/uploads/${req.user.id}/${subdir}/${req.file.filename}`;
+  } else {
+    // 文本/文档：占位 URL（创建后用 ID 重写）
+    url = `/uploads/_pending/${req.file.filename}`;
+  }
   const ins = db.prepare(
     `INSERT INTO files (user_id, kind, filename, original_name, mime_type, size, url)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(req.user.id, kind, req.file.filename, req.file.originalname, req.file.mimetype || '', req.file.size, url);
+  const fileId = ins.lastInsertRowid;
+  // 文本/文档用 ID 生成稳定 URL
+  if (kind === 'text' || kind === 'document') {
+    const finalUrl = `/api/upload/file/${fileId}/raw`;
+    db.prepare('UPDATE files SET url = ? WHERE id = ?').run(finalUrl, fileId);
+    url = finalUrl;
+  }
   res.status(201).json({
-    id: ins.lastInsertRowid,
+    id: fileId,
     kind,
     url,
     filename: req.file.filename,
@@ -167,11 +194,12 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
   });
 });
 
-// 获取用户文件列表（支持按 kind 过滤）
+// 获取文件列表（支持按 kind 过滤；空 kind 表示所有）
 router.get('/files', (req, res) => {
   const kind = (req.query.kind || '').toString();
+  const VALID_KINDS = ['image', 'pdf', 'text', 'document', 'other'];
   let rows;
-  if (kind && ['image', 'pdf', 'other'].includes(kind)) {
+  if (kind && VALID_KINDS.includes(kind)) {
     rows = db.prepare(
       `SELECT id, kind, filename, original_name, mime_type, size, url, created_at
        FROM files WHERE user_id = ? AND kind = ? ORDER BY created_at DESC`
@@ -192,13 +220,7 @@ router.delete('/files/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
   if (!row) return res.status(404).json({ error: '文件不存在' });
   // 物理删除：根据 kind 选择子目录
-  let subdir = 'other';
-  if (row.kind === 'image') subdir = 'images';
-  else if (row.kind === 'pdf') subdir = 'pdf';
-  // 兼容旧版图片：images 表中无 subdir
-  if (row.kind === 'image' && !row.url.startsWith('/uploads/')) {
-    subdir = 'images';
-  }
+  const { subdir } = classifyFile(row.original_name || row.filename);
   // 删除候选路径：优先当前运行时目录，兼容默认目录（应对存储位置切换后旧数据残留）
   const runtimeDir = getRuntimeUploadDir();
   const defaultDir = DEFAULT_UPLOAD_DIR;
@@ -348,6 +370,101 @@ router.delete('/images/:id', (req, res) => {
 });
 
 // ============ PDF 上传与服务 ============
+
+// 鉴权下载文件原始内容（用于文本/文档/其他需要鉴权访问的 kind）
+// 路径：GET /api/upload/file/:id/raw
+// 注意：必须放在通用 /uploads 静态服务之前，因为通用服务不做鉴权
+router.get('/file/:id/raw', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件不存在' });
+  // 物理文件位置
+  const { subdir } = classifyFile(row.original_name || row.filename);
+  const runtimeDir = getRuntimeUploadDir();
+  const defaultDir = DEFAULT_UPLOAD_DIR;
+  const baseDirs = runtimeDir === defaultDir ? [runtimeDir] : [runtimeDir, defaultDir];
+  let filePath = null;
+  for (const base of baseDirs) {
+    const p = path.join(base, String(req.user.id), subdir, row.filename);
+    if (fs.existsSync(p)) { filePath = p; break; }
+    // 兼容旧版直存
+    const legacy = path.join(base, String(req.user.id), row.filename);
+    if (fs.existsSync(legacy)) { filePath = legacy; break; }
+  }
+  if (!filePath) return res.status(404).json({ error: '物理文件不存在' });
+  const stat = fs.statSync(filePath);
+  // 设置合适的 Content-Type
+  let contentType = row.mime_type || 'application/octet-stream';
+  if (row.kind === 'text' && !row.mime_type) {
+    const ext = path.extname(row.original_name || row.filename).toLowerCase();
+    const textTypes = {
+      '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+      '.json': 'application/json', '.xml': 'application/xml', '.md': 'text/markdown',
+      '.csv': 'text/csv', '.txt': 'text/plain'
+    };
+    if (textTypes[ext]) contentType = textTypes[ext] + '; charset=utf-8';
+    else contentType = 'text/plain; charset=utf-8';
+  }
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Length', stat.size);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  fs.createReadStream(filePath).pipe(res);
+});
+
+// 读取文本文件内容（仅 text 类型；自动检测编码）
+// GET /api/upload/file/:id/text
+router.get('/file/:id/text', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件不存在' });
+  if (row.kind !== 'text') return res.status(400).json({ error: '此接口仅用于文本文件' });
+  const { subdir } = classifyFile(row.original_name || row.filename);
+  const runtimeDir = getRuntimeUploadDir();
+  const defaultDir = DEFAULT_UPLOAD_DIR;
+  const baseDirs = runtimeDir === defaultDir ? [runtimeDir] : [runtimeDir, defaultDir];
+  let filePath = null;
+  for (const base of baseDirs) {
+    const p = path.join(base, String(req.user.id), subdir, row.filename);
+    if (fs.existsSync(p)) { filePath = p; break; }
+    const legacy = path.join(base, String(req.user.id), row.filename);
+    if (fs.existsSync(legacy)) { filePath = legacy; break; }
+  }
+  if (!filePath) return res.status(404).json({ error: '物理文件不存在' });
+  // 文件大小限制（2MB），避免大文件超时
+  const stat = fs.statSync(filePath);
+  if (stat.size > 2 * 1024 * 1024) {
+    return res.status(413).json({ error: '文本文件过大（>2MB），请直接下载' });
+  }
+  const content = fs.readFileSync(filePath, 'utf-8');
+  res.json({ content, size: stat.size, filename: row.original_name || row.filename });
+});
+
+// 保存文本文件内容（仅 text 类型）
+// PATCH /api/upload/file/:id/text
+router.patch('/file/:id/text', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: '参数错误' });
+  const { content } = req.body || {};
+  if (typeof content !== 'string') return res.status(400).json({ error: 'content 必须是字符串' });
+  const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: '文件不存在' });
+  if (row.kind !== 'text') return res.status(400).json({ error: '此接口仅用于文本文件' });
+  const { subdir } = classifyFile(row.original_name || row.filename);
+  const userDir = path.join(getRuntimeUploadDir(), String(req.user.id), subdir);
+  if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+  const filePath = path.join(userDir, row.filename);
+  try {
+    fs.writeFileSync(filePath, content, 'utf-8');
+    // 更新 size
+    const newSize = Buffer.byteLength(content, 'utf-8');
+    db.prepare('UPDATE files SET size = ? WHERE id = ?').run(newSize, id);
+    res.json({ message: '已保存', size: newSize });
+  } catch (e) {
+    res.status(500).json({ error: '保存失败：' + e.message });
+  }
+});
 
 // 上传 PDF（同时写入 files 表，返回 url 与原始文件名）
 router.post('/pdf', pdfUpload.single('pdf'), (req, res) => {
