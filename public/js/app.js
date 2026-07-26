@@ -1427,13 +1427,25 @@ function setupPdfViewer() {
     const targetScale = Math.max(0.5, Math.min(2, (containerW - 80) / viewport.width));
     setScale(targetScale);
   });
-  // 上传按钮
-  const uploadInput = document.getElementById('input-upload-pdf');
-  if (uploadInput) {
-    uploadInput.addEventListener('change', (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (file) handlePdfUpload(file);
-      e.target.value = ''; // 允许重复上传
+  // 旧的"上传 PDF" 按钮（input-upload-pdf）已弃用：PDF 应在「我的文件」页面上传
+  // 这里兼容旧按钮：点击后跳转到「我的文件」页面
+  const oldUploadInput = document.getElementById('input-upload-pdf');
+  if (oldUploadInput) {
+    const oldBtn = oldUploadInput.closest('label') || oldUploadInput;
+    if (oldBtn) {
+      oldBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        toast('PDF 请到「我的文件」页面上传后，再回来绑定', 'info');
+        navigateTo('files');
+      });
+    }
+  }
+  // 新的"绑定 PDF"按钮：弹窗选择已上传的 PDF
+  const bindBtn = document.getElementById('btn-bind-pdf');
+  if (bindBtn) {
+    bindBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      openBindPdfModal();
     });
   }
   // 移除按钮
@@ -1441,6 +1453,81 @@ function setupPdfViewer() {
   if (removeBtn) removeBtn.addEventListener('click', handleRemovePdf);
   // 初始化 PDF.js worker
   setupPdfJsWorker();
+}
+
+// 弹窗：从"我的文件"中选一个 PDF 绑定到当前日记
+async function openBindPdfModal() {
+  if (!brushState.diaryId) {
+    toast('请先打开或新建一篇日记', 'error');
+    return;
+  }
+  let files;
+  try {
+    const data = await api('/api/upload/files?kind=pdf');
+    files = data.items || [];
+  } catch (e) {
+    toast('加载 PDF 列表失败：' + e.message, 'error');
+    return;
+  }
+  if (!files.length) {
+    showModal(
+      '没有 PDF 文件',
+      `<div style="padding:8px 0;">
+         <p style="color:var(--fg-secondary);margin-bottom:12px;">你还没有上传任何 PDF 文件。</p>
+         <p style="color:var(--fg-muted);font-size:13px;">请到「我的文件」页面上传 PDF 后再回来绑定。</p>
+       </div>
+       <div style="display:flex;gap:8px;margin-top:12px;">
+         <button class="btn btn-primary" id="goto-files-btn">前往「我的文件」</button>
+       </div>`,
+      null,
+      { hideCancel: true, confirmText: '关闭' }
+    );
+    setTimeout(() => {
+      const goto = document.getElementById('goto-files-btn');
+      if (goto) goto.addEventListener('click', () => { closeModal(); navigateTo('files'); });
+    }, 50);
+    return;
+  }
+  const html = `
+    <div style="max-height:60vh;overflow:auto;">
+      <p style="color:var(--fg-secondary);margin-bottom:12px;font-size:13px;">选择要绑定到当前日记的 PDF（来自「我的文件」）：</p>
+      <div class="bind-pdf-list">
+        ${files.map(f => `
+          <div class="bind-pdf-item" data-id="${f.id}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.original_name || f.filename)}">
+            <div class="bind-pdf-thumb">PDF</div>
+            <div class="bind-pdf-meta">
+              <div class="bind-pdf-name" title="${escapeHtml(f.original_name || f.filename)}">${escapeHtml(f.original_name || f.filename)}</div>
+              <div class="bind-pdf-info">${formatFileSize ? formatFileSize(f.size) : (f.size + ' B')} · ${escapeHtml((f.created_at || '').slice(0, 10))}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  showModal('绑定 PDF', html, null, { hideCancel: true, confirmText: '关闭' });
+  setTimeout(() => {
+    document.querySelectorAll('.bind-pdf-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.dataset.id;
+        try {
+          await api(`/api/diaries/${brushState.diaryId}/bind-pdf`, {
+            method: 'POST',
+            body: JSON.stringify({ fileId: parseInt(id, 10) })
+          });
+          closeModal();
+          toast('已绑定 PDF，正在加载预览', 'success');
+          // 重新加载当前日记
+          const diary = await api(`/api/diaries/${brushState.diaryId}`);
+          await autoLoadDiaryPdf(diary);
+          // 切到预览模式
+          const previewBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="preview"]');
+          if (previewBtn) previewBtn.click();
+        } catch (e) {
+          toast('绑定失败：' + e.message, 'error');
+        }
+      });
+    });
+  }, 50);
 }
 
 // 当打开一篇已有 PDF 的日记时，自动加载并进入预览
@@ -2381,9 +2468,10 @@ async function api(path, options = {}) {
 }
 
 async function apiUpload(file) {
+  // 统一走 /api/upload/file 端点（后端会自动判断 kind：image / pdf / other）
   const fd = new FormData();
-  fd.append('image', file);
-  const res = await fetch('/api/upload/image', {
+  fd.append('file', file);
+  const res = await fetch('/api/upload/file', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + state.token },
     body: fd
@@ -2461,6 +2549,7 @@ function logout() {
   state.user = null;
   localStorage.removeItem('treeks_token');
   localStorage.removeItem('treeks_user');
+  stopHeartbeat();
   showAuthView();
 }
 
@@ -2477,6 +2566,25 @@ function showMainView() {
   navigateTo('list');
   loadTags();
   updateNavBadges();
+  // 启动心跳：保持当前用户活跃状态（用于好友在线/离线判定）
+  startHeartbeat();
+}
+
+// ===== 心跳：每 30s 一次，用于在线/离线判定（结合 WebSocket 协同） =====
+let heartbeatTimer = null;
+function startHeartbeat() {
+  if (heartbeatTimer) return;
+  const send = async () => {
+    if (!state.token) return;
+    try { await api('/api/auth/heartbeat', { method: 'POST' }); }
+    catch (_) { /* 静默 */ }
+  };
+  // 立即触发一次，随后每 30 秒一次
+  send();
+  heartbeatTimer = setInterval(send, 30 * 1000);
+}
+function stopHeartbeat() {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 }
 
 function renderUserCard() {
@@ -2556,9 +2664,9 @@ function navigateTo(nav) {
   } else if (nav === 'stats') {
     showView('stats');
     loadStats();
-  } else if (nav === 'images') {
-    showView('images');
-    loadImages();
+  } else if (nav === 'images' || nav === 'files') {
+    showView('files');
+    loadFiles();
   } else if (nav === 'calendar') {
     showView('calendar');
     loadCalendar();
@@ -3512,7 +3620,9 @@ async function handleImageUpload(files) {
     }
     try {
       const data = await apiUpload(file);
-      insertAtCursor(data.markdown);
+      // 新接口返回 url 字段，自行拼 Markdown
+      const md = `![${file.name}](${data.url})`;
+      insertAtCursor(md);
       toast(`已上传: ${file.name}`, 'success');
     } catch (e) {
       toast(`上传失败: ${e.message}`, 'error');
@@ -3748,54 +3858,245 @@ function hideHeatmapTooltip() {
   if (heatmapTooltipEl) heatmapTooltipEl.classList.remove('show');
 }
 
-// ===== 图片库 =====
-async function loadImages() {
-  const grid = document.getElementById('images-grid');
-  grid.innerHTML = '<p style="color:#999;">加载中...</p>';
+// ===== 我的文件（图片 + PDF） =====
+let currentFileFilter = 'all';
+
+function loadFiles() {
+  showView('files');
+  refreshFiles();
+}
+
+// 加载并渲染文件列表（含存储使用情况）
+async function refreshFiles() {
+  const grid = document.getElementById('files-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;padding:40px;color:var(--fg-muted);">加载中...</div>';
+  // 同步过滤按钮激活态
+  document.querySelectorAll('.files-filter-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.filter === currentFileFilter);
+  });
   try {
-    const data = await api('/api/upload/images');
-    if (!data.items.length) {
+    const qs = currentFileFilter && currentFileFilter !== 'all' ? `?kind=${currentFileFilter}` : '';
+    const [data, storage] = await Promise.all([
+      api(`/api/upload/files${qs}`),
+      api('/api/upload/storage').catch(() => null)
+    ]);
+    renderFilesStorageBar(storage);
+    if (!data.items || !data.items.length) {
+      const emptyText = currentFileFilter === 'pdf' ? '暂无 PDF'
+        : currentFileFilter === 'image' ? '暂无图片'
+        : '还没有任何文件';
+      const hint = currentFileFilter === 'all' ? '点击右上角"上传文件"按钮开始上传' : '切换到"全部"或上传文件试试';
       grid.innerHTML = `
         <div class="empty-state" style="grid-column: 1 / -1;">
           <div class="empty-state-illustration">${ILLUSTRATIONS.emptyImage}</div>
-          <h3>暂无图片</h3>
-          <p>在写日记时上传的图片会显示在这里</p>
-          <div class="empty-decoration">用图片记录每一个精彩瞬间</div>
+          <h3>${emptyText}</h3>
+          <p>${hint}</p>
         </div>`;
       return;
     }
-    grid.innerHTML = data.items.map(img => `
-      <div class="image-item" data-url="${img.url}">
-        <img src="${img.url}" alt="${escapeHtml(img.original_name || '')}" loading="lazy">
-        <div class="image-item-actions">
-          <button class="image-action copy-btn" data-md="![${escapeHtml(img.original_name || '')}](${img.url})">
-            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:2px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            复制MD
-          </button>
-          <button class="image-action danger del-img-btn" data-id="${img.id}">
-            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:2px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-            删除
-          </button>
-        </div>
-      </div>
-    `).join('');
-    grid.querySelectorAll('.copy-btn').forEach(b => b.addEventListener('click', e => {
-      e.stopPropagation();
-      navigator.clipboard.writeText(b.dataset.md).then(() => toast('已复制 Markdown', 'success'));
-    }));
-    grid.querySelectorAll('.del-img-btn').forEach(b => b.addEventListener('click', e => {
-      e.stopPropagation();
-      const id = b.dataset.id;
-      showModal('删除图片', '确定要删除这张图片吗？', async () => {
-        try {
-          await api(`/api/upload/images/${id}`, { method: 'DELETE' });
-          toast('已删除', 'success');
-          loadImages();
-        } catch (e) { toast(e.message, 'error'); }
-      }, { danger: true, confirmText: '删除' });
-    }));
+    grid.innerHTML = data.items.map(file => renderFileItem(file)).join('');
+    bindFileItemEvents(grid);
   } catch (e) {
-    grid.innerHTML = `<p style="color:#c75450;">${escapeHtml(e.message)}</p>`;
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;color:var(--danger);">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// 渲染单个文件项
+function renderFileItem(f) {
+  const isPdf = f.kind === 'pdf';
+  const isImg = f.kind === 'image';
+  const name = f.original_name || f.filename || '未命名';
+  const sizeText = formatFileSize(f.size);
+  const dateText = formatDate(f.created_at);
+  // 缩略图
+  let thumb;
+  if (isImg) {
+    thumb = `<img src="${escapeHtml(f.url)}" alt="${escapeHtml(name)}" loading="lazy">`;
+  } else if (isPdf) {
+    thumb = `<div class="file-pdf-icon">${escapeHtml(name)}</div>`;
+  } else {
+    thumb = `<div class="file-pdf-icon">FILE</div>`;
+  }
+  // 操作按钮
+  const actions = [];
+  if (isImg) {
+    actions.push(`<button class="file-action copy-md-btn" data-md="![${escapeHtml(name)}](${escapeHtml(f.url)})" title="复制 Markdown">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    </button>`);
+  }
+  if (isPdf) {
+    actions.push(`<button class="file-action bind-pdf-btn" data-id="${f.id}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}" title="绑定到当前日记">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    </button>`);
+    actions.push(`<button class="file-action open-pdf-btn" data-url="${escapeHtml(f.url)}" title="预览">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>`);
+  }
+  actions.push(`<button class="file-action danger del-file-btn" data-id="${f.id}" data-name="${escapeHtml(name)}" title="删除">
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+  </button>`);
+
+  return `
+    <div class="file-item file-${f.kind}" data-id="${f.id}" data-kind="${f.kind}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}">
+      ${thumb}
+      <div class="file-info" title="${escapeHtml(name)} · ${sizeText} · ${dateText}">
+        <span class="file-name">${escapeHtml(truncateName(name, 22))}</span>
+        <span class="file-meta">${sizeText}</span>
+      </div>
+      <div class="file-item-actions">
+        ${actions.join('')}
+      </div>
+    </div>`;
+}
+
+function truncateName(name, max = 22) {
+  if (!name) return '';
+  if (name.length <= max) return name;
+  const ext = name.includes('.') ? '.' + name.split('.').pop() : '';
+  const base = name.slice(0, max - ext.length - 1);
+  return base + '…' + ext;
+}
+
+function formatFileSize(bytes) {
+  if (!bytes && bytes !== 0) return '—';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+// 渲染存储使用情况
+function renderFilesStorageBar(storage) {
+  const bar = document.getElementById('files-storage-bar');
+  if (!bar) return;
+  if (!storage) { bar.innerHTML = ''; return; }
+  const percent = Math.min(100, storage.percent || 0);
+  const used = formatFileSize(storage.used);
+  const limit = formatFileSize(storage.limit);
+  const avail = formatFileSize(storage.available);
+  bar.innerHTML = `
+    <span class="storage-summary">已用 <strong>${used}</strong> / ${limit} · 剩余 ${avail}</span>
+    <div class="storage-bar-track">
+      <div class="storage-bar-fill" style="width:${percent.toFixed(1)}%;"></div>
+    </div>
+    <span class="storage-count">${storage.imageCount || 0} 图片 · ${storage.pdfCount || 0} PDF</span>
+  `;
+}
+
+// 绑定文件项事件（点击、按钮）
+function bindFileItemEvents(grid) {
+  grid.querySelectorAll('.copy-md-btn').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(b.dataset.md).then(() => toast('已复制 Markdown', 'success'));
+  }));
+  grid.querySelectorAll('.del-file-btn').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const id = b.dataset.id;
+    const name = b.dataset.name || '该文件';
+    showModal('删除文件', `确定要删除「${name}」吗？物理文件将一并删除。`, async () => {
+      try {
+        await api(`/api/upload/files/${id}`, { method: 'DELETE' });
+        toast('已删除', 'success');
+        refreshFiles();
+      } catch (e) { toast(e.message, 'error'); }
+    }, { danger: true, confirmText: '删除' });
+  }));
+  grid.querySelectorAll('.open-pdf-btn').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    window.open(b.dataset.url, '_blank');
+  }));
+  // 绑定到当前日记
+  grid.querySelectorAll('.bind-pdf-btn').forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const id = b.dataset.id;
+    const url = b.dataset.url;
+    const name = b.dataset.name || '该 PDF';
+    // 必须先有当前打开的日记
+    const diaryId = state.editingId || brushState.diaryId;
+    if (!diaryId) {
+      toast('请先打开或新建一篇日记，再绑定 PDF', 'error');
+      return;
+    }
+    try {
+      await api(`/api/diaries/${diaryId}/bind-pdf`, {
+        method: 'POST',
+        body: JSON.stringify({ fileId: parseInt(id, 10) })
+      });
+      toast(`已绑定 PDF：${name}`, 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }));
+  // 点击文件项：图片打开预览 / PDF 打开预览
+  grid.querySelectorAll('.file-item').forEach(item => {
+    item.addEventListener('click', e => {
+      // 避免点按钮时触发
+      if (e.target.closest('.file-item-actions')) return;
+      const kind = item.dataset.kind;
+      const url = item.dataset.url;
+      const name = item.dataset.name;
+      if (kind === 'image') {
+        if (typeof openImageLightbox === 'function') openImageLightbox(url, name);
+        else window.open(url, '_blank');
+      } else if (kind === 'pdf') {
+        // 跳到 PDF 预览：直接打开新窗口
+        window.open(url, '_blank');
+      } else {
+        window.open(url, '_blank');
+      }
+    });
+  });
+}
+
+// 上传文件（通过 input change 触发）
+async function uploadFiles(fileList) {
+  if (!fileList || !fileList.length) return;
+  const files = Array.from(fileList);
+  const totalSize = files.reduce((s, f) => s + f.size, 0);
+  // 预检：存储配额
+  try {
+    const storage = await api('/api/upload/storage');
+    if (storage.available < totalSize) {
+      toast(`存储空间不足，剩余 ${formatFileSize(storage.available)}`, 'error');
+      return;
+    }
+  } catch (_) {}
+  for (const f of files) {
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const res = await fetch('/api/upload/file', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + state.token },
+        body: fd
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '上传失败');
+      toast(`已上传：${f.name}`, 'success');
+    } catch (e) {
+      toast(`${f.name} 上传失败：${e.message}`, 'error');
+    }
+  }
+  refreshFiles();
+}
+
+// 初始化"我的文件"页面事件（仅绑定一次）
+function initFilesView() {
+  // 过滤按钮
+  document.querySelectorAll('.files-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentFileFilter = btn.dataset.filter || 'all';
+      refreshFiles();
+    });
+  });
+  // 上传 input
+  const input = document.getElementById('files-upload-input');
+  if (input) {
+    input.addEventListener('change', e => {
+      uploadFiles(e.target.files);
+      e.target.value = '';
+    });
   }
 }
 
@@ -3842,9 +4143,10 @@ function openAvatarPicker() {
   const grid = document.getElementById('avatar-picker-grid');
   grid.innerHTML = '<div class="avatar-picker-empty">加载中...</div>';
   document.getElementById('avatar-picker-modal').style.display = 'flex';
-  api('/api/upload/images').then(data => {
+  // 优先从统一 files 表读取图片（包含旧版 images 表迁移过来的记录）
+  api('/api/upload/files?kind=image').then(data => {
     if (!data.items || !data.items.length) {
-      grid.innerHTML = '<div class="avatar-picker-empty">暂无图片，请先在日记中上传，或直接上传新图片。</div>';
+      grid.innerHTML = '<div class="avatar-picker-empty">暂无图片，请先在「我的文件」中上传图片。</div>';
       return;
     }
     grid.innerHTML = data.items.map(img => `
@@ -4513,7 +4815,16 @@ function bindEvents() {
   // 编辑器实时预览
   const textarea = document.getElementById('editor-textarea');
   let typingTimer;
-  textarea.addEventListener('input', () => {
+  // 移动端 IME（中文/日文/韩文输入法）输入处理：
+  // 在 composition 过程中，input 事件会反复触发（每次按键一次），
+  // 此时 textarea 的 value 并非最终结果，若同步触发预览重渲染和协同广播，
+  // 会与 IME 自身的字符插入产生时序冲突，导致视觉上"打字顺序反向"。
+  // 因此在 composition 期间跳过耗时的预览/协同/计数更新，
+  // 待 compositionend 后再统一执行一次。
+  let isComposing = false;
+  let pendingAfterComposition = false;
+
+  const runPostInput = () => {
     updatePreview();
     updateWordCount();
     setSaveStatus('编辑中…', 'saving');
@@ -4521,14 +4832,41 @@ function bindEvents() {
     typingTimer = setTimeout(() => {
       setSaveStatus('未保存', 'draft');
     }, 800);
-    // 协同编辑：广播内容变更
     collabSendEdit('content', textarea.value);
+  };
+
+  textarea.addEventListener('compositionstart', () => {
+    isComposing = true;
+    pendingAfterComposition = false;
+  });
+
+  textarea.addEventListener('compositionend', () => {
+    isComposing = false;
+    if (pendingAfterComposition) {
+      pendingAfterComposition = false;
+      runPostInput();
+    }
+  });
+
+  textarea.addEventListener('input', () => {
+    if (isComposing) {
+      // IME 输入过程中标记待处理，等 compositionend 统一执行
+      pendingAfterComposition = true;
+      return;
+    }
+    runPostInput();
   });
 
   // 标题变更广播
   document.getElementById('editor-title').addEventListener('input', (e) => {
     collabSendEdit('title', e.target.value);
   });
+
+  // 标题同样需要 IME 处理，避免移动端打字顺序反向
+  let titleComposing = false;
+  const titleInput = document.getElementById('editor-title');
+  titleInput.addEventListener('compositionstart', () => { titleComposing = true; });
+  titleInput.addEventListener('compositionend', () => { titleComposing = false; });
 
   // 可见性切换：选"指定用户"时自动弹出选择框；切换到其他选项时清空缓存
   const visibilitySelectEl = document.getElementById('editor-visibility');
@@ -4607,16 +4945,19 @@ function bindEvents() {
     e.target.value = '';
   });
 
-  // 图片库上传
-  document.getElementById('gallery-upload').addEventListener('change', async e => {
-    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
-    for (const f of files) {
-      try { await apiUpload(f); } catch (err) { toast(err.message, 'error'); }
-    }
-    toast(`已上传 ${files.length} 张图片`, 'success');
-    loadImages();
-    e.target.value = '';
-  });
+  // 图片库上传（兼容旧 ID #gallery-upload，转发到通用 files 上传）
+  const galleryInput = document.getElementById('gallery-upload');
+  if (galleryInput) {
+    galleryInput.addEventListener('change', async e => {
+      const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+      for (const f of files) {
+        try { await apiUpload(f); } catch (err) { toast(err.message, 'error'); }
+      }
+      toast(`已上传 ${files.length} 张图片`, 'success');
+      if (typeof refreshFiles === 'function') refreshFiles();
+      e.target.value = '';
+    });
+  }
 
   // 个人资料表单
   document.getElementById('profile-form').addEventListener('submit', async e => {
@@ -6104,8 +6445,8 @@ async function loadMyData() {
     diaryCount = stats.total || 0;
   } catch (_) {}
   try {
-    const imgStats = await api('/api/upload/images?limit=1');
-    imageCount = imgStats.total || 0;
+    const fileStats = await api('/api/upload/files?kind=image');
+    imageCount = fileStats.items ? fileStats.items.length : 0;
   } catch (_) {}
 
   c.innerHTML = `
@@ -6809,6 +7150,8 @@ if (window.matchMedia) {
 // ===== 初始化 =====
 async function init() {
   bindEvents();
+  // 初始化"我的文件"页面（绑定上传/过滤事件，幂等）
+  if (typeof initFilesView === 'function') initFilesView();
   loadSiteInfo();
 
   // 检查登录状态
@@ -7142,10 +7485,14 @@ async function openLetterDetail(id) {
       <div class="letter-detail">
         <div class="letter-detail-header">
           ${userAvatarHtml(l.sender, 48)}
-          <div>
+          <div class="letter-detail-meta">
             <div class="letter-detail-from">${escapeHtml(l.sender.nickname || l.sender.username)}</div>
             <div class="letter-detail-date">${formatDate(l.created_at)}</div>
           </div>
+          <button class="btn btn-danger btn-sm letter-delete-btn" data-id="${l.id}" title="删除信件">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+            <span>删除</span>
+          </button>
         </div>
         <h3 class="letter-detail-subject">${escapeHtml(l.subject || '(无主题)')}</h3>
         <div class="letter-detail-content">${escapeHtml(l.content || '').replace(/\n/g, '<br>')}</div>
@@ -7162,6 +7509,28 @@ async function openLetterDetail(id) {
       openBtn.addEventListener('click', () => {
         closeModal();
         openEditor(l.diary.id);
+      });
+    }
+    const deleteBtn = document.querySelector('.letter-delete-btn');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showModal('删除信件',
+          `<p>确定要删除这封信件吗？</p><p style="color:var(--fg-muted);font-size:13px;margin-top:8px;">此操作无法撤销。</p>`,
+          async () => {
+            try {
+              await api(`/api/letters/${l.id}`, { method: 'DELETE' });
+              toast('信件已删除', 'success');
+              closeModal();
+              loadLettersList(lettersState.tab);
+              if (lettersState.tab === 'inbox') updateNavBadges();
+            } catch (err) {
+              toast(err.message || '删除失败', 'error');
+              return false;
+            }
+          },
+          { danger: true, confirmText: '删除' }
+        );
       });
     }
     // 如果在收件箱，刷新未读数

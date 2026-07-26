@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { db } = require('../db');
 const { signToken, authRequired } = require('../middleware/auth');
+const { touchUserActive, isUserOnline } = require('../services/collab');
 
 const router = express.Router();
 
@@ -160,6 +161,13 @@ router.get('/site-info', (req, res) => {
   const siteName = getSetting('site_name', 'Treeks');
   const siteNotice = getSetting('site_notice', '');
   res.json({ allow_register: allowRegister, site_name: siteName, site_notice: siteNotice });
+});
+
+// 心跳：刷新用户活跃时间，用于在线/离线判定
+// 客户端每 30 秒调用一次；服务端用 last_active_at 兜底判定
+router.post('/heartbeat', authRequired, (req, res) => {
+  touchUserActive(req.user.id);
+  res.json({ ok: true, online: isUserOnline(req.user.id) });
 });
 
 module.exports = router;

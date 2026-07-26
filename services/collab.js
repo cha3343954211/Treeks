@@ -42,13 +42,32 @@ function removeOnlineUser(userId, ws) {
   if (set.size === 0) onlineUsers.delete(userId);
 }
 
+// 在线判定阈值：用户在该时长内有过任意活跃行为即视为在线
+// 包含 WebSocket 协同连接 或 客户端心跳（heartbeat）
+const ONLINE_THRESHOLD_SEC = 90;
+
 function isUserOnline(userId) {
+  // 1) WebSocket 实时协同连接在线
   const set = onlineUsers.get(userId);
-  return !!set && set.size > 0;
+  if (set && set.size > 0) return true;
+  // 2) 客户端心跳在线（最近 90 秒内活跃过）
+  const row = db.prepare('SELECT last_active_at FROM users WHERE id = ?').get(userId);
+  if (!row || !row.last_active_at) return false;
+  const t = Date.parse(row.last_active_at.endsWith('Z') ? row.last_active_at : row.last_active_at + 'Z');
+  if (Number.isNaN(t)) return false;
+  return (Date.now() - t) <= ONLINE_THRESHOLD_SEC * 1000;
 }
 
 function getOnlineUserIds() {
   return Array.from(onlineUsers.keys());
+}
+
+/**
+ * 刷新用户心跳时间戳（由 /api/auth/heartbeat 触发）
+ */
+function touchUserActive(userId) {
+  if (!userId) return;
+  db.prepare("UPDATE users SET last_active_at = datetime('now') WHERE id = ?").run(userId);
 }
 
 function getUserInfo(userId) {
@@ -240,4 +259,4 @@ function setupWebSocket(server) {
   return wss;
 }
 
-module.exports = { setupWebSocket, isUserOnline, getOnlineUserIds };
+module.exports = { setupWebSocket, isUserOnline, getOnlineUserIds, touchUserActive, ONLINE_THRESHOLD_SEC };

@@ -431,11 +431,36 @@ router.delete('/:id', (req, res) => {
 // 置顶/取消置顶
 router.patch('/:id/pin', (req, res) => {
   const result = db.prepare(
-    'UPDATE diaries SET is_pinned = 1 - is_pinned WHERE id = ? AND user_id = ?'
+    'UPDATE diaries SET is_pinned = CASE WHEN is_pinned = 1 THEN 0 ELSE 1 END WHERE id = ? AND user_id = ?'
   ).run(req.params.id, req.user.id);
   if (result.changes === 0) return res.status(404).json({ error: '日记不存在' });
   const row = db.prepare('SELECT is_pinned FROM diaries WHERE id = ?').get(req.params.id);
   res.json({ is_pinned: !!row.is_pinned });
+});
+
+// 绑定 PDF 到日记（从 files 表选择）
+// body: { fileId }  -> 设置 diaries.pdf_filename
+// body: { fileId: null } 或 {} -> 移除
+router.post('/:id/bind-pdf', (req, res) => {
+  const diaryId = parseInt(req.params.id, 10);
+  if (!diaryId) return res.status(400).json({ error: '参数错误' });
+  const diary = db.prepare('SELECT * FROM diaries WHERE id = ? AND user_id = ?').get(diaryId, req.user.id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+
+  const { fileId } = req.body || {};
+  if (fileId === null || fileId === '' || fileId === undefined) {
+    // 移除 PDF
+    db.prepare("UPDATE diaries SET pdf_filename = NULL, pdf_pages = 0, updated_at = datetime('now') WHERE id = ?").run(diaryId);
+    return res.json({ message: '已移除 PDF', pdf_filename: null });
+  }
+  const fid = parseInt(fileId, 10);
+  if (!fid) return res.status(400).json({ error: '请提供 fileId' });
+  const file = db.prepare("SELECT * FROM files WHERE id = ? AND user_id = ? AND kind = 'pdf'").get(fid, req.user.id);
+  if (!file) return res.status(404).json({ error: 'PDF 文件不存在或不属于你' });
+  // pdf_filename 在 diaries 表中存储相对路径（filename 即可）
+  db.prepare("UPDATE diaries SET pdf_filename = ?, pdf_pages = 0, updated_at = datetime('now') WHERE id = ?")
+    .run(file.filename, diaryId);
+  res.json({ message: '已绑定 PDF', pdf_filename: file.filename, url: file.url, original_name: file.original_name });
 });
 
 // ===== 共享/协作相关 =====

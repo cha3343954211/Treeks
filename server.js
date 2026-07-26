@@ -6,7 +6,7 @@ const fs = require('fs');
 const http = require('http');
 
 // 启动前引导：读取自定义存储位置并设置 env 变量（必须在 db 加载前执行）
-const { bootstrapStorageConfig, getRuntimeUploadDir } = require('./services/storageLocation');
+const { bootstrapStorageConfig, getRuntimeUploadDir, DEFAULT_UPLOAD_DIR } = require('./services/storageLocation');
 const storageBootstrap = bootstrapStorageConfig();
 
 const { initDatabase } = require('./db');
@@ -47,7 +47,42 @@ app.use('/api/letters', require('./routes/letters'));
 require('./services/collab').setupWebSocket(server);
 
 // 静态文件访问上传的图片（使用运行时配置的上传目录）
-app.use('/uploads', express.static(getRuntimeUploadDir()));
+// 自定义 fallthrough 静态服务：优先运行时目录，缺失时回退到默认目录
+// 这样即使在切换存储位置时（重启前），老路径的图片仍可访问
+// 同时：旧版图片 URL 不带子目录（如 /uploads/17/file.png），新版要求 /uploads/17/images/file.png
+//   当旧 URL 找不到文件时，自动尝试插入 images/ 子目录
+const runtimeUploadDir = getRuntimeUploadDir();
+const defaultUploadDir = DEFAULT_UPLOAD_DIR;
+app.use('/uploads', (req, res, next) => {
+  // 解码 URL 路径
+  const relPath = decodeURIComponent(req.path.replace(/^\/+/, ''));
+  // 防止路径穿越
+  if (relPath.includes('..')) return res.status(400).end('Bad path');
+  const tryServe = (base, p = relPath) => {
+    const full = path.join(base, p);
+    // 防止解析到 base 外
+    if (!full.startsWith(path.resolve(base))) return false;
+    return fs.existsSync(full) && fs.statSync(full).isFile() ? full : null;
+  };
+  let found = tryServe(runtimeUploadDir);
+  if (!found && runtimeUploadDir !== defaultUploadDir) {
+    found = tryServe(defaultUploadDir);
+  }
+  // 兜底：旧版 URL 不带子目录时（如 17/file.png），尝试插入 images/ 子目录（17/images/file.png）
+  if (!found) {
+    const m = relPath.match(/^(\d+\/)([^/]+)$/);
+    if (m) {
+      const withSub = m[1] + 'images/' + m[2];
+      found = tryServe(runtimeUploadDir, withSub);
+      if (!found && runtimeUploadDir !== defaultUploadDir) {
+        found = tryServe(defaultUploadDir, withSub);
+      }
+    }
+  }
+  if (!found) return res.status(404).end('Not Found');
+  res.setHeader('Cache-Control', 'private, max-age=600');
+  fs.createReadStream(found).pipe(res);
+});
 
 // 健康检查
 app.get('/api/health', (req, res) => {

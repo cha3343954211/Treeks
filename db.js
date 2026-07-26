@@ -64,7 +64,7 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       filename TEXT NOT NULL,
-      original_name TEXT,
+      original_name,
       size INTEGER,
       url TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')),
@@ -72,6 +72,23 @@ function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id);
+
+    -- 统一文件表：覆盖图片、PDF 等所有用户上传的文件
+    -- kind: 'image' | 'pdf' | 'other'
+    CREATE TABLE IF NOT EXISTS files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'other',
+      filename TEXT NOT NULL,
+      original_name TEXT,
+      mime_type TEXT,
+      size INTEGER,
+      url TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id);
+    CREATE INDEX IF NOT EXISTS idx_files_user_kind ON files(user_id, kind);
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -213,6 +230,8 @@ function initDatabase() {
   addColumnIfMissing('users', 'status', "TEXT DEFAULT 'active'");
   addColumnIfMissing('users', 'storage_limit', 'INTEGER DEFAULT 104857600');
   addColumnIfMissing('users', 'theme', "TEXT DEFAULT 'green'");
+  // 用户最近一次活跃时间（用于在线/离线判定）
+  addColumnIfMissing('users', 'last_active_at', "TEXT DEFAULT NULL");
   // 日记可见性：private / public / friends / specific
   addColumnIfMissing('diaries', 'visibility', "TEXT DEFAULT 'private'");
   // 日记所属文件夹（NULL 表示在默认/根目录）
@@ -289,6 +308,59 @@ function initDatabase() {
     if (tzMigrated > 0) console.log(`[DB] 共转换 ${tzMigrated} 条记录为 UTC 时间`);
     db.prepare("INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('timezone_migration', 'done', datetime('now'))").run();
     console.log('[DB] 时区迁移标记已设置');
+  }
+
+  // 数据迁移：把旧 images 表的记录和 diaries.pdf_filename 关联的 PDF 文件同步到 files 统一表
+  // 仅在 files 表为空时执行（首次启动后不再重复迁移）
+  const filesCount = db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+  if (filesCount === 0) {
+    let fileMigrated = 0;
+    // 1. 从 images 表迁移（URL 加上 images/ 子目录，匹配新文件存储结构）
+    const imgRows = db.prepare('SELECT id, user_id, filename, original_name, size, url, created_at FROM images').all();
+    const insFile = db.prepare(
+      `INSERT INTO files (user_id, kind, filename, original_name, mime_type, size, url, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const r of imgRows) {
+      const ext = (r.filename.split('.').pop() || '').toLowerCase();
+      const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+      const mime = mimeMap[ext] || 'image/' + ext;
+      // 旧版 URL 形如 /uploads/USER_ID/filename；新结构要求 /uploads/USER_ID/images/filename
+      let newUrl = r.url;
+      if (newUrl && /^\/uploads\/\d+\/[^/]+$/.test(newUrl)) {
+        newUrl = newUrl.replace(/^(\/uploads\/\d+\/)([^/]+)$/, '$1images/$2');
+      }
+      insFile.run(r.user_id, 'image', r.filename, r.original_name, mime, r.size, newUrl, r.created_at);
+      fileMigrated++;
+    }
+    // 2. 从 diaries.pdf_filename 迁移（去重）
+    const pdfRows = db.prepare(
+      `SELECT user_id, pdf_filename, created_at FROM diaries
+       WHERE pdf_filename IS NOT NULL AND pdf_filename != '' GROUP BY user_id, pdf_filename`
+    ).all();
+    for (const r of pdfRows) {
+      const exists = db.prepare('SELECT 1 FROM files WHERE user_id = ? AND filename = ?').get(r.user_id, r.pdf_filename);
+      if (exists) continue;
+      const url = `/api/upload/pdf/${r.pdf_filename}`;
+      insFile.run(r.user_id, 'pdf', r.pdf_filename, r.pdf_filename, 'application/pdf', null, url, r.created_at);
+      fileMigrated++;
+    }
+    if (fileMigrated > 0) console.log(`[DB] files 统一表已迁移 ${fileMigrated} 条记录`);
+  }
+
+  // 修复：把已存在但 URL 未含子目录的图片记录补上 images/ 子目录
+  // 仅对 URL 形如 /uploads/USER_ID/file 的 image 类记录执行
+  const oldImageUrlRows = db.prepare(
+    `SELECT id, user_id, filename FROM files
+     WHERE kind = 'image' AND url LIKE '/uploads/%/%' AND url NOT LIKE '/uploads/%/%/%'`
+  ).all();
+  if (oldImageUrlRows.length > 0) {
+    const upd = db.prepare(`UPDATE files SET url = ? WHERE id = ?`);
+    for (const r of oldImageUrlRows) {
+      const newUrl = `/uploads/${r.user_id}/images/${r.filename}`;
+      upd.run(newUrl, r.id);
+    }
+    console.log(`[DB] 修复了 ${oldImageUrlRows.length} 条历史图片 URL，添加 images/ 子目录`);
   }
 
   console.log('[DB] 数据库初始化完成');
