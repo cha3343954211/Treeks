@@ -65,7 +65,7 @@ router.put('/:id', (req, res) => {
        end_time = COALESCE(?, end_time),
        color = COALESCE(?, color),
        is_done = COALESCE(?, is_done),
-       updated_at = datetime('now','localtime')
+       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     title != null ? title.trim() : null,

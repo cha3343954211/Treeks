@@ -100,7 +100,13 @@ checkDataDirConsistency();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+// 静态资源缓存：生产环境 7 天，开发环境禁用
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: process.env.NODE_ENV === 'production' ? '7d' : 0,
+  etag: true,
+  lastModified: true,
+  immutable: process.env.NODE_ENV === 'production'
+}));
 // 时区中间件：为 API 响应中的时间字段附加 +08:00 时区标识，解决跨时区显示偏移
 app.use(require('./middleware/timezone').timezoneMiddleware);
 
@@ -170,7 +176,19 @@ app.use('/uploads', (req, res, next) => {
     res.setHeader('Content-Type', 'image/svg+xml');
     res.setHeader('Content-Disposition', 'attachment');
   }
-  fs.createReadStream(found).pipe(res);
+  // 文件流读取：注册 error 事件，防止磁盘错误导致请求挂起或文件描述符泄漏
+  const stream = fs.createReadStream(found);
+  stream.on('error', (e) => {
+    console.error('[Uploads] 文件读取失败:', found, e.message);
+    if (!res.headersSent) {
+      res.status(500).end('文件读取失败');
+    } else {
+      // 响应已开始发送，只能强制中断
+      res.destroy();
+    }
+    stream.destroy();
+  });
+  stream.pipe(res);
 });
 
 // 健康检查
@@ -187,12 +205,17 @@ app.get('*', (req, res) => {
 
 // 错误处理中间件
 app.use((err, req, res, next) => {
-  console.error('[ERROR]', err.message);
+  // 5xx 错误记录完整堆栈，4xx 仅记录消息
+  const status = err.status || 500;
+  if (status >= 500) {
+    console.error('[ERROR]', err.stack || err.message);
+  } else {
+    console.warn('[WARN]', status, err.message);
+  }
   if (err.name === 'MulterError') {
     return res.status(400).json({ error: `上传失败: ${err.message}` });
   }
   // 客户端错误（4xx）保留原始 message，服务端错误（5xx）隐藏内部信息
-  const status = err.status || 500;
   if (status >= 500) {
     return res.status(500).json({ error: '服务器内部错误，请稍后重试' });
   }
@@ -210,4 +233,21 @@ server.listen(PORT, () => {
     console.log(`   存储模式: 默认位置`);
   }
   console.log('');
+});
+
+// HTTP 服务器超时配置：防止慢客户端耗尽连接池
+server.timeout = 60000;          // 请求超时 60s
+server.keepAliveTimeout = 5000;  // keep-alive 超时 5s
+server.headersTimeout = 65000;   // 头部超时 65s（需大于 keepAliveTimeout）
+
+// ===== 全局异常兜底：防止未捕获的 Promise rejection 崩溃进程 =====
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UnhandledRejection]', reason);
+  // 不退出进程，仅记录；生产环境应配合 pm2 日志监控
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[UncaughtException]', err.stack || err.message);
+  // 记录后允许进程继续运行；若数据库损坏等严重错误，仍需人工重启
+  // 不在此处 process.exit(1)，避免单次请求异常导致整服务中断
 });

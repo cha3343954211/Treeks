@@ -24,23 +24,28 @@ function getSetting(key, def = null) {
 
 function setSetting(key, value) {
   db.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now','localtime'))
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
   ).run(key, String(value));
 }
 
 // ===== 概览统计 =====
+// 优化：合并多个 COUNT 查询为单条 SQL，减少数据库往返
 router.get('/dashboard', (req, res) => {
-  const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
-  const activeUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE status = 'active'").get().c;
-  const disabledUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE status = 'disabled'").get().c;
-  const adminCount = db.prepare('SELECT COUNT(*) as c FROM users WHERE is_admin = 1').get().c;
-  const diaryCount = db.prepare('SELECT COUNT(*) as c FROM diaries').get().c;
-  const imageCount = db.prepare('SELECT COUNT(*) as c FROM images').get().c;
-  const totalImageSize = db.prepare('SELECT COALESCE(SUM(size),0) as s FROM images').get().s;
-  const totalStorageLimit = db.prepare('SELECT COALESCE(SUM(storage_limit),0) as s FROM users').get().s;
+  // 一次性查询所有用户/日记/图片统计（用子查询合并）
+  const stats = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM users) AS userCount,
+      (SELECT COUNT(*) FROM users WHERE status = 'active') AS activeUsers,
+      (SELECT COUNT(*) FROM users WHERE status = 'disabled') AS disabledUsers,
+      (SELECT COUNT(*) FROM users WHERE is_admin = 1) AS adminCount,
+      (SELECT COUNT(*) FROM diaries) AS diaryCount,
+      (SELECT COUNT(*) FROM images) AS imageCount,
+      (SELECT COALESCE(SUM(size),0) FROM images) AS totalImageSize,
+      (SELECT COALESCE(SUM(storage_limit),0) FROM users) AS totalStorageLimit
+  `).get();
 
-  // 最近 7 天注册数（REPLACE 统一日期分隔符，兼容旧数据 YYYY/MM/DD）
+  // 最近 7 天注册数
   const recentUsers = db.prepare(
     `SELECT substr(REPLACE(created_at,'/','-'),1,10) as date, COUNT(*) as count
      FROM users
@@ -75,9 +80,18 @@ router.get('/dashboard', (req, res) => {
   ).all();
 
   res.json({
-    users: { total: userCount, active: activeUsers, disabled: disabledUsers, admins: adminCount },
-    content: { diaries: diaryCount, images: imageCount, totalImageSize },
-    storage: { used: totalImageSize, totalLimit: totalStorageLimit },
+    users: {
+      total: stats.userCount,
+      active: stats.activeUsers,
+      disabled: stats.disabledUsers,
+      admins: stats.adminCount
+    },
+    content: {
+      diaries: stats.diaryCount,
+      images: stats.imageCount,
+      totalImageSize: stats.totalImageSize
+    },
+    storage: { used: stats.totalImageSize, totalLimit: stats.totalStorageLimit },
     trends: { recentUsers, recentDiaries, recentActive },
     topUsers
   });
@@ -134,13 +148,18 @@ router.get('/users', (req, res) => {
   }
 
   const total = db.prepare(`SELECT COUNT(*) as c FROM users WHERE ${where}`).get(...params).c;
+  // 优化：使用 LEFT JOIN + GROUP BY 替代相关子查询，将 3N 次查询降为 1 次
+  // 注意：WHERE 条件作用于主表 u，子查询统计不受 WHERE 影响
   const rows = db.prepare(
     `SELECT u.id, u.username, u.nickname, u.avatar, u.bio, u.is_admin, u.status, u.storage_limit, u.created_at,
-            (SELECT COUNT(*) FROM diaries WHERE user_id = u.id) as diary_count,
-            (SELECT COUNT(*) FROM images WHERE user_id = u.id) as image_count,
-            (SELECT COALESCE(SUM(size),0) FROM images WHERE user_id = u.id) as used_storage
+            COUNT(d.id) as diary_count,
+            COUNT(im.id) as image_count,
+            COALESCE(SUM(im.size), 0) as used_storage
      FROM users u
+     LEFT JOIN diaries d ON d.user_id = u.id
+     LEFT JOIN images im ON im.user_id = u.id
      WHERE ${where}
+     GROUP BY u.id
      ORDER BY u.is_admin DESC, u.created_at DESC
      LIMIT ? OFFSET ?`
   ).all(...params, limitNum, offset);

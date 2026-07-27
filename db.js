@@ -227,6 +227,8 @@ function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_diary_visible_to_user ON diary_visible_to(user_id);
+    -- 关键索引：shared/list 查询用 diary_id 过滤（之前缺失导致全表扫）
+    CREATE INDEX IF NOT EXISTS idx_diary_visible_to_diary ON diary_visible_to(diary_id);
 
     -- 信件
     CREATE TABLE IF NOT EXISTS letters (
@@ -290,6 +292,8 @@ function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, recipient_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_messages_recipient_unread ON messages(recipient_id, is_read);
+    -- 反向索引：支持历史消息查询（recipient_id, sender_id, created_at）
+    CREATE INDEX IF NOT EXISTS idx_messages_recipient_pair ON messages(recipient_id, sender_id, created_at);
   `);
 
   // 兼容旧库：补字段（已在 initDatabase 开头执行）

@@ -9666,6 +9666,136 @@ html, body {
 }
 
 /* ---- 24. 移动端性能优化：减少动画 ---- */
+/* ===== 丝滑动画增强（v2）=====
+   设计原则：
+   1. 仅用 transform/opacity（GPU 加速、不触发布局）
+   2. 60fps 友好：避免 box-shadow / backdrop-filter 在动画中变化
+   3. 时长 0.2~0.35s（既能感知又不过度）
+   4. 尊重 prefers-reduced-motion
+*/
+
+/* ---- 视图切换：进入动画（覆盖 fadeUp 默认动画，更轻快）---- */
+.content-view.active {
+  animation: viewFadeIn 0.28s var(--ease);
+}
+@keyframes viewFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- 模态框：关闭动画（需要配合 JS 添加 .modal-closing 类）---- */
+.modal.closing {
+  animation: fadeOut 0.18s var(--ease) forwards;
+}
+.modal.closing .modal-content {
+  animation: scaleOut 0.18s var(--ease) forwards;
+}
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes scaleOut {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(4px); }
+}
+
+/* ---- 骨架屏（列表加载占位）---- */
+.skeleton-card {
+  background: var(--bg-paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  overflow: hidden;
+  position: relative;
+}
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(0,0,0,0.05) 0%,
+    rgba(0,0,0,0.10) 50%,
+    rgba(0,0,0,0.05) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.4s ease-in-out infinite;
+  margin-bottom: 10px;
+}
+.skeleton-line:last-child { margin-bottom: 0; width: 60%; }
+.skeleton-line.title { height: 18px; width: 50%; margin-bottom: 16px; }
+.skeleton-line.short { width: 30%; }
+@keyframes skeletonShimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ---- 按钮按压涟漪：通过 ::before scale + opacity 实现（已有 ::before，仅在 .btn-primary 增强）---- */
+.btn-primary { transform: translateZ(0); }
+
+/* ---- 卡片悬停：仅 transform，避免 reflow ---- */
+.diary-card {
+  transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease);
+  will-change: transform;
+}
+.diary-card:hover {
+  transform: translateY(-2px) translateZ(0);
+}
+
+/* ---- Toast 入场/退场：弹性更柔 ---- */
+.toast {
+  transition: opacity 0.3s var(--ease), transform 0.35s var(--ease-spring);
+}
+.toast.hide {
+  opacity: 0;
+  transform: translateX(-50%) translateY(20px) scale(0.95);
+}
+
+/* ---- 输入框聚焦：边框 + 阴影丝滑过渡 ---- */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+textarea,
+.search-input,
+.filter-select,
+.filter-date,
+.editor-title-input {
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+/* ---- 下拉菜单（move-folder / 选择器）：缩放进入 ---- */
+.move-folder-menu {
+  transform-origin: top right;
+  animation: menuPop 0.18s var(--ease-spring);
+}
+@keyframes menuPop {
+  from { opacity: 0; transform: scale(0.92) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ---- 导航项激活：左侧指示条丝滑滑入 ---- */
+.nav-item.active::before {
+  animation: navIndicatorIn 0.25s var(--ease-spring);
+}
+@keyframes navIndicatorIn {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+
+/* ---- 通用 fadeIn 工具类（用于动态插入的元素）---- */
+.fade-in {
+  animation: viewFadeIn 0.25s var(--ease);
+}
+
+/* ---- 优化：滚动容器使用 transform: translateZ(0) 启用 GPU 合成 ----
+   仅对动画频繁的容器启用，避免内存占用过大 */
+.diary-list,
+.sidebar-nav,
+.modal-content,
+.toast {
+  transform: translateZ(0);
+}
+
+/* ---- 减少动画偏好：尊重用户系统设置 ---- */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -9675,4 +9805,6 @@ html, body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  .skeleton-line { animation: none; background: rgba(0,0,0,0.06); }
+  .diary-card:hover { transform: none; }
 }

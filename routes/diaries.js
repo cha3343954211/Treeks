@@ -192,8 +192,10 @@ router.get('/', (req, res) => {
     params.push(`%"${tag}"%`);
   }
   if (date) {
-    where += " AND substr(created_at, 1, 10) = ?";
-    params.push(date);
+    // 使用范围查询替代 substr()，让 idx_diaries_created_at 索引生效
+    // date 格式 'YYYY-MM-DD' → created_at >= 'YYYY-MM-DD 00:00:00' AND < 'YYYY-MM-DD 23:59:59'
+    where += ' AND created_at >= ? AND created_at <= ?';
+    params.push(date + ' 00:00:00', date + ' 23:59:59');
   }
 
   const orderClause = order === 'asc' ? 'ORDER BY is_pinned DESC, created_at ASC' : 'ORDER BY is_pinned DESC, created_at DESC';
@@ -276,37 +278,41 @@ router.post('/', (req, res) => {
     }
   }
 
-  const result = db.prepare(
-    `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id, pdf_filename, pdf_pages)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    req.user.id,
-    (title || '').trim(),
-    content || '',
-    mood || null,
-    weather || null,
-    stringifyTags(tags),
-    is_pinned ? 1 : 0,
-    is_public ? 1 : 0,
-    vis,
-    folderId,
-    pdf_filename !== undefined ? pdf_filename : null,
-    pdf_pages !== undefined ? parseInt(pdf_pages, 10) || 0 : 0
-  );
-  const newId = result.lastInsertRowid;
+  // 使用事务：确保日记主记录、可见性、协作者同时成功或同时失败
+  const newId = db.transaction(() => {
+    const result = db.prepare(
+      `INSERT INTO diaries (user_id, title, content, mood, weather, tags, is_pinned, is_public, visibility, folder_id, pdf_filename, pdf_pages)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      req.user.id,
+      (title || '').trim(),
+      content || '',
+      mood || null,
+      weather || null,
+      stringifyTags(tags),
+      is_pinned ? 1 : 0,
+      is_public ? 1 : 0,
+      vis,
+      folderId,
+      pdf_filename !== undefined ? pdf_filename : null,
+      pdf_pages !== undefined ? parseInt(pdf_pages, 10) || 0 : 0
+    );
+    const newId = result.lastInsertRowid;
 
-  if (vis === 'specific' && Array.isArray(visibleTo)) {
-    syncVisibleTo(newId, visibleTo);
-  }
-  // 创建时直接添加协作者
-  if (Array.isArray(collaborators)) {
-    const stmt = db.prepare('INSERT OR IGNORE INTO diary_collaborators (diary_id, user_id, role) VALUES (?, ?, ?)');
-    collaborators.forEach(c => {
-      if (c.userId && c.userId !== req.user.id) {
-        stmt.run(newId, c.userId, c.role === 'viewer' ? 'viewer' : 'editor');
-      }
-    });
-  }
+    if (vis === 'specific' && Array.isArray(visibleTo)) {
+      syncVisibleTo(newId, visibleTo);
+    }
+    // 创建时直接添加协作者
+    if (Array.isArray(collaborators)) {
+      const stmt = db.prepare('INSERT OR IGNORE INTO diary_collaborators (diary_id, user_id, role) VALUES (?, ?, ?)');
+      collaborators.forEach(c => {
+        if (c.userId && c.userId !== req.user.id) {
+          stmt.run(newId, c.userId, c.role === 'viewer' ? 'viewer' : 'editor');
+        }
+      });
+    }
+    return newId;
+  })();
 
   const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(newId);
   res.status(201).json({
@@ -684,14 +690,17 @@ router.delete('/:id/collaborators/:userId', (req, res) => {
 // 写作热力图 - 返回指定年份每天的日记数（GitHub 风格）
 router.get('/stats/heatmap', (req, res) => {
   const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+  // 优化：使用范围查询替代 substr(created_at, 1, 4)，让 idx_diaries_created_at 索引生效
+  const yearStart = `${year}-01-01 00:00:00`;
+  const yearEnd = `${year}-12-31 23:59:59`;
   // 查询该用户这一年所有日记，按日期分组
   const rows = db.prepare(
     `SELECT substr(created_at, 1, 10) as date, COUNT(*) as count
      FROM diaries
      WHERE user_id = ?
-       AND substr(created_at, 1, 4) = ?
+       AND created_at >= ? AND created_at <= ?
      GROUP BY date`
-  ).all(req.user.id, String(year));
+  ).all(req.user.id, yearStart, yearEnd);
 
   const map = {};
   // 统一日期分隔符（数据库返回 2026/01/05，转为 2026-01-05 与前端 ISO 对齐）
@@ -702,9 +711,9 @@ router.get('/stats/heatmap', (req, res) => {
     `SELECT id, title, substr(created_at, 1, 10) as date, is_pinned
      FROM diaries
      WHERE user_id = ?
-       AND substr(created_at, 1, 4) = ?
+       AND created_at >= ? AND created_at <= ?
      ORDER BY is_pinned DESC, created_at ASC`
-  ).all(req.user.id, String(year));
+  ).all(req.user.id, yearStart, yearEnd);
   const titlesMap = {};
   titleRows.forEach(r => {
     const d = r.date.replace(/\//g, '-');

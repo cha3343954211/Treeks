@@ -176,8 +176,17 @@ function setupScrollSync() {
     requestAnimationFrame(() => { scrollSyncLock = false; });
   };
 
-  textarea.addEventListener('scroll', () => sync(textarea, previewPane));
-  previewPane.addEventListener('scroll', () => sync(previewPane, textarea));
+  // 节流版 sync：用 rAF 合并同一帧内的多次 scroll 事件，避免与浏览器滚动渲染抢帧
+  // passive: true 表示不调用 preventDefault，让浏览器在主线程之外即时滚动（提升流畅度）
+  const scheduleSync = (source, target) => {
+    if (source._syncRaf) return; // 已调度则跳过
+    source._syncRaf = requestAnimationFrame(() => {
+      source._syncRaf = 0;
+      sync(source, target);
+    });
+  };
+  textarea.addEventListener('scroll', () => scheduleSync(textarea, previewPane), { passive: true });
+  previewPane.addEventListener('scroll', () => scheduleSync(previewPane, textarea), { passive: true });
 }
 
 // ===== 预览模式双击进入编辑 =====
@@ -2416,10 +2425,17 @@ function toast(msg, type = '') {
   if (!el) return;
   // 安全转义，防止 HTML 注入（虽然 textContent 已处理，但保险起见）
   el.textContent = msg;
+  // 先移除 hide（如果有），再触发 show（用 rAF 让浏览器把"移除 hide"和"添加 show"分到两帧，触发过渡）
+  el.classList.remove('hide');
   el.className = 'toast show ' + type;
   clearTimeout(toast._t);
   const duration = type === 'error' ? 4500 : (type === 'warning' ? 3800 : 2800);
-  toast._t = setTimeout(() => { el.className = 'toast'; }, duration);
+  // 关闭时先添加 hide 类触发退场过渡，再等动画结束后清除
+  toast._t = setTimeout(() => {
+    el.classList.add('hide');
+    el.classList.remove('show');
+    toast._t = setTimeout(() => { el.className = 'toast'; }, 320);
+  }, duration);
 }
 
 // ===== Modal =====
@@ -2429,6 +2445,9 @@ function showModal(title, body, onConfirm, opts = {}) {
   const modal = document.getElementById('modal');
   // 关键：先关闭上一个弹窗（此时旧 close 被调用，display 设为 none），再设置新内容
   closeModal();
+  // 取消任何残留的关闭动画类，避免与新打开动画叠加
+  modal.classList.remove('closing');
+  if (modal._closeTimer) { clearTimeout(modal._closeTimer); modal._closeTimer = null; }
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = body;
   document.getElementById('modal-cancel').style.display = opts.hideCancel ? 'none' : '';
@@ -2439,9 +2458,17 @@ function showModal(title, body, onConfirm, opts = {}) {
   const cancelBtn = document.getElementById('modal-cancel');
   const backdrop = modal.querySelector('.modal-backdrop');
   const close = () => {
-    modal.style.display = 'none';
-    confirmBtn.onclick = null;
-    confirmBtn.disabled = false;
+    if (modal.style.display === 'none') return;
+    // 触发关闭动画：CSS .modal.closing 0.18s 后再隐藏 display
+    modal.classList.add('closing');
+    if (modal._closeTimer) clearTimeout(modal._closeTimer);
+    modal._closeTimer = setTimeout(() => {
+      modal.style.display = 'none';
+      modal.classList.remove('closing');
+      modal._closeTimer = null;
+      confirmBtn.onclick = null;
+      confirmBtn.disabled = false;
+    }, 180);
   };
   closeModal = close;
   const onConfirmHandler = async () => {
@@ -2979,6 +3006,10 @@ async function loadDiaries(opts = {}) {
     }
   }
 
+  // 骨架屏：网络请求期间显示占位卡片，避免界面"卡住"无响应感
+  // 仅在非快速过滤（首次加载/翻页）时显示，避免每次输入都闪一下
+  if (!opts.silent) showSkeletonList(5);
+
   try {
     const data = await api('/api/diaries?' + params.toString());
     state.diaries = data.items;
@@ -2993,6 +3024,20 @@ async function loadDiaries(opts = {}) {
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+// 骨架屏占位：网络请求期间显示 shimmer 卡片，渲染真实数据时自动替换
+function showSkeletonList(count = 5) {
+  const list = document.getElementById('diary-list');
+  if (!list) return;
+  const items = Array.from({ length: count }, () => `
+    <div class="skeleton-card" aria-hidden="true">
+      <div class="skeleton-line title"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line short"></div>
+    </div>
+  `).join('');
+  list.innerHTML = items;
 }
 
 function renderDiaryList(data, opts = {}) {
@@ -3060,12 +3105,28 @@ function renderDiaryList(data, opts = {}) {
     </article>
   `).join('');
 
-  // 绑定事件
-  list.querySelectorAll('.diary-card').forEach(card => {
-    card.addEventListener('click', e => {
-      if (e.target.closest('.action-btn')) return;
+  // 绑定事件：使用事件委托（仅绑定一次到 #diary-list 容器），
+  // 替代之前为每个卡片单独绑定 6 类事件（cards × N → 6 次绑定），
+  // 显著减少内存与监听器数量，且在重新渲染列表时无需解绑。
+  if (!list._diaryDelegated) {
+    list._diaryDelegated = true;
+    list.addEventListener('click', e => {
+      const actionBtn = e.target.closest('.action-btn');
+      if (actionBtn) {
+        e.stopPropagation();
+        const id = parseInt(actionBtn.dataset.id, 10);
+        if (isNaN(id)) return;
+        if (actionBtn.classList.contains('pin-btn')) togglePin(id);
+        else if (actionBtn.classList.contains('edit-btn')) openEditor(id);
+        else if (actionBtn.classList.contains('del-btn')) confirmDelete(id);
+        else if (actionBtn.classList.contains('export-card-btn')) openExportModal([id]);
+        else if (actionBtn.classList.contains('move-folder-btn')) openMoveFolderMenu(actionBtn);
+        return;
+      }
       if (e.target.closest('.batch-checkbox')) return;
       if (e.target.closest('.diary-card-select')) return;
+      const card = e.target.closest('.diary-card');
+      if (!card) return;
       if (state.selectMode) {
         const cb = card.querySelector('.batch-checkbox');
         if (cb) {
@@ -3076,28 +3137,13 @@ function renderDiaryList(data, opts = {}) {
       }
       openEditor(parseInt(card.dataset.id, 10));
     });
-  });
-  list.querySelectorAll('.pin-btn').forEach(b => b.addEventListener('click', e => {
-    e.stopPropagation();
-    togglePin(parseInt(b.dataset.id, 10));
-  }));
-  list.querySelectorAll('.edit-btn').forEach(b => b.addEventListener('click', e => {
-    e.stopPropagation();
-    openEditor(parseInt(b.dataset.id, 10));
-  }));
-  list.querySelectorAll('.del-btn').forEach(b => b.addEventListener('click', e => {
-    e.stopPropagation();
-    confirmDelete(parseInt(b.dataset.id, 10));
-  }));
-  list.querySelectorAll('.export-card-btn').forEach(b => b.addEventListener('click', e => {
-    e.stopPropagation();
-    openExportModal([parseInt(b.dataset.id, 10)]);
-  }));
-  list.querySelectorAll('.move-folder-btn').forEach(b => b.addEventListener('click', e => {
-    e.stopPropagation();
-    openMoveFolderMenu(b);
-  }));
-  list.querySelectorAll('.batch-checkbox').forEach(cb => cb.addEventListener('change', updateBatchCount));
+    // change 事件不冒泡到 click，单独委托
+    list.addEventListener('change', e => {
+      if (e.target.classList && e.target.classList.contains('batch-checkbox')) {
+        updateBatchCount();
+      }
+    });
+  }
 
   renderPagination(data);
 }
@@ -3397,7 +3443,28 @@ function setSaveStatus(text, type) {
   if (status) status.textContent = text;
 }
 
-function updatePreview() {
+// 防抖版 updatePreview：高频输入（IME/快速键入）时合并多次渲染为一次，
+// 避免每次按键都重排 DOM、运行代码高亮和 resize 标注层。
+let _updatePreviewTimer = null;
+let _updatePreviewRaf = null;
+function updatePreview(opts = {}) {
+  const immediate = opts.immediate === true;
+  if (immediate) {
+    if (_updatePreviewTimer) { clearTimeout(_updatePreviewTimer); _updatePreviewTimer = null; }
+    if (_updatePreviewRaf) { cancelAnimationFrame(_updatePreviewRaf); _updatePreviewRaf = null; }
+    _runUpdatePreview();
+    return;
+  }
+  if (_updatePreviewTimer) clearTimeout(_updatePreviewTimer);
+  _updatePreviewTimer = setTimeout(() => {
+    _updatePreviewTimer = null;
+    // 用 rAF 合并到下一帧绘制，避免 setTimeout 与浏览器渲染节拍不同步造成的抖动
+    if (_updatePreviewRaf) cancelAnimationFrame(_updatePreviewRaf);
+    _updatePreviewRaf = requestAnimationFrame(_runUpdatePreview);
+  }, 200);
+}
+function _runUpdatePreview() {
+  _updatePreviewRaf = null;
   const text = document.getElementById('editor-textarea').value;
   const preview = document.getElementById('editor-preview');
   preview.innerHTML = renderMarkdown(text);
@@ -6438,7 +6505,8 @@ function bindEvents() {
     searchTimer = setTimeout(() => {
       state.filter.keyword = searchInput.value.trim();
       state.page = 1;
-      if (state.currentView === 'list') loadDiaries();
+      // 搜索过滤时不显示骨架屏（仅 300ms 防抖，骨架屏会闪烁）
+      if (state.currentView === 'list') loadDiaries({ silent: true });
     }, 300);
   });
   document.getElementById('clear-search').addEventListener('click', () => {
@@ -6578,9 +6646,9 @@ function bindEvents() {
       if (viewEditor) {
         viewEditor.classList.toggle('preview-fullscreen', mode === 'preview');
       }
-      // 切换到预览或分屏时刷新预览
+      // 切换到预览或分屏时刷新预览（立即渲染，避免防抖延迟导致首次切换空白）
       if (mode === 'preview' || mode === 'split') {
-        updatePreview();
+        updatePreview({ immediate: true });
       }
       // 显示/隐藏笔刷工具栏（仅预览模式可见）
       updateBrushToolbarVisibility();
@@ -9685,17 +9753,28 @@ if (typeof window !== 'undefined') window.pickUsers = pickUsers;
 let collabWs = null;
 let collabCurrentDiaryId = null;
 let collabDebounceTimer = null;
+let collabReconnectAttempts = 0;        // 连续失败次数（用于指数退避）
+let collabReconnectTimer = null;        // 待执行的重连定时器
+const COLLAB_RECONNECT_BASE = 1000;     // 基础间隔 1s
+const COLLAB_RECONNECT_MAX = 30000;     // 最大间隔 30s
 
 function collabConnect() {
   if (collabWs && collabWs.readyState === 1) return Promise.resolve();
   if (!state.token) return Promise.reject(new Error('no token'));
+  // 页面隐藏时不重连，待 visibilitychange 恢复时再连，避免后台无效连接
+  if (document.hidden && collabReconnectAttempts > 0) {
+    return Promise.reject(new Error('document hidden'));
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return new Promise((resolve, reject) => {
     try {
       collabWs = new WebSocket(`${proto}//${location.host}/collab?token=${state.token}`);
     } catch (e) { reject(e); return; }
 
-    collabWs.onopen = () => resolve();
+    collabWs.onopen = () => {
+      collabReconnectAttempts = 0; // 连接成功，重置退避
+      resolve();
+    };
 
     collabWs.onmessage = (ev) => {
       let data;
@@ -9731,8 +9810,19 @@ function collabConnect() {
 
     collabWs.onclose = () => {
       collabWs = null;
-      // 5秒后尝试重连
-      setTimeout(() => { if (collabCurrentDiaryId) collabConnect().then(() => { if (collabCurrentDiaryId) collabSendJoin(collabCurrentDiaryId); }).catch(() => {}); }, 5000);
+      // 指数退避重连：1s → 2s → 4s → 8s → 16s → 30s（封顶）
+      // 避免服务端故障时高频重连造成"惊群效应"
+      if (collabReconnectTimer) clearTimeout(collabReconnectTimer);
+      const delay = Math.min(COLLAB_RECONNECT_BASE * Math.pow(2, collabReconnectAttempts), COLLAB_RECONNECT_MAX);
+      collabReconnectAttempts++;
+      collabReconnectTimer = setTimeout(() => {
+        collabReconnectTimer = null;
+        if (collabCurrentDiaryId) {
+          collabConnect()
+            .then(() => { if (collabCurrentDiaryId) collabSendJoin(collabCurrentDiaryId); })
+            .catch(() => {});
+        }
+      }, delay);
     };
     collabWs.onerror = () => {};
   });
@@ -9796,6 +9886,51 @@ function renderCollabPresence(diaryId, users) {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ===== 页面可见性优化 =====
+// 用户切换标签页/最小化窗口时暂停高频定时器（心跳/消息轮询/好友刷新），
+// 减少后台资源占用与服务端压力；切回时立即触发一次刷新保持数据新鲜。
+let _visibilityPaused = {
+  heartbeat: false,        // 心跳是否被暂停（原 timer 已被 clear）
+  msgPoll: false,          // 消息轮询是否被暂停
+  friendsRefresh: false    // 好友刷新是否被暂停
+};
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // 进入后台：暂停所有轮询类定时器（不影响协同 WebSocket，让服务端自然清理）
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; _visibilityPaused.heartbeat = true; }
+    if (typeof msgState !== 'undefined' && msgState.pollTimer) {
+      clearInterval(msgState.pollTimer);
+      msgState.pollTimer = null;
+      _visibilityPaused.msgPoll = true;
+    }
+    if (typeof friendsRefreshTimer !== 'undefined' && friendsRefreshTimer) {
+      clearInterval(friendsRefreshTimer);
+      friendsRefreshTimer = null;
+      _visibilityPaused.friendsRefresh = true;
+    }
+  } else {
+    // 切回前台：恢复定时器 + 立即触发一次刷新
+    if (_visibilityPaused.heartbeat) { startHeartbeat(); _visibilityPaused.heartbeat = false; }
+    if (_visibilityPaused.msgPoll && state.currentView === 'messages') {
+      if (typeof pollNewMessages === 'function') pollNewMessages();
+      if (typeof msgState !== 'undefined') msgState.pollTimer = setInterval(pollNewMessages, 8000);
+      _visibilityPaused.msgPoll = false;
+    }
+    if (_visibilityPaused.friendsRefresh && state.currentView === 'friends') {
+      if (typeof loadFriendsView === 'function') loadFriendsView();
+      _visibilityPaused.friendsRefresh = false;
+    }
+    // 协同 WebSocket 在前台但已断开时立即重连
+    if (collabCurrentDiaryId && (!collabWs || collabWs.readyState !== 1)) {
+      if (collabReconnectTimer) { clearTimeout(collabReconnectTimer); collabReconnectTimer = null; }
+      collabReconnectAttempts = 0;
+      collabConnect()
+        .then(() => { if (collabCurrentDiaryId) collabSendJoin(collabCurrentDiaryId); })
+        .catch(() => {});
+    }
+  }
+});
 
 // ============================================================
 //  日记附件模块
