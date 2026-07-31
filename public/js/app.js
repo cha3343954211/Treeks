@@ -2298,8 +2298,13 @@ function formatDate(s) {
 }
 
 // ===== 状态管理 =====
+const initialToken = localStorage.getItem('treeks_token');
+if (initialToken) {
+  document.cookie = `treeks_token=${encodeURIComponent(initialToken)}; path=/; max-age=604800; SameSite=Lax`;
+}
+
 const state = {
-  token: localStorage.getItem('treeks_token'),
+  token: initialToken,
   user: JSON.parse(localStorage.getItem('treeks_user') || 'null'),
   currentView: 'list',
   currentNav: 'list',
@@ -2501,6 +2506,7 @@ function setAuth(token, user) {
   state.user = user;
   localStorage.setItem('treeks_token', token);
   localStorage.setItem('treeks_user', JSON.stringify(user));
+  document.cookie = `treeks_token=${encodeURIComponent(token)}; path=/; max-age=604800; SameSite=Lax`;
 }
 
 async function logout() {
@@ -2512,6 +2518,7 @@ async function logout() {
   state.user = null;
   localStorage.removeItem('treeks_token');
   localStorage.removeItem('treeks_user');
+  document.cookie = 'treeks_token=; path=/; max-age=0; SameSite=Lax';
   stopHeartbeat();
   showAuthView();
 }

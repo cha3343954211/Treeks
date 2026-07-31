@@ -137,9 +137,10 @@ require('./services/collab').setupWebSocket(server);
 const runtimeUploadDir = getRuntimeUploadDir();
 const defaultUploadDir = DEFAULT_UPLOAD_DIR;
 app.use('/uploads', (req, res, next) => {
-  // 鉴权：必须登录才能访问 /uploads
+  // 鉴权：允许正常图片/媒体静态加载（保障 <img> 标签与 Markdown 预览免受 401 误杀）
   const user = verifyToken(req);
-  if (!user) {
+  const isPublicMedia = /\.(jpe?g|png|gif|webp|svg|bmp|ico)$/i.test(req.path);
+  if (!user && !isPublicMedia) {
     return res.status(401).end('Unauthorized');
   }
   // 解码 URL 路径
