@@ -2590,6 +2590,13 @@ function showView(name) {
   document.querySelectorAll('.content-view').forEach(v => v.classList.remove('active'));
   const view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
+
+  // 同步高亮移动端底部导航
+  document.querySelectorAll('.mobile-nav-item').forEach(item => {
+    if (item.dataset.mobileView === name) item.classList.add('active');
+    else item.classList.remove('active');
+  });
+
   // 离开好友页面时停止定时刷新
   if (name !== 'friends' && typeof clearFriendsRefreshTimer === 'function') {
     clearFriendsRefreshTimer();
@@ -3465,18 +3472,125 @@ function updatePreview(opts = {}) {
 }
 function _runUpdatePreview() {
   _updatePreviewRaf = null;
-  const text = document.getElementById('editor-textarea').value;
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return;
+  const text = textarea.value;
   const preview = document.getElementById('editor-preview');
+  if (!preview) return;
+
   preview.innerHTML = renderMarkdown(text);
   highlightCodeIn(preview);
+  enhancePreviewCodeBlocks(preview);
+  enhancePreviewTaskLists(preview, textarea);
+
   // 预览内容变化后，标注层尺寸也需重新计算
   setTimeout(resizeAnnotationLayer, 50);
 }
 
+function enhancePreviewCodeBlocks(container) {
+  const pres = container.querySelectorAll('pre');
+  pres.forEach(pre => {
+    if (pre.querySelector('.code-block-header')) return;
+    const code = pre.querySelector('code');
+    if (!code) return;
+
+    let lang = 'code';
+    const classes = Array.from(code.classList);
+    const langClass = classes.find(c => c.startsWith('language-') || c.startsWith('lang-'));
+    if (langClass) {
+      lang = langClass.replace(/^(language-|lang-)/, '');
+    }
+
+    const header = document.createElement('div');
+    header.className = 'code-block-header';
+
+    const langTag = document.createElement('span');
+    langTag.className = 'code-lang-tag';
+    langTag.textContent = lang;
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'code-copy-btn';
+    copyBtn.type = 'button';
+    copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> 复制`;
+
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const codeText = code.innerText || code.textContent;
+      navigator.clipboard.writeText(codeText).then(() => {
+        copyBtn.classList.add('copied');
+        copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 已复制`;
+        setTimeout(() => {
+          copyBtn.classList.remove('copied');
+          copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> 复制`;
+        }, 1800);
+      }).catch(err => {
+        toast('复制失败: ' + err.message, 'error');
+      });
+    });
+
+    header.appendChild(langTag);
+    header.appendChild(copyBtn);
+    pre.insertBefore(header, pre.firstChild);
+  });
+}
+
+function enhancePreviewTaskLists(container, textarea) {
+  const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+  checkboxes.forEach((cb, idx) => {
+    cb.removeAttribute('disabled');
+    cb.classList.add('interactive-task-item');
+    cb.dataset.taskIndex = idx;
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const isChecked = cb.checked;
+      const val = textarea.value;
+      let count = 0;
+      const updated = val.replace(/(-|\*|\d+\.)\s+\[([ xX])\]/g, (match, prefix) => {
+        if (count === idx) {
+          count++;
+          return `${prefix} [${isChecked ? 'x' : ' '}]`;
+        }
+        count++;
+        return match;
+      });
+
+      if (updated !== val) {
+        textarea.value = updated;
+        updatePreview();
+        updateWordCount();
+        setSaveStatus('修改未保存', 'draft');
+        if (typeof collabBroadcastContent === 'function') {
+          collabBroadcastContent(updated);
+        }
+      }
+    });
+  });
+}
+
 function updateWordCount() {
-  const text = document.getElementById('editor-textarea').value;
-  const count = text.replace(/\s/g, '').length;
-  document.getElementById('word-count').textContent = count + ' 字';
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return;
+  const text = textarea.value || '';
+
+  const cjkCount = (text.match(/[\u4e00-\u9fa5\u3040-\u30ff\u1100-\u11ff]/g) || []).length;
+  const englishWords = (text.replace(/[\u4e00-\u9fa5\u3040-\u30ff\u1100-\u11ff]/g, ' ').match(/[a-zA-Z0-9_\-]+/g) || []).length;
+  const words = cjkCount + englishWords;
+
+  const chars = text.replace(/[\r\n]/g, '').length;
+  const lines = text ? text.split('\n').length : 1;
+  const readMinutes = Math.max(1, Math.ceil(words / 300));
+
+  const wordEl = document.getElementById('word-count');
+  if (wordEl) wordEl.textContent = words + ' 字';
+
+  const charEl = document.getElementById('char-count');
+  if (charEl) charEl.textContent = chars + ' 字符';
+
+  const lineEl = document.getElementById('line-count');
+  if (lineEl) lineEl.textContent = lines + ' 行';
+
+  const timeEl = document.getElementById('read-time');
+  if (timeEl) timeEl.textContent = `预估阅读 ${readMinutes} 分钟`;
 }
 
 async function saveDiary() {
@@ -6237,8 +6351,794 @@ async function loadUserStorage() {
   }
 }
 
+// ============================================================
+//  Treeks 增强编辑器功能：双向同步滚动、快捷键与拖拽上传
+// ============================================================
+
+let isSyncScrolling = false;
+function setupEditorSyncScroll() {
+  const textarea = document.getElementById('editor-textarea');
+  const previewPane = document.querySelector('.preview-pane');
+  if (!textarea || !previewPane) return;
+
+  textarea.addEventListener('scroll', () => {
+    const editorBody = document.querySelector('.editor-body');
+    if (!editorBody || !editorBody.classList.contains('mode-split')) return;
+    if (isSyncScrolling) return;
+
+    isSyncScrolling = true;
+    const maxTextareaScroll = textarea.scrollHeight - textarea.clientHeight;
+    if (maxTextareaScroll > 0) {
+      const scrollRatio = textarea.scrollTop / maxTextareaScroll;
+      const maxPreviewScroll = previewPane.scrollHeight - previewPane.clientHeight;
+      previewPane.scrollTop = scrollRatio * maxPreviewScroll;
+    }
+    requestAnimationFrame(() => {
+      isSyncScrolling = false;
+    });
+  });
+
+  previewPane.addEventListener('scroll', () => {
+    const editorBody = document.querySelector('.editor-body');
+    if (!editorBody || !editorBody.classList.contains('mode-split')) return;
+    if (isSyncScrolling) return;
+
+    isSyncScrolling = true;
+    const maxPreviewScroll = previewPane.scrollHeight - previewPane.clientHeight;
+    if (maxPreviewScroll > 0) {
+      const scrollRatio = previewPane.scrollTop / maxPreviewScroll;
+      const maxTextareaScroll = textarea.scrollHeight - textarea.clientHeight;
+      textarea.scrollTop = scrollRatio * maxTextareaScroll;
+    }
+    requestAnimationFrame(() => {
+      isSyncScrolling = false;
+    });
+  });
+}
+
+function setupEditorKeybindings() {
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return;
+
+  textarea.addEventListener('keydown', (e) => {
+    // A. Tab & Shift+Tab 缩进与反缩进
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const val = textarea.value;
+
+      if (start === end) {
+        if (e.shiftKey) {
+          const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+          if (val.substring(lineStart, lineStart + 2) === '  ') {
+            textarea.value = val.substring(0, lineStart) + val.substring(lineStart + 2);
+            textarea.selectionStart = textarea.selectionEnd = Math.max(lineStart, start - 2);
+          }
+        } else {
+          textarea.value = val.substring(0, start) + '  ' + val.substring(end);
+          textarea.selectionStart = textarea.selectionEnd = start + 2;
+        }
+      } else {
+        const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+        const lineEnd = val.indexOf('\n', end);
+        const effectiveEnd = lineEnd === -1 ? val.length : lineEnd;
+        const selectedText = val.substring(lineStart, effectiveEnd);
+        const lines = selectedText.split('\n');
+
+        let modifiedLines;
+        if (e.shiftKey) {
+          modifiedLines = lines.map(line => line.startsWith('  ') ? line.substring(2) : (line.startsWith(' ') ? line.substring(1) : line));
+        } else {
+          modifiedLines = lines.map(line => '  ' + line);
+        }
+
+        const newText = modifiedLines.join('\n');
+        textarea.value = val.substring(0, lineStart) + newText + val.substring(effectiveEnd);
+        textarea.selectionStart = lineStart;
+        textarea.selectionEnd = lineStart + newText.length;
+      }
+      updatePreview();
+      updateWordCount();
+      return;
+    }
+
+    // B. Enter 键智能列表自动续行与退出
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const start = textarea.selectionStart;
+      const val = textarea.value;
+      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const currentLine = val.substring(lineStart, start);
+
+      const taskMatch = currentLine.match(/^(\s*)(-|\*)\s+\[([ xX])\]\s+(.*)/);
+      const ulMatch = currentLine.match(/^(\s*)(-|\*)\s+(.*)/);
+      const olMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)/);
+
+      if (taskMatch) {
+        const indent = taskMatch[1];
+        const bullet = taskMatch[2];
+        const content = taskMatch[4];
+        if (!content.trim()) {
+          e.preventDefault();
+          textarea.value = val.substring(0, lineStart) + val.substring(start);
+          textarea.selectionStart = textarea.selectionEnd = lineStart;
+        } else {
+          e.preventDefault();
+          const prefix = `\n${indent}${bullet} [ ] `;
+          textarea.value = val.substring(0, start) + prefix + val.substring(start);
+          textarea.selectionStart = textarea.selectionEnd = start + prefix.length;
+        }
+        updatePreview();
+        updateWordCount();
+        return;
+      }
+
+      if (ulMatch) {
+        const indent = ulMatch[1];
+        const bullet = ulMatch[2];
+        const content = ulMatch[3];
+        if (!content.trim()) {
+          e.preventDefault();
+          textarea.value = val.substring(0, lineStart) + val.substring(start);
+          textarea.selectionStart = textarea.selectionEnd = lineStart;
+        } else {
+          e.preventDefault();
+          const prefix = `\n${indent}${bullet} `;
+          textarea.value = val.substring(0, start) + prefix + val.substring(start);
+          textarea.selectionStart = textarea.selectionEnd = start + prefix.length;
+        }
+        updatePreview();
+        updateWordCount();
+        return;
+      }
+
+      if (olMatch) {
+        const indent = olMatch[1];
+        const num = parseInt(olMatch[2], 10);
+        const content = olMatch[3];
+        if (!content.trim()) {
+          e.preventDefault();
+          textarea.value = val.substring(0, lineStart) + val.substring(start);
+          textarea.selectionStart = textarea.selectionEnd = lineStart;
+        } else {
+          e.preventDefault();
+          const prefix = `\n${indent}${num + 1}. `;
+          textarea.value = val.substring(0, start) + prefix + val.substring(start);
+          textarea.selectionStart = textarea.selectionEnd = start + prefix.length;
+        }
+        updatePreview();
+        updateWordCount();
+        return;
+      }
+    }
+
+    // C. 选中文本时的符号成对包围
+    const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
+    if (pairs[e.key]) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      if (start !== end) {
+        e.preventDefault();
+        const val = textarea.value;
+        const selected = val.substring(start, end);
+        const open = e.key;
+        const close = pairs[e.key];
+        textarea.value = val.substring(0, start) + open + selected + close + val.substring(end);
+        textarea.selectionStart = start + 1;
+        textarea.selectionEnd = end + 1;
+        updatePreview();
+        updateWordCount();
+      }
+    }
+  });
+}
+
+function setupEditorDragUpload() {
+  const pane = document.getElementById('editor-pane');
+  const dropzone = document.getElementById('editor-dropzone');
+  if (!pane || !dropzone) return;
+
+  let dragCounter = 0;
+
+  pane.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter++;
+    if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dropzone.classList.add('active');
+      dropzone.style.display = 'flex';
+    }
+  });
+
+  pane.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  pane.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      dropzone.classList.remove('active');
+      setTimeout(() => {
+        if (!dropzone.classList.contains('active')) dropzone.style.display = 'none';
+      }, 200);
+    }
+  });
+
+  pane.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    dropzone.classList.remove('active');
+    setTimeout(() => { dropzone.style.display = 'none'; }, 200);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length) {
+      handleImageUpload(files);
+    }
+  });
+}
+
+function setupFilesDragUpload() {
+  const viewFiles = document.getElementById('view-files');
+  const dropzone = document.getElementById('files-dropzone');
+  if (!viewFiles || !dropzone) return;
+
+  let dragCounter = 0;
+
+  viewFiles.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter++;
+    if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dropzone.classList.add('active');
+      dropzone.style.display = 'flex';
+    }
+  });
+
+  viewFiles.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  viewFiles.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      dropzone.classList.remove('active');
+      setTimeout(() => {
+        if (!dropzone.classList.contains('active')) dropzone.style.display = 'none';
+      }, 200);
+    }
+  });
+
+  viewFiles.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    dropzone.classList.remove('active');
+    setTimeout(() => { dropzone.style.display = 'none'; }, 200);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length) {
+      if (typeof uploadFilesList === 'function') {
+        uploadFilesList(files);
+      }
+    }
+  });
+}
+
+function setupMsgChatDragUpload() {
+  const chatSection = document.getElementById('msg-chat');
+  const dropzone = document.getElementById('msg-chat-dropzone');
+  if (!chatSection || !dropzone) return;
+
+  let dragCounter = 0;
+
+  chatSection.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!msgState || !msgState.peerId) return;
+    dragCounter++;
+    if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dropzone.classList.add('active');
+      dropzone.style.display = 'flex';
+    }
+  });
+
+  chatSection.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  chatSection.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      dropzone.classList.remove('active');
+      setTimeout(() => {
+        if (!dropzone.classList.contains('active')) dropzone.style.display = 'none';
+      }, 200);
+    }
+  });
+
+  chatSection.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    dropzone.classList.remove('active');
+    setTimeout(() => { dropzone.style.display = 'none'; }, 200);
+
+    if (!msgState || !msgState.peerId) {
+      toast('请先选择聊天好友', 'error');
+      return;
+    }
+
+    const files = e.dataTransfer.files;
+    if (files && files.length) {
+      for (const file of files) {
+        toast(`正在发送文件: ${file.name}...`, 'info');
+        try {
+          const res = await apiUploadFile(file);
+          await api('/api/messages', {
+            method: 'POST',
+            body: JSON.stringify({
+              recipientId: msgState.peerId,
+              content: `发送了文件: ${file.name}`,
+              fileId: res.id
+            })
+          });
+          toast(`已发送文件: ${file.name}`, 'success');
+        } catch (err) {
+          toast(`发送失败: ${err.message}`, 'error');
+        }
+      }
+      loadMsgHistory(msgState.peerId);
+    }
+  });
+}
+
+// ============================================================
+//  Treeks 平台全方位 UX 升级：Command Palette、AutoSave、全能文件预览器
+// ============================================================
+
+let cmdState = { items: [], activeIndex: 0, isOpen: false };
+function setupCommandPalette() {
+  const modal = document.getElementById('cmd-modal');
+  const backdrop = document.getElementById('cmd-backdrop');
+  const input = document.getElementById('cmd-input');
+  const list = document.getElementById('cmd-list');
+  if (!modal || !input || !list) return;
+
+  const defaultCommands = [
+    { icon: '📝', title: '新建日记', group: '快捷动作', action: () => openEditor() },
+    { icon: '✉️', title: '写信给好友', group: '快捷动作', action: () => openComposeLetterModal(null) },
+    { icon: '📂', title: '上传新文件', group: '快捷动作', action: () => showView('files') },
+    { icon: '📅', title: '新建日程', group: '快捷动作', action: () => showScheduleModal() },
+    { icon: '📖', title: '跳转到 日记列表', group: '页面导航', action: () => showView('list') },
+    { icon: '💬', title: '跳转到 消息对话', group: '页面导航', action: () => showView('messages') },
+    { icon: '📂', title: '跳转到 我的文件库', group: '页面导航', action: () => showView('files') },
+    { icon: '📊', title: '跳转到 统计概览', group: '页面导航', action: () => showView('stats') },
+    { icon: '⚙️', title: '跳转到 个人设置', group: '页面导航', action: () => showView('profile') },
+    { icon: '🌿', title: '切换为 森林绿 主题', group: '主题风格', action: () => changeTheme('green') },
+    { icon: '🌊', title: '切换为 海洋蓝 主题', group: '主题风格', action: () => changeTheme('blue') },
+    { icon: '💜', title: '切换为 薰衣草 主题', group: '主题风格', action: () => changeTheme('purple') },
+    { icon: '🌅', title: '切换为 暖阳橙 主题', group: '主题风格', action: () => changeTheme('orange') }
+  ];
+
+  const openCmd = () => {
+    cmdState.isOpen = true;
+    modal.style.display = 'flex';
+    input.value = '';
+    cmdState.activeIndex = 0;
+    renderCmdItems(defaultCommands);
+    setTimeout(() => input.focus(), 50);
+  };
+
+  const closeCmd = () => {
+    cmdState.isOpen = false;
+    modal.style.display = 'none';
+  };
+
+  if (backdrop) backdrop.addEventListener('click', closeCmd);
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (cmdState.isOpen) closeCmd();
+      else openCmd();
+    }
+  });
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) {
+      cmdState.activeIndex = 0;
+      renderCmdItems(defaultCommands);
+      return;
+    }
+    const filtered = defaultCommands.filter(c => c.title.toLowerCase().includes(q) || c.group.toLowerCase().includes(q));
+    cmdState.activeIndex = 0;
+    renderCmdItems(filtered);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (cmdState.items.length) {
+        cmdState.activeIndex = (cmdState.activeIndex + 1) % cmdState.items.length;
+        updateCmdActiveItem();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (cmdState.items.length) {
+        cmdState.activeIndex = (cmdState.activeIndex - 1 + cmdState.items.length) % cmdState.items.length;
+        updateCmdActiveItem();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (cmdState.items[cmdState.activeIndex]) {
+        const item = cmdState.items[cmdState.activeIndex];
+        closeCmd();
+        item.action();
+      }
+    } else if (e.key === 'Escape') {
+      closeCmd();
+    }
+  });
+
+  function renderCmdItems(items) {
+    cmdState.items = items;
+    if (!items.length) {
+      list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--fg-muted);font-size:13px;">无相关搜索命令</div>';
+      return;
+    }
+    list.innerHTML = items.map((item, idx) => `
+      <div class="cmd-item ${idx === cmdState.activeIndex ? 'active' : ''}" data-cmd-idx="${idx}">
+        <div class="cmd-item-main">
+          <span class="cmd-item-icon">${item.icon}</span>
+          <span class="cmd-item-title">${escapeHtml(item.title)}</span>
+        </div>
+        <span class="cmd-item-meta">${escapeHtml(item.group)}</span>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('[data-cmd-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.cmdIdx, 10);
+        if (items[idx]) {
+          closeCmd();
+          items[idx].action();
+        }
+      });
+    });
+  }
+
+  function updateCmdActiveItem() {
+    list.querySelectorAll('.cmd-item').forEach((el, idx) => {
+      if (idx === cmdState.activeIndex) {
+        el.classList.add('active');
+        el.scrollIntoView({ block: 'nearest' });
+      } else {
+        el.classList.remove('active');
+      }
+    });
+  }
+}
+
+let _autoSaveTimer = null;
+function setupAutoSave() {
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return;
+
+  textarea.addEventListener('input', () => {
+    if (!state.editingId && !textarea.value.trim()) return;
+    if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(() => {
+      if (state.currentView === 'editor') {
+        saveDiarySilent();
+      }
+    }, 2500);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      if (state.currentView === 'editor') {
+        e.preventDefault();
+        saveDiary();
+      }
+    }
+  });
+}
+
+async function saveDiarySilent() {
+  const title = document.getElementById('editor-title').value.trim();
+  const content = document.getElementById('editor-textarea').value;
+  if (!content.trim() && !title) return;
+
+  const mood = document.getElementById('editor-mood').value.trim();
+  const weather = document.getElementById('editor-weather').value.trim();
+  const tagsStr = document.getElementById('editor-tags').value.trim();
+  const tags = tagsStr ? tagsStr.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
+  const is_pinned = document.getElementById('editor-pinned').checked;
+  const visibility = document.getElementById('editor-visibility').value;
+  const is_public = visibility === 'public' ? 1 : 0;
+
+  const body = { title, content, mood, weather, tags, is_pinned, is_public, visibility };
+  setSaveStatus('自动保存中', 'saving');
+  try {
+    if (state.editingId) {
+      await api(`/api/diaries/${state.editingId}`, { method: 'PUT', body: JSON.stringify(body) });
+      setSaveStatus('已自动保存', 'saved');
+    }
+  } catch (e) {
+    setSaveStatus('修改未保存', 'draft');
+  }
+}
+
+function openUniversalFilePreview(file) {
+  const modal = document.getElementById('universal-file-modal');
+  const title = document.getElementById('universal-file-title');
+  const body = document.getElementById('universal-file-body');
+  const backdrop = document.getElementById('universal-file-backdrop');
+  const closeBtn = document.getElementById('universal-file-close');
+  const copyBtn = document.getElementById('btn-universal-file-copy-link');
+  const downloadLink = document.getElementById('btn-universal-file-download');
+  if (!modal || !body) return;
+
+  const fname = file.original_name || file.filename || '文件预览';
+  title.textContent = fname;
+  downloadLink.href = file.url;
+  downloadLink.download = fname;
+
+  const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(file.url);
+  const isPdf = /\.pdf$/i.test(file.url);
+  const isTxt = /\.(txt|md|json|js|ts|css|html|xml|py|go|rs|sh|sql|log|env|yml|yaml|ini)$/i.test(file.url);
+
+  if (isImage) {
+    body.innerHTML = `<div class="universal-preview-box"><img src="${file.url}" class="universal-preview-image" alt="${escapeHtml(fname)}"></div>`;
+  } else if (isPdf) {
+    body.innerHTML = `<div class="universal-preview-box" style="height:480px;"><iframe src="${file.url}" style="width:100%;height:100%;border:none;border-radius:6px;"></iframe></div>`;
+  } else if (isTxt) {
+    body.innerHTML = `<div class="universal-preview-box"><pre class="universal-preview-text">加载文本预览中...</pre></div>`;
+    fetch(file.url).then(r => r.text()).then(t => {
+      const pre = body.querySelector('pre');
+      if (pre) pre.textContent = t.slice(0, 50000);
+    }).catch(e => {
+      body.innerHTML = `<div class="universal-preview-box" style="color:var(--fg-muted);">暂时无法直接文本预览</div>`;
+    });
+  } else {
+    body.innerHTML = `<div class="universal-preview-box" style="flex-direction:column;gap:12px;color:var(--fg-muted);">
+      <div style="font-size:36px;">📁</div>
+      <div>该类型文件不支持直接在网页中预览</div>
+      <div style="font-size:12px;opacity:0.7;">（请点击右下角按钮下载原文件查看）</div>
+    </div>`;
+  }
+
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(window.location.origin + file.url).then(() => {
+      toast('文件链接已复制到剪贴板', 'success');
+    });
+  };
+
+  const close = () => { modal.style.display = 'none'; };
+  closeBtn.onclick = close;
+  backdrop.onclick = close;
+  modal.style.display = 'flex';
+}
+
+function setupEscCloseModals() {
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const cmdModal = document.getElementById('cmd-modal');
+      if (cmdModal && cmdModal.style.display !== 'none') {
+        cmdModal.style.display = 'none';
+        return;
+      }
+      const universalModal = document.getElementById('universal-file-modal');
+      if (universalModal && universalModal.style.display !== 'none') {
+        universalModal.style.display = 'none';
+        return;
+      }
+      if (typeof closeModal === 'function') {
+        closeModal();
+      }
+    }
+  });
+}
+
+function setupMobileNav() {
+  document.querySelectorAll('.mobile-nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const view = item.dataset.mobileView;
+      if (view === 'editor') {
+        openEditor();
+      } else if (view === 'list') {
+        navigateTo('list');
+      } else {
+        showView(view);
+      }
+    });
+  });
+}
+
+function setupSidebarOverlay() {
+  const overlay = document.getElementById('sidebar-overlay');
+  const sidebar = document.getElementById('sidebar');
+  if (!overlay || !sidebar) return;
+
+  overlay.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('active');
+  });
+
+  const toggleBtn = document.getElementById('sidebar-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      if (sidebar.classList.contains('open')) {
+        overlay.classList.add('active');
+      } else {
+        overlay.classList.remove('active');
+      }
+    });
+  }
+}
+
+// ===== 日记历史版本与 Diff 对比 =====
+let _verState = { current: null, versions: [], selectedVer: null };
+
+async function openVersionHistoryModal() {
+  if (!state.editingId) {
+    toast('请先打开或新建一篇已保存的日记', 'error');
+    return;
+  }
+  const modal = document.getElementById('version-history-modal');
+  const backdrop = document.getElementById('version-history-backdrop');
+  const closeBtn = document.getElementById('version-history-close');
+  const cancelBtn = document.getElementById('version-history-cancel');
+  const revertBtn = document.getElementById('version-history-revert-btn');
+  const listEl = document.getElementById('version-history-list');
+  const diffBox = document.getElementById('version-history-diff-box');
+  const diffHeader = document.getElementById('version-history-diff-header');
+  if (!modal || !listEl) return;
+
+  const close = () => { modal.style.display = 'none'; };
+  if (closeBtn) closeBtn.onclick = close;
+  if (cancelBtn) cancelBtn.onclick = close;
+  if (backdrop) backdrop.onclick = close;
+
+  listEl.innerHTML = '<div style="padding:12px;color:var(--fg-muted);font-size:12px;">加载版本记录中...</div>';
+  diffBox.innerHTML = '<div style="color:var(--fg-muted);font-size:13px;">请选择左侧历史快照查看修改变动</div>';
+  revertBtn.style.display = 'none';
+  revertBtn.disabled = true;
+  modal.style.display = 'flex';
+
+  try {
+    const data = await api(`/api/diaries/${state.editingId}/versions`);
+    _verState.current = data.current || null;
+    _verState.versions = data.versions || [];
+    _verState.selectedVer = null;
+
+    if (!_verState.versions.length) {
+      listEl.innerHTML = '<div style="padding:16px;text-align:center;color:var(--fg-muted);font-size:12.5px;">尚无历史修改记录</div>';
+      return;
+    }
+
+    listEl.innerHTML = _verState.versions.map((v, idx) => `
+      <div class="version-item ${idx === 0 ? 'active' : ''}" data-ver-idx="${idx}">
+        <div class="version-item-time">${formatMsgTime(v.created_at)}</div>
+        <div class="version-item-title">${escapeHtml(v.title || '无标题')}</div>
+      </div>
+    `).join('');
+
+    const selectVer = (idx) => {
+      const v = _verState.versions[idx];
+      if (!v) return;
+      _verState.selectedVer = v;
+      listEl.querySelectorAll('.version-item').forEach((el, i) => {
+        if (i === idx) el.classList.add('active');
+        else el.classList.remove('active');
+      });
+
+      diffHeader.innerHTML = `正在对比【当前版本】与【${formatMsgTime(v.created_at)} 快照】`;
+      diffBox.innerHTML = renderLineDiff(_verState.current ? _verState.current.content : '', v.content || '');
+      revertBtn.style.display = 'inline-flex';
+      revertBtn.disabled = false;
+      revertBtn.onclick = () => revertToVersion(v.id);
+    };
+
+    listEl.querySelectorAll('[data-ver-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        selectVer(parseInt(el.dataset.verIdx, 10));
+      });
+    });
+
+    if (_verState.versions.length > 0) {
+      selectVer(0);
+    }
+  } catch (e) {
+    listEl.innerHTML = `<div style="padding:12px;color:var(--danger);font-size:12px;">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderLineDiff(currText, oldText) {
+  const currLines = (currText || '').split('\n');
+  const oldLines = (oldText || '').split('\n');
+  let html = '';
+
+  const maxLen = Math.max(currLines.length, oldLines.length);
+  for (let i = 0; i < maxLen; i++) {
+    const cLine = currLines[i];
+    const oLine = oldLines[i];
+    if (cLine === oLine && cLine !== undefined) {
+      html += `<div class="diff-line diff-line-normal">  ${escapeHtml(cLine)}</div>`;
+    } else {
+      if (oLine !== undefined) {
+        html += `<div class="diff-line diff-line-deleted">- ${escapeHtml(oLine)}</div>`;
+      }
+      if (cLine !== undefined) {
+        html += `<div class="diff-line diff-line-added">+ ${escapeHtml(cLine)}</div>`;
+      }
+    }
+  }
+  return html || '<div style="color:var(--fg-muted);">内容无显著变动</div>';
+}
+
+async function revertToVersion(versionId) {
+  if (!state.editingId || !versionId) return;
+  if (!confirm('确定将当前日记恢复到选中的历史版本吗？')) return;
+
+  try {
+    const updated = await api(`/api/diaries/${state.editingId}/revert/${versionId}`, { method: 'POST' });
+    document.getElementById('editor-title').value = updated.title || '';
+    document.getElementById('editor-textarea').value = updated.content || '';
+    if (typeof _runUpdatePreview === 'function') _runUpdatePreview();
+    if (typeof updateWordCount === 'function') updateWordCount();
+
+    const modal = document.getElementById('version-history-modal');
+    if (modal) modal.style.display = 'none';
+    toast('已成功恢复至历史版本！', 'success');
+  } catch (e) {
+    toast(`还原失败：${e.message}`, 'error');
+  }
+}
+
 // ===== 事件绑定 =====
 function bindEvents() {
+  // 历史版本按钮
+  const verBtn = document.getElementById('btn-version-history');
+  if (verBtn) verBtn.addEventListener('click', openVersionHistoryModal);
+
+  // 触控快捷指令按钮
+  const touchCmdBtn = document.getElementById('btn-touch-cmd');
+  if (touchCmdBtn) {
+    touchCmdBtn.addEventListener('click', () => {
+      const modal = document.getElementById('cmd-modal');
+      if (modal) modal.style.display = 'flex';
+      const input = document.getElementById('cmd-input');
+      if (input) setTimeout(() => input.focus(), 50);
+    });
+  }
+
+  // 平台高级 UX 功能与移动端触控优化
+  setupMobileNav();
+  setupSidebarOverlay();
+  setupCommandPalette();
+  setupAutoSave();
+  setupEscCloseModals();
+  setupEditorSyncScroll();
+  setupEditorKeybindings();
+  setupEditorDragUpload();
+  setupFilesDragUpload();
+  setupMsgChatDragUpload();
+
   // 认证 Tab 切换
   document.querySelectorAll('.auth-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -8718,75 +9618,228 @@ async function deleteSchedule(id) {
   }, { confirmText: '删除', danger: true });
 }
 
-async function editSchedule(id) {
-  const s = calState.schedules.find(x => x.id === id);
-  if (!s) return;
-  showScheduleModal(s.schedule_date, s);
+function renderLettersList(items, tab) {
+  const c = document.getElementById('letters-content');
+  if (!items.length) {
+    c.innerHTML = `<div class="empty-state"><p>${tab === 'inbox' ? '收件箱为空' : '发件箱为空'}</p></div>`;
+    return;
+  }
+  c.innerHTML = '<div class="letters-list">' + items.map(l => {
+    const user = tab === 'inbox' ? {
+      id: l.sender_id, username: l.sender_username, nickname: l.sender_nickname, avatar: l.sender_avatar
+    } : {
+      id: l.recipient_id, username: l.recipient_username, nickname: l.recipient_nickname, avatar: l.recipient_avatar
+    };
+    const label = tab === 'inbox' ? '来自' : '发给';
+    const unread = tab === 'inbox' && !l.is_read;
+    const hasDiary = !!l.diary_title;
+    const hasFile = !!l.file_id;
+    return `<div class="letter-card ${unread ? 'letter-unread' : ''}" data-letter-id="${l.id}">
+      ${userAvatarHtml(user, 40)}
+      <div class="letter-body">
+        <div class="letter-header">
+          <span class="letter-from">${label} <strong>${escapeHtml(user.nickname || user.username)}</strong></span>
+          <span class="letter-date">${formatDate(l.created_at)}</span>
+        </div>
+        <div class="letter-subject">${escapeHtml(l.subject || '(无主题)')} ${unread ? '<span class="unread-dot"></span>' : ''}</div>
+        <div class="letter-preview">${escapeHtml((l.content || '').slice(0, 80))}${l.content && l.content.length > 80 ? '...' : ''}</div>
+        <div class="letter-attached-tags">
+          ${hasDiary ? `<span class="letter-attached-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> 日记: ${escapeHtml(l.diary_title)}</span>` : ''}
+          ${hasFile ? `<span class="letter-attached-tag file-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> 附件: ${escapeHtml(l.file_name)}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+
+  c.querySelectorAll('[data-letter-id]').forEach(card => {
+    card.addEventListener('click', () => openLetterDetail(parseInt(card.dataset.letterId, 10)));
+  });
 }
 
-function showScheduleModal(defaultDate, existing) {
-  const colors = ['#4c995c', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#ef4444', '#6b7280'];
-  const today = new Date();
-  const defaultD = defaultDate || `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+async function openLetterDetail(id) {
+  try {
+    const l = await api(`/api/letters/${id}`);
+    const hasFile = !!l.file;
+    const isImage = hasFile && l.file.url && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(l.file.url);
+    const isPdf = hasFile && l.file.url && /\.pdf$/i.test(l.file.url);
 
+    const body = `
+      <div class="letter-detail">
+        <div class="letter-detail-header">
+          ${userAvatarHtml(l.sender, 48)}
+          <div class="letter-detail-meta">
+            <div class="letter-detail-from">${escapeHtml(l.sender.nickname || l.sender.username)}</div>
+            <div class="letter-detail-date">${formatDate(l.created_at)}</div>
+          </div>
+          <button class="btn btn-danger btn-sm letter-delete-btn" data-id="${l.id}" title="删除信件">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+            <span>删除</span>
+          </button>
+        </div>
+        <h3 class="letter-detail-subject">${escapeHtml(l.subject || '(无主题)')}</h3>
+        <div class="letter-detail-content">${escapeHtml(l.content || '').replace(/\n/g, '<br>')}</div>
+        
+        ${l.diary ? `<div class="letter-detail-diary">
+          <div class="attached-diary-label">附带日记：</div>
+          <h4>${escapeHtml(l.diary.title || '(无标题)')}</h4>
+          <button class="btn btn-ghost btn-sm" data-open-diary="${l.diary.id}">在编辑器中打开</button>
+        </div>` : ''}
+
+        ${hasFile ? `
+          <div class="letter-detail-file-card">
+            <div class="letter-file-icon">📎</div>
+            <div class="letter-file-info">
+              <div class="letter-file-name" title="${escapeHtml(l.file.original_name || l.file.filename)}">${escapeHtml(l.file.original_name || l.file.filename)}</div>
+              <div class="letter-file-size">${formatBytes(l.file.size || 0)}</div>
+            </div>
+            <div class="letter-file-actions">
+              ${isImage || isPdf ? `<a href="${l.file.url}" target="_blank" class="btn btn-ghost btn-sm">在线预览</a>` : ''}
+              <a href="${l.file.url}" download="${escapeHtml(l.file.original_name || l.file.filename)}" class="btn btn-primary btn-sm">下载文件</a>
+            </div>
+          </div>
+          ${isImage ? `<div class="letter-image-preview"><img src="${l.file.url}" alt="图片预览"></div>` : ''}
+        ` : ''}
+      </div>
+    `;
+    showModal(l.subject || '信件', body, null, { hideCancel: true, confirmText: '关闭' });
+    const openBtn = document.querySelector('[data-open-diary]');
+    if (openBtn) {
+      openBtn.addEventListener('click', () => {
+        closeModal();
+        openEditor(l.diary.id);
+      });
+    }
+    const deleteBtn = document.querySelector('.letter-delete-btn');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showModal('删除信件',
+          `<p>确定要删除这封信件吗？</p><p style="color:var(--fg-muted);font-size:13px;margin-top:8px;">此操作无法撤销。</p>`,
+          async () => {
+            try {
+              await api(`/api/letters/${l.id}`, { method: 'DELETE' });
+              toast('信件已删除', 'success');
+              closeModal();
+              loadLettersList(lettersState.tab);
+              if (lettersState.tab === 'inbox') updateNavBadges();
+            } catch (err) {
+              toast(err.message || '删除失败', 'error');
+              return false;
+            }
+          },
+          { danger: true, confirmText: '删除' }
+        );
+      });
+    }
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function openComposeLetterModal(diaryId, presetRecipientId) {
   const body = `
-    <div class="form-group">
-      <label>标题</label>
-      <input type="text" id="sched-title" value="${existing ? escapeHtml(existing.title) : ''}" placeholder="日程标题" required>
-    </div>
-    <div class="form-group">
-      <label>日期</label>
-      <input type="date" id="sched-date" value="${existing ? existing.schedule_date : defaultD}">
-    </div>
-    <div class="form-group" style="display:flex;gap:12px;">
-      <div style="flex:1;">
-        <label>开始时间</label>
-        <input type="time" id="sched-start" value="${existing && existing.start_time ? existing.start_time.slice(0, 5) : ''}">
+    <div class="compose-form">
+      <div class="form-group">
+        <label>收件人</label>
+        <select id="compose-recipient" class="filter-select">
+          <option value="">选择好友...</option>
+        </select>
       </div>
-      <div style="flex:1;">
-        <label>结束时间</label>
-        <input type="time" id="sched-end" value="${existing && existing.end_time ? existing.end_time.slice(0, 5) : ''}">
+      <div class="form-group">
+        <label>主题</label>
+        <input type="text" id="compose-subject" class="filter-input" placeholder="信件主题" maxlength="200">
       </div>
-    </div>
-    <div class="form-group">
-      <label>描述</label>
-      <textarea id="sched-desc" rows="2" placeholder="可选">${existing && existing.description ? escapeHtml(existing.description) : ''}</textarea>
-    </div>
-    <div class="form-group">
-      <label>颜色标记</label>
-      <div class="color-picker">
-        ${colors.map(c => `<label class="color-option"><input type="radio" name="sched-color" value="${c}" ${(!existing || existing.color === c) ? 'checked' : ''}><span class="color-dot" style="background:${c}"></span></label>`).join('')}
+      <div class="form-group">
+        <label>内容</label>
+        <textarea id="compose-content" rows="6" class="compose-textarea" placeholder="写下你想说的话..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>附带文件附件（可选）</label>
+        <div class="compose-file-picker">
+          <select id="compose-file-select" class="filter-select" style="flex:1;">
+            <option value="">不附带文件</option>
+          </select>
+          <label class="btn btn-ghost btn-sm compose-upload-label" title="上传新文件作为附件">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span>上传附件</span>
+            <input type="file" id="compose-file-upload-input" style="display:none;">
+          </label>
+        </div>
+      </div>
+      <div id="compose-attached-info" style="display:none;" class="compose-attached-info">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span id="compose-attached-text">附带当前日记</span>
       </div>
     </div>
   `;
-
-  showModal(existing ? '编辑日程' : '新建日程', body, async () => {
-    const title = document.getElementById('sched-title').value.trim();
-    const date = document.getElementById('sched-date').value;
-    if (!title || !date) { toast('标题和日期不能为空', 'error'); return false; }
-    const payload = {
-      title,
-      schedule_date: date,
-      start_time: document.getElementById('sched-start').value || null,
-      end_time: document.getElementById('sched-end').value || null,
-      description: document.getElementById('sched-desc').value.trim() || null,
-      color: document.querySelector('input[name="sched-color"]:checked')?.value || '#4c995c'
-    };
+  showModal('写信', body, async () => {
+    const recipientId = parseInt(document.getElementById('compose-recipient').value, 10);
+    const subject = document.getElementById('compose-subject').value.trim();
+    const content = document.getElementById('compose-content').value;
+    const fileId = document.getElementById('compose-file-select').value;
+    if (!recipientId) { toast('请选择收件人', 'error'); return false; }
+    if (!content.trim()) { toast('请输入信件内容', 'error'); return false; }
     try {
-      if (existing) {
-        await api('/api/schedules/' + existing.id, { method: 'PUT', body: JSON.stringify(payload) });
-        toast('日程已更新', 'success');
-      } else {
-        await api('/api/schedules', { method: 'POST', body: JSON.stringify(payload) });
-        toast('日程已创建', 'success');
+      const payload = { recipientId, subject, content };
+      if (diaryId) payload.diaryId = diaryId;
+      if (fileId) payload.fileId = parseInt(fileId, 10);
+      await api('/api/letters', { method: 'POST', body: JSON.stringify(payload) });
+      toast('信件已发送', 'success');
+      if (typeof loadLettersList === 'function' && lettersState.tab === 'sent') {
+        loadLettersList('sent');
       }
-      await loadCalendarData();
-      renderCalendar();
-      renderDayDetail();
-      closeModal();
-    } catch (e) { toast(e.message, 'error'); }
-    return false; // 阻止自动关闭，由 closeModal 控制
-  }, { confirmText: existing ? '保存' : '创建' });
+    } catch (e) { toast(e.message, 'error'); return false; }
+  }, { confirmText: '发送' });
+
+  api('/api/friends').then(data => {
+    const sel = document.getElementById('compose-recipient');
+    (data.items || []).forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.id;
+      opt.textContent = `${f.nickname || f.username} (@${f.username})`;
+      if (presetRecipientId === f.id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }).catch(e => toast('加载好友列表失败: ' + e.message, 'error'));
+
+  const loadUserFilesSelect = (selectFileId = null) => {
+    api('/api/upload/files').then(data => {
+      const fileSel = document.getElementById('compose-file-select');
+      if (!fileSel) return;
+      fileSel.innerHTML = '<option value="">不附带文件</option>';
+      (data.items || []).forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.id;
+        opt.textContent = `📎 ${f.original_name || f.filename} (${formatBytes(f.size || 0)})`;
+        if (selectFileId && selectFileId === f.id) opt.selected = true;
+        fileSel.appendChild(opt);
+      });
+    }).catch(() => {});
+  };
+  loadUserFilesSelect();
+
+  setTimeout(() => {
+    const uploadInput = document.getElementById('compose-file-upload-input');
+    if (uploadInput) {
+      uploadInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        toast(`正在上传附件: ${file.name}...`, 'info');
+        try {
+          const res = await apiUploadFile(file);
+          toast(`附件已上传`, 'success');
+          loadUserFilesSelect(res.id);
+        } catch (err) {
+          toast(`附件上传失败: ${err.message}`, 'error');
+        }
+      });
+    }
+  }, 100);
+
+  if (diaryId) {
+    document.getElementById('compose-attached-info').style.display = '';
+    api(`/api/diaries/${diaryId}`).then(d => {
+      document.getElementById('compose-attached-text').textContent = '附带日记: ' + (d.title || '(无标题)');
+    }).catch(e => toast('加载日记信息失败', 'error'));
+  }
 }
 
 // ===== 主题设置 =====
@@ -10331,7 +11384,7 @@ function renderMsgMessages() {
     }
     return `
       <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
-        <div>
+        <div class="msg-bubble-container">
           <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${escapeHtml(m.content || '')}${fileHtml}</div>
           <div class="msg-bubble-time">${time}</div>
         </div>

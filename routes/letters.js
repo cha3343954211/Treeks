@@ -7,7 +7,7 @@ router.use(authRequired);
 
 // 发送信件
 router.post('/', (req, res) => {
-  const { recipientId, subject, content, diaryId } = req.body || {};
+  const { recipientId, subject, content, diaryId, fileId } = req.body || {};
   const rid = parseInt(recipientId, 10);
   if (!rid) return res.status(400).json({ error: '请指定收件人' });
   if (rid === req.user.id) return res.status(400).json({ error: '不能给自己写信' });
@@ -33,9 +33,19 @@ router.post('/', (req, res) => {
     diaryIdVal = did;
   }
 
+  // 可选附带文件附件：校验当前发送者是否拥有该文件
+  let fileIdVal = null;
+  if (fileId) {
+    const fid = parseInt(fileId, 10);
+    const fileItem = db.prepare('SELECT id, user_id FROM files WHERE id = ?').get(fid);
+    if (!fileItem) return res.status(404).json({ error: '附件文件不存在' });
+    if (fileItem.user_id !== req.user.id) return res.status(403).json({ error: '无权发送此文件' });
+    fileIdVal = fid;
+  }
+
   const result = db.prepare(
-    'INSERT INTO letters (sender_id, recipient_id, diary_id, subject, content) VALUES (?, ?, ?, ?, ?)'
-  ).run(req.user.id, rid, diaryIdVal, (subject || '').slice(0, 200), content || '');
+    'INSERT INTO letters (sender_id, recipient_id, diary_id, file_id, subject, content) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(req.user.id, rid, diaryIdVal, fileIdVal, (subject || '').slice(0, 200), content || '');
 
   res.status(201).json({ id: result.lastInsertRowid, message: '信件已发送' });
 });
@@ -43,12 +53,14 @@ router.post('/', (req, res) => {
 // 收件箱
 router.get('/inbox', (req, res) => {
   const rows = db.prepare(
-    `SELECT l.id, l.subject, l.content, l.is_read, l.created_at, l.read_at, l.diary_id,
+    `SELECT l.id, l.subject, l.content, l.is_read, l.created_at, l.read_at, l.diary_id, l.file_id,
             u.id AS sender_id, u.username AS sender_username, u.nickname AS sender_nickname, u.avatar AS sender_avatar,
-            d.title AS diary_title
+            d.title AS diary_title,
+            f.filename AS file_name, f.original_name AS file_orig_name, f.url AS file_url, f.size AS file_size, f.kind AS file_kind
      FROM letters l
      JOIN users u ON u.id = l.sender_id
      LEFT JOIN diaries d ON d.id = l.diary_id
+     LEFT JOIN files f ON f.id = l.file_id
      WHERE l.recipient_id = ?
      ORDER BY l.is_read ASC, l.created_at DESC`
   ).all(req.user.id);
@@ -58,12 +70,14 @@ router.get('/inbox', (req, res) => {
 // 发件箱
 router.get('/sent', (req, res) => {
   const rows = db.prepare(
-    `SELECT l.id, l.subject, l.content, l.created_at, l.diary_id,
+    `SELECT l.id, l.subject, l.content, l.created_at, l.diary_id, l.file_id,
             u.id AS recipient_id, u.username AS recipient_username, u.nickname AS recipient_nickname, u.avatar AS recipient_avatar,
-            d.title AS diary_title
+            d.title AS diary_title,
+            f.filename AS file_name, f.original_name AS file_orig_name, f.url AS file_url, f.size AS file_size, f.kind AS file_kind
      FROM letters l
      JOIN users u ON u.id = l.recipient_id
      LEFT JOIN diaries d ON d.id = l.diary_id
+     LEFT JOIN files f ON f.id = l.file_id
      WHERE l.sender_id = ?
      ORDER BY l.created_at DESC`
   ).all(req.user.id);
@@ -75,10 +89,12 @@ router.get('/:id', (req, res) => {
   const lid = parseInt(req.params.id, 10);
   const letter = db.prepare(
     `SELECT l.*, u.username AS sender_username, u.nickname AS sender_nickname, u.avatar AS sender_avatar,
-            d.title AS diary_title, d.content AS diary_content
+            d.title AS diary_title, d.content AS diary_content,
+            f.filename AS file_name, f.original_name AS file_orig_name, f.url AS file_url, f.size AS file_size, f.kind AS file_kind
      FROM letters l
      JOIN users u ON u.id = l.sender_id
      LEFT JOIN diaries d ON d.id = l.diary_id
+     LEFT JOIN files f ON f.id = l.file_id
      WHERE l.id = ?`
   ).get(lid);
   if (!letter) return res.status(404).json({ error: '信件不存在' });
@@ -108,6 +124,14 @@ router.get('/:id', (req, res) => {
       id: letter.diary_id,
       title: letter.diary_title,
       content: letter.recipient_id === req.user.id ? letter.diary_content : undefined
+    } : null,
+    file: letter.file_id ? {
+      id: letter.file_id,
+      filename: letter.file_name,
+      original_name: letter.file_orig_name,
+      url: letter.file_url,
+      size: letter.file_size,
+      kind: letter.file_kind
     } : null
   });
 });

@@ -38,11 +38,29 @@ function initDatabase() {
   // PDF 附件：filename 是用户上传的 PDF 文件名（相对路径），pdf_pages 是总页数
   addColumnIfMissing('diaries', 'pdf_filename', "TEXT DEFAULT NULL");
   addColumnIfMissing('diaries', 'pdf_pages', "INTEGER DEFAULT 0");
-  // 统一文件表：folder（所属文件夹路径），annotations（批注数据 JSON）
+  // 统一文件表：folder（所属文件夹路径），annotations（批注数据 JSON），thumbnail_url（缩略图）
   addColumnIfMissing('files', 'folder', "TEXT DEFAULT ''");
   addColumnIfMissing('files', 'annotations', "TEXT DEFAULT NULL");
+  addColumnIfMissing('files', 'thumbnail_url', "TEXT DEFAULT NULL");
+  // 信件文件附件：file_id 关联 files 表
+  addColumnIfMissing('letters', 'file_id', 'INTEGER DEFAULT NULL');
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS diary_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      diary_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      title TEXT DEFAULT '',
+      content TEXT DEFAULT '',
+      mood TEXT,
+      weather TEXT,
+      tags TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_diary_versions_diary_id ON diary_versions(diary_id);
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,

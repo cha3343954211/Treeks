@@ -418,11 +418,83 @@ router.put('/:id', (req, res) => {
   }
 
   const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
+
+  // 如果日记内容或标题发生了改变，写入历史版本快照
+  if (existing.content !== row.content || existing.title !== row.title) {
+    try {
+      db.prepare(`
+        INSERT INTO diary_versions (diary_id, user_id, title, content, mood, weather, tags, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      `).run(id, req.user.id, existing.title || '', existing.content || '', existing.mood || '', existing.weather || '', existing.tags || '');
+    } catch (ve) {
+      console.error('[Version] 写入历史版本失败:', ve.message);
+    }
+  }
+
   res.json({
     ...row,
     tags: parseTags(row.tags),
     is_pinned: !!row.is_pinned,
     is_public: !!row.is_public
+  });
+});
+
+// 获取某篇日记的历史版本列表
+router.get('/:id/versions', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const diary = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+
+  const isOwner = diary.user_id === req.user.id;
+  const canEdit = isOwner || canEditDiary(id, req.user.id);
+  if (!canEdit) return res.status(403).json({ error: '无权查看历史版本' });
+
+  const versions = db.prepare('SELECT * FROM diary_versions WHERE diary_id = ? ORDER BY id DESC LIMIT 50').all(id);
+  res.json({
+    current: { ...diary, tags: parseTags(diary.tags) },
+    versions: versions.map(v => ({ ...v, tags: parseTags(v.tags) }))
+  });
+});
+
+// 恢复日记到某个历史版本
+router.post('/:id/revert/:versionId', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const versionId = parseInt(req.params.versionId, 10);
+
+  const diary = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+
+  const isOwner = diary.user_id === req.user.id;
+  const canEdit = isOwner || canEditDiary(id, req.user.id);
+  if (!canEdit) return res.status(403).json({ error: '无权还原此日记' });
+
+  const targetVer = db.prepare('SELECT * FROM diary_versions WHERE id = ? AND diary_id = ?').get(versionId, id);
+  if (!targetVer) return res.status(404).json({ error: '历史版本不存在' });
+
+  // 在覆盖还原前，先把当前状态存为最新快照
+  db.prepare(`
+    INSERT INTO diary_versions (diary_id, user_id, title, content, mood, weather, tags, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(id, req.user.id, diary.title || '', diary.content || '', diary.mood || '', diary.weather || '', diary.tags || '');
+
+  // 还原到目标历史版本
+  db.prepare(`
+    UPDATE diaries SET
+      title = ?,
+      content = ?,
+      mood = ?,
+      weather = ?,
+      tags = ?,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(targetVer.title, targetVer.content, targetVer.mood, targetVer.weather, targetVer.tags, id);
+
+  const updated = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
+  res.json({
+    ...updated,
+    tags: parseTags(updated.tags),
+    is_pinned: !!updated.is_pinned,
+    is_public: !!updated.is_public
   });
 });
 
