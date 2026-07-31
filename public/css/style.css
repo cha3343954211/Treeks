@@ -10363,7 +10363,7 @@ textarea,
   background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  z-index: 800;
+  z-index: 1100;
   opacity: 0;
   transition: opacity 0.25s var(--ease);
 }
@@ -10373,6 +10373,9 @@ textarea,
 }
 
 @media (max-width: 768px) {
+  .sidebar {
+    z-index: 1200;
+  }
   .mobile-bottom-nav {
     display: flex;
   }
@@ -10520,3 +10523,34 @@ textarea,
   }
 }
 
+/* ---- 移动手机端专属极致自适应优化 (<640px) ---- */
+@media (max-width: 640px) {
+  .cmd-input {
+    font-size: 16px !important; /* 彻底防止 iOS 聚焦拉近放大 Viewport */
+  }
+  .version-history-body {
+    flex-direction: column !important;
+    min-height: 360px !important;
+    max-height: 70vh !important;
+  }
+  .version-history-sidebar {
+    width: 100% !important;
+    max-height: 120px !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border) !important;
+  }
+  .version-history-list {
+    display: flex !important;
+    gap: 8px !important;
+    overflow-x: auto !important;
+    padding: 8px !important;
+  }
+  .version-item {
+    min-width: 130px !important;
+    margin-bottom: 0 !important;
+    flex-shrink: 0 !important;
+  }
+  .modal {
+    z-index: 10001 !important; /* 确保高于移动底栏 999 */
+  }
+}
