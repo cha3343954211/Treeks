@@ -2622,6 +2622,10 @@ function showView(name) {
 }
 
 function navigateTo(nav) {
+  if (nav === 'templates') {
+    openTemplateGalleryModal();
+    return;
+  }
   state.currentNav = nav;
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`.sidebar-nav .nav-item[data-nav="${nav}"]`);
@@ -11704,11 +11708,16 @@ function handleIncomingWsMessage(payload) {
 }
 
 async function toggleZenMode() {
-  if (state.currentNav !== 'editor' || !document.getElementById('editor-textarea')) {
+  if (state.currentView !== 'editor' || !document.getElementById('editor-textarea')) {
     if (typeof openEditor === 'function') {
-      await openEditor(null);
+      await openEditor(state.editingId || null);
+    } else {
+      showView('editor');
     }
   }
+
+  const editorView = document.getElementById('view-editor');
+  if (editorView) editorView.classList.add('active');
 
   const isZen = document.body.classList.toggle('zen-active');
   const exitBtn = document.getElementById('zen-exit-floating-btn');

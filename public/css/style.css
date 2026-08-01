@@ -10764,6 +10764,8 @@ body.zen-active .editor-container,
 body.zen-active .editor-body,
 body.zen-active .editor-pane {
   display: block !important;
+  opacity: 1 !important;
+  visibility: visible !important;
   width: 100% !important;
   height: auto !important;
   min-height: calc(100vh - 160px) !important;
