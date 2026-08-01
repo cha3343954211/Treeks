@@ -1381,7 +1381,8 @@ function setupBrushAnnotations() {
 
   // 窗口尺寸变化时重新计算 SVG 尺寸
   window.addEventListener('resize', () => {
-    if (document.getElementById('editor-view') && document.getElementById('editor-view').style.display !== 'none') {
+    const editorView = document.getElementById('view-editor');
+    if (editorView && editorView.classList.contains('active')) {
       resizeAnnotationLayer();
     }
   });
@@ -12331,7 +12332,7 @@ async function useTemplateFromGallery(id) {
   const tpl = all.find(t => t.id === id);
   if (!tpl) return;
 
-  const isAlreadyInEditor = (state.currentView === 'editor' || document.getElementById('view-editor')?.style.display !== 'none');
+  const isAlreadyInEditor = (state.currentView === 'editor' || document.getElementById('view-editor')?.classList.contains('active'));
 
   if (!isAlreadyInEditor) {
     if (typeof openEditor === 'function') {
