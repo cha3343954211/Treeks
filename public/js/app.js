@@ -7121,6 +7121,11 @@ function openUniversalFilePreview(file) {
 function setupEscCloseModals() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      const quickPop = document.getElementById('quick-template-popover');
+      if (quickPop && quickPop.style.display !== 'none') {
+        quickPop.style.display = 'none';
+        return;
+      }
       const tplModal = document.getElementById('template-gallery-modal');
       if (tplModal && tplModal.style.display !== 'none') {
         tplModal.style.display = 'none';
@@ -7325,12 +7330,12 @@ function bindEvents() {
     document.getElementById('on-this-day-modal').style.display = 'none';
   });
 
-  // 模板功能绑定：所有模板入口统一平滑导航至独立全屏【日记模板工坊】大屏页面
+  // 模板功能绑定：写日记界面【模板】按钮唤起快捷极速应用弹窗，侧边栏按钮切入大屏工坊
   const tplBtn = document.getElementById('btn-template-gallery');
   if (tplBtn) {
     tplBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      navigateTo('templates');
+      openQuickTemplatePopover();
     });
   }
   const navTplBtn = document.getElementById('btn-nav-template-gallery');
@@ -12591,13 +12596,110 @@ function renderSpotlightTemplateList(query = '') {
   });
 }
 
-// ⚡ 全局零死角捕获【模板】按钮点击，无缝导航至大屏【日记模板工坊】
+// ⚡ 极速快捷模板应用弹窗引擎 (Quick Template Floating Popover)
+function openQuickTemplatePopover() {
+  const popover = document.getElementById('quick-template-popover');
+  if (!popover) return;
+
+  popover.style.display = 'flex';
+
+  const backdrop = document.getElementById('quick-tpl-backdrop');
+  const closeBtn = document.getElementById('quick-tpl-close-btn');
+  const goWorkspace = document.getElementById('quick-tpl-go-workspace');
+  const searchInput = document.getElementById('quick-tpl-search');
+
+  const closePopover = () => {
+    popover.style.display = 'none';
+  };
+
+  if (backdrop) backdrop.onclick = closePopover;
+  if (closeBtn) closeBtn.onclick = closePopover;
+  if (goWorkspace) {
+    goWorkspace.onclick = () => {
+      closePopover();
+      navigateTo('templates');
+    };
+  }
+
+  if (searchInput) {
+    searchInput.value = '';
+    setTimeout(() => searchInput.focus(), 50);
+
+    if (!searchInput.dataset.bound) {
+      searchInput.dataset.bound = 'true';
+      searchInput.addEventListener('input', (e) => {
+        renderQuickTemplateList(e.target.value);
+      });
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closePopover();
+      });
+    }
+  }
+
+  renderQuickTemplateList('');
+}
+
+function renderQuickTemplateList(query = '') {
+  const body = document.getElementById('quick-tpl-body');
+  if (!body) return;
+
+  const all = TemplateManager.getAllTemplates();
+  let filtered = all;
+
+  if (query && query.trim()) {
+    const q = query.trim().toLowerCase();
+    filtered = all.filter(t => 
+      (t.name && t.name.toLowerCase().includes(q)) ||
+      (t.desc && t.desc.toLowerCase().includes(q)) ||
+      (t.content && t.content.toLowerCase().includes(q))
+    );
+  }
+
+  if (filtered.length === 0) {
+    body.innerHTML = `
+      <div style="padding: 24px; text-align: center; color: var(--fg-muted); font-size: 13px;">
+        未找到匹配的日记模板
+      </div>
+    `;
+    return;
+  }
+
+  const iconMap = { sunrise: '🌅', grid: '🧩', star: '🌟', target: '🎯', book: '📖', code: '💻' };
+
+  body.innerHTML = filtered.map(t => {
+    const icon = iconMap[t.icon] || t.icon || '📝';
+    return `
+      <div class="quick-tpl-item" data-quick-tpl-id="${t.id}">
+        <div class="quick-tpl-item-icon">${icon}</div>
+        <div class="quick-tpl-item-info">
+          <div class="quick-tpl-item-name">
+            <span>${escapeHtml(t.name)}</span>
+            <span style="font-size:10px; opacity:0.8; font-weight:normal;">${t.isCustom ? '✍️ 自定义' : '🌟 官方'}</span>
+          </div>
+          <div class="quick-tpl-item-desc">${escapeHtml(t.desc || '快捷 Markdown 骨架模板')}</div>
+        </div>
+        <div class="quick-tpl-item-btn">套用</div>
+      </div>
+    `;
+  }).join('');
+
+  body.querySelectorAll('.quick-tpl-item').forEach(item => {
+    item.onclick = () => {
+      const id = item.dataset.quickTplId;
+      const popover = document.getElementById('quick-template-popover');
+      if (popover) popover.style.display = 'none';
+      useTemplateFromGallery(id);
+    };
+  });
+}
+
+// ⚡ 全局零死角捕获【模板】按钮点击，唤起极速快捷应用弹窗
 document.addEventListener('click', (e) => {
   const tplBtn = e.target.closest('#btn-template-gallery');
   if (tplBtn) {
     e.preventDefault();
     e.stopPropagation();
-    navigateTo('templates');
+    openQuickTemplatePopover();
   }
 });
 
