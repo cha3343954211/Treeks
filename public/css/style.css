@@ -1418,6 +1418,19 @@ html, body {
   box-shadow: 0 0 0 2px var(--accent), 0 4px 10px rgba(0, 0, 0, 0.2);
 }
 
+/* ⚡ GoodNotes 级 0 延迟动态 Canvas 实时墨水画板 */
+.brush-active-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 55;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
 /* ===== 橡皮工具组：模式选择器 + 半径滑块 ===== */
 .brush-eraser-group {
   display: inline-flex;

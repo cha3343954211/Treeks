@@ -1626,20 +1626,82 @@ function onBrushPointerDown(e) {
     return;
   }
 
+// ⚡ GoodNotes 级 0 延迟动态 Canvas 实时出墨渲染（120Hz 极速跟手，0 毫秒延迟）
+let activeCanvasRafId = null;
+function renderActiveCanvasInk() {
+  if (activeCanvasRafId) cancelAnimationFrame(activeCanvasRafId);
+  activeCanvasRafId = requestAnimationFrame(() => {
+    const canvas = document.getElementById('brush-active-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const pts = brushState.points;
+    if (!pts || pts.length === 0) return;
+
+    // 清空画板
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const type = brushState.tool;
+    const isHighlight = type === 'highlight';
+    const color = brushState.color || '#ffeb3b';
+    const size = brushState.size || 6;
+    const op = brushState.opacity !== undefined ? brushState.opacity : 1;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isHighlight ? Math.max(size, 10) * 1.8 : size;
+    ctx.globalAlpha = isHighlight ? (0.45 * op) : op;
+
+    if (isHighlight) {
+      const isDark = document.documentElement.getAttribute('data-mode') === 'dark';
+      if (!isDark) ctx.globalCompositeOperation = 'multiply';
+    }
+
+    ctx.beginPath();
+    if (pts.length === 1) {
+      ctx.arc(pts[0].x, pts[0].y, ctx.lineWidth / 2, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    } else if (pts.length === 2) {
+      ctx.moveTo(pts[0].x, pts[0].y);
+      ctx.lineTo(pts[1].x, pts[1].y);
+      ctx.stroke();
+    } else {
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const midX = (pts[i].x + pts[i + 1].x) / 2;
+        const midY = (pts[i].y + pts[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+      }
+      const last = pts[pts.length - 1];
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  });
+}
+
   brushState.drawing = true;
   brushState.points = [pt];
   brushState.startPoint = pt;
   svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
 
-  // 创建临时绘制元素
+  // 初始化动态 Canvas 像素尺寸
   if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
-    // 荧光笔/钢笔：实时绘制
-    const el = createBrushElement(brushState.tool, brushState.color, brushState.size, brushState.points, brushState.opacity);
-    if (el) {
-      el.setAttribute('data-temp', 'true');
-      svg.appendChild(el);
-      brushState.currentPath = el;
+    const canvas = document.getElementById('brush-active-canvas');
+    const wrapper = document.getElementById('preview-content-wrapper');
+    if (canvas && wrapper) {
+      const w = wrapper.clientWidth;
+      const h = wrapper.clientHeight;
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
     }
+    renderActiveCanvasInk();
   } else if (brushState.tool === 'annotate') {
     // 讲解笔：先画临时线段，松开时确定
     const g = svgEl('g', { 'data-temp': 'true' });
@@ -1711,10 +1773,7 @@ function onBrushPointerMove(e) {
 
   if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
     brushState.points.push(pt);
-    if (brushState.currentPath) {
-      const d = brushState.points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-      brushState.currentPath.setAttribute('points', d);
-    }
+    renderActiveCanvasInk();
   } else if (brushState.tool === 'annotate') {
     // 更新临时线段
     if (brushState.currentPath) {
@@ -1863,6 +1922,13 @@ function onBrushPointerUp(e) {
   brushState.drawing = false;
   const svg = document.getElementById('annotation-layer');
   if (!svg) return;
+
+  // ⚡ 抬笔时清空动态 0 延迟出墨 Canvas 画板
+  const activeCanvas = document.getElementById('brush-active-canvas');
+  if (activeCanvas) {
+    const ctx = activeCanvas.getContext('2d');
+    ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+  }
 
   // 移除临时元素
   if (brushState.currentPath && brushState.currentPath.parentNode) {
