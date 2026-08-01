@@ -599,30 +599,52 @@ function createBrushElement(type, color, size, points, opacity, text) {
     });
   }
 
-  // 荧光笔 / 钢笔：用 polyline 绘制平滑路径
+// GoodNotes 级别二次贝塞尔 Spline 平滑算法（把折线 polyline 提升为曲线 path d="M... Q..."）
+function generateSmoothSvgPath(pts) {
+  if (!pts || pts.length === 0) return '';
+  if (pts.length === 1) {
+    return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} L ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  }
+  if (pts.length === 2) {
+    return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} L ${pts[1].x.toFixed(1)} ${pts[1].y.toFixed(1)}`;
+  }
+
+  let str = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const midX = (pts[i].x + pts[i + 1].x) / 2;
+    const midY = (pts[i].y + pts[i + 1].y) / 2;
+    str += ` Q ${pts[i].x.toFixed(1)} ${pts[i].y.toFixed(1)}, ${midX.toFixed(1)} ${midY.toFixed(1)}`;
+  }
+  const last = pts[pts.length - 1];
+  str += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return str;
+}
+
+  // 荧光笔 / 钢笔：使用 GoodNotes 二次贝塞尔 Spline 平滑曲线绘制
   const isHighlight = type === 'highlight';
-  const baseAlpha = isHighlight ? 0.45 : 1;
-  const strokeColor = isHighlight ? hexToRgba(color, baseAlpha) : color;
-  const strokeWidth = isHighlight ? Math.max(size, 8) * 2 : size;
-  const d = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const path = svgEl('polyline', {
-    points: d,
+  const strokeColor = color;
+  const strokeWidth = isHighlight ? Math.max(size, 10) * 1.8 : size;
+  const pathD = generateSmoothSvgPath(points);
+  
+  const attrs = {
+    d: pathD,
     fill: 'none',
     stroke: strokeColor,
     'stroke-width': strokeWidth,
-    'stroke-linecap': isHighlight ? 'butt' : 'round',
-    'stroke-linejoin': isHighlight ? 'miter' : 'round',
-    'stroke-opacity': op,
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    'stroke-opacity': isHighlight ? (0.45 * op) : op,
     'data-brush': type,
     'data-color': color,
     'data-size': size
-  });
+  };
+
+  const pathEl = svgEl('path', attrs);
   if (isHighlight) {
-    // 改进的荧光笔：浅色模式下用 mix-blend-mode 让多次叠加更自然（暗色模式跳过避免不可见）
     const isDark = document.documentElement.getAttribute('data-mode') === 'dark';
-    if (!isDark) path.style.mixBlendMode = 'multiply';
+    if (!isDark) pathEl.style.mixBlendMode = 'multiply';
   }
-  return path;
+  return pathEl;
 }
 
 // 渲染所有路径到 SVG 层
@@ -7167,6 +7189,18 @@ async function revertToVersion(versionId) {
 
 // ===== 事件绑定 =====
 function bindEvents() {
+  // GoodNotes 常用快选色球
+  document.querySelectorAll('.quick-color-dot').forEach(dot => {
+    dot.addEventListener('click', () => {
+      document.querySelectorAll('.quick-color-dot').forEach(d => d.classList.remove('active'));
+      dot.classList.add('active');
+      const color = dot.dataset.color;
+      if (color && typeof setBrushColor === 'function') {
+        setBrushColor(color);
+      }
+    });
+  });
+
   // 历史版本按钮
   const verBtn = document.getElementById('btn-version-history');
   if (verBtn) verBtn.addEventListener('click', openVersionHistoryModal);
