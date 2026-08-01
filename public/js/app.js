@@ -6988,6 +6988,10 @@ function openUniversalFilePreview(file) {
 function setupEscCloseModals() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (document.body.classList.contains('zen-active')) {
+        toggleZenMode();
+        return;
+      }
       const cmdModal = document.getElementById('cmd-modal');
       if (cmdModal && cmdModal.style.display !== 'none') {
         cmdModal.style.display = 'none';
@@ -11699,12 +11703,28 @@ function handleIncomingWsMessage(payload) {
   }
 }
 
-// ===== 🧘 禅/专注沉浸模式 (Zen Focus Mode) =====
-function toggleZenMode() {
+async function toggleZenMode() {
+  if (state.currentNav !== 'editor' || !document.getElementById('editor-textarea')) {
+    if (typeof openEditor === 'function') {
+      await openEditor(null);
+    }
+  }
+
   const isZen = document.body.classList.toggle('zen-active');
+  const exitBtn = document.getElementById('zen-exit-floating-btn');
+
   if (isZen) {
-    toast('已开启 Zen 专注书写模式 (按 Esc 退出)', 'info');
+    if (exitBtn) {
+      exitBtn.style.display = 'block';
+      exitBtn.onclick = () => toggleZenMode();
+    }
+    toast('已开启 Zen 专注书写模式 (点击顶部胶囊或按 Esc 退出)', 'info');
+    setTimeout(() => {
+      const textarea = document.getElementById('editor-textarea');
+      if (textarea) textarea.focus();
+    }, 100);
   } else {
+    if (exitBtn) exitBtn.style.display = 'none';
     toast('已退出 专注书写模式', 'info');
   }
 }
