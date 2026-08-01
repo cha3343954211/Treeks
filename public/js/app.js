@@ -12588,6 +12588,16 @@ function renderSpotlightTemplateList(query = '') {
   });
 }
 
+// ⚡ 全局零死角捕获【模板】按钮点击，解决任何事件冒泡阻断问题
+document.addEventListener('click', (e) => {
+  const tplBtn = e.target.closest('#btn-template-gallery');
+  if (tplBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    openTemplateGalleryModal();
+  }
+});
+
 // ===== 🔒 私密锁与 PIN 码设置 =====
 let currentPinBuffer = '';
 let currentLockingDiaryId = null;

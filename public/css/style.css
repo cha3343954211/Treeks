@@ -11042,6 +11042,9 @@ textarea,
 /* ===== 🌟 100% 仿照快捷指令窗口 (#cmd-modal) 重造 Spotlight 模板弹窗 ===== */
 #template-gallery-modal {
   display: none;
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
   align-items: flex-start !important;
   justify-content: center !important;
   padding-top: 12vh !important;
