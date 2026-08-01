@@ -7182,6 +7182,8 @@ function bindEvents() {
   // 模态模板库
   const tplBtn = document.getElementById('btn-template-gallery');
   if (tplBtn) tplBtn.addEventListener('click', openTemplateGalleryModal);
+  const navTplBtn = document.getElementById('btn-nav-template-gallery');
+  if (navTplBtn) navTplBtn.addEventListener('click', openTemplateGalleryModal);
   const closeTpl = document.getElementById('btn-close-template-gallery');
   if (closeTpl) closeTpl.addEventListener('click', () => {
     document.getElementById('template-gallery-modal').style.display = 'none';
@@ -11815,17 +11817,27 @@ function openTemplateGalleryModal() {
   modal.style.display = 'flex';
 
   document.querySelectorAll('.template-card').forEach(card => {
-    card.onclick = () => {
+    card.onclick = async () => {
       const type = card.dataset.template;
       if (type && DIARY_TEMPLATES[type]) {
-        const textarea = document.getElementById('editor-textarea');
-        if (textarea) {
-          textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + DIARY_TEMPLATES[type];
-          if (typeof updatePreview === 'function') updatePreview();
-          if (typeof updateWordCount === 'function') updateWordCount();
+        // 如果当前不在编辑器视图，自动唤起新日记编辑
+        if (state.currentNav !== 'editor' || !document.getElementById('editor-textarea')) {
+          if (typeof openEditor === 'function') {
+            await openEditor(null);
+          }
         }
-        modal.style.display = 'none';
-        toast('已成功载入模态创作模板！', 'success');
+
+        setTimeout(() => {
+          const textarea = document.getElementById('editor-textarea');
+          if (textarea) {
+            textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + DIARY_TEMPLATES[type];
+            if (typeof _runUpdatePreview === 'function') _runUpdatePreview();
+            if (typeof updateWordCount === 'function') updateWordCount();
+            textarea.focus();
+          }
+          modal.style.display = 'none';
+          toast('已成功载入模态创作模板！', 'success');
+        }, 100);
       }
     };
   });
