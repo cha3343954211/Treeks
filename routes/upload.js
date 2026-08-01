@@ -17,6 +17,17 @@ const DOC_EXTS = /\.(docx?|xlsx?|xlsb?|pptx?|odt|ods|odp|rtf)$/i;
 const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|svg)$/i;
 const PDF_EXTS = /\.pdf$/i;
 
+function fixChineseFilename(name) {
+  if (!name) return 'file';
+  try {
+    const fixed = Buffer.from(name, 'latin1').toString('utf8');
+    if (fixed && !fixed.includes('\uFFFD') && /[\u4e00-\u9fa5]/.test(fixed)) {
+      return fixed;
+    }
+  } catch (_) {}
+  return name;
+}
+
 function classifyFile(filename) {
   const ext = path.extname(filename).toLowerCase();
   if (IMAGE_EXTS.test(ext)) return { kind: 'image', subdir: 'images' };
@@ -144,6 +155,22 @@ function formatBytes(n) {
   return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+function canAccessFile(fileId, userId) {
+  return !!db.prepare(
+    `SELECT 1 FROM files f
+     WHERE f.id = ? AND (
+       f.user_id = ?
+       OR EXISTS (SELECT 1 FROM letters l WHERE l.file_id = f.id AND (l.sender_id = ? OR l.recipient_id = ?))
+       OR EXISTS (SELECT 1 FROM messages m WHERE m.file_id = f.id AND (m.sender_id = ? OR m.recipient_id = ?))
+     )`
+  ).get(fileId, userId, userId, userId, userId, userId);
+}
+
+function getAccessibleFile(fileId, userId) {
+  const row = db.prepare('SELECT * FROM files WHERE id = ?').get(fileId);
+  return row && canAccessFile(row.id, userId) ? row : null;
+}
+
 // ===== 通用文件 API（"我的文件"页面） =====
 
 // 上传单个文件（图片 / PDF / 文本 / 文档）
@@ -174,10 +201,11 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
     // 文本/文档：占位 URL（创建后用 ID 重写）
     url = `/uploads/_pending/${req.file.filename}`;
   }
+  const safeOriginalName = fixChineseFilename(req.file.originalname);
   const ins = db.prepare(
     `INSERT INTO files (user_id, kind, filename, original_name, mime_type, size, url, folder)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(req.user.id, kind, req.file.filename, req.file.originalname, req.file.mimetype || '', req.file.size, url, folder);
+  ).run(req.user.id, kind, req.file.filename, safeOriginalName, req.file.mimetype || '', req.file.size, url, folder);
   const fileId = ins.lastInsertRowid;
   // 文本/文档用 ID 生成稳定 URL
   if (kind === 'text' || kind === 'document') {
@@ -191,7 +219,7 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
     url,
     folder,
     filename: req.file.filename,
-    originalName: req.file.originalname,
+    originalName: safeOriginalName,
     size: req.file.size,
     mimeType: req.file.mimetype || ''
   });
@@ -210,7 +238,7 @@ router.get('/files', (req, res) => {
     `SELECT id, kind, filename, original_name, mime_type, size, url, folder, created_at
      FROM files WHERE ${where.join(' AND ')} ORDER BY created_at DESC`
   ).all(...args);
-  res.json({ items: rows });
+  res.json({ items: rows.map(r => ({ ...r, original_name: fixChineseFilename(r.original_name) })) });
 });
 
 // 重命名文件
@@ -528,7 +556,7 @@ router.delete('/images/:id', (req, res) => {
 router.get('/file/:id/raw', (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: '参数错误' });
-  const row = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  const row = getAccessibleFile(id, req.user.id);
   if (!row) return res.status(404).json({ error: '文件不存在' });
   // 物理文件位置
   const { subdir } = classifyFile(row.original_name || row.filename);
@@ -537,30 +565,30 @@ router.get('/file/:id/raw', (req, res) => {
   const baseDirs = runtimeDir === defaultDir ? [runtimeDir] : [runtimeDir, defaultDir];
   let filePath = null;
   for (const base of baseDirs) {
-    const p = path.join(base, String(req.user.id), subdir, row.filename);
+    const p = path.join(base, String(row.user_id), subdir, row.filename);
     if (fs.existsSync(p)) { filePath = p; break; }
     // 兼容旧版直存
-    const legacy = path.join(base, String(req.user.id), row.filename);
+    const legacy = path.join(base, String(row.user_id), row.filename);
     if (fs.existsSync(legacy)) { filePath = legacy; break; }
   }
   if (!filePath) return res.status(404).json({ error: '物理文件不存在' });
   const stat = fs.statSync(filePath);
-  // 设置合适的 Content-Type
-  let contentType = row.mime_type || 'application/octet-stream';
-  if (row.kind === 'text' && !row.mime_type) {
-    const ext = path.extname(row.original_name || row.filename).toLowerCase();
-    const textTypes = {
-      '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
-      '.json': 'application/json', '.xml': 'application/xml', '.md': 'text/markdown',
-      '.csv': 'text/csv', '.txt': 'text/plain'
-    };
-    if (textTypes[ext]) contentType = textTypes[ext] + '; charset=utf-8';
-    else contentType = 'text/plain; charset=utf-8';
-  }
+  // Never render user-controlled HTML/script in the application origin.
+  const contentType = row.kind === 'text'
+    ? 'text/plain; charset=utf-8'
+    : 'application/octet-stream';
+  const downloadName = (row.original_name || row.filename).replace(/[\r\n"]/g, '_');
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Length', stat.size);
   res.setHeader('Cache-Control', 'private, max-age=300');
-  fs.createReadStream(filePath).pipe(res);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
+  const stream = fs.createReadStream(filePath);
+  stream.on('error', () => {
+    if (!res.headersSent) res.status(500).json({ error: '文件读取失败' });
+    else res.destroy();
+  });
+  stream.pipe(res);
 });
 
 // 读取文本文件内容（仅 text 类型；自动检测编码）
@@ -607,13 +635,17 @@ router.patch('/file/:id/text', (req, res) => {
   if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
   const filePath = path.join(userDir, row.filename);
   try {
-    fs.writeFileSync(filePath, content, 'utf-8');
-    // 更新 size
     const newSize = Buffer.byteLength(content, 'utf-8');
+    if (newSize > 2 * 1024 * 1024) {
+      return res.status(413).json({ error: '文本文件过大（>2MB）' });
+    }
+    checkStorage(req.user, Math.max(0, newSize - (row.size || 0)));
+    fs.writeFileSync(filePath, content, 'utf-8');
     db.prepare('UPDATE files SET size = ? WHERE id = ?').run(newSize, id);
     res.json({ message: '已保存', size: newSize });
   } catch (e) {
-    res.status(500).json({ error: '保存失败：' + e.message });
+    const isQuotaError = e.message && e.message.includes('存储空间不足');
+    res.status(isQuotaError ? 400 : 500).json({ error: isQuotaError ? e.message : '保存失败' });
   }
 });
 
@@ -652,9 +684,12 @@ router.get('/pdf/:filename', (req, res) => {
   const runtimeDir = getRuntimeUploadDir();
   const defaultDir = DEFAULT_UPLOAD_DIR;
   const baseDirs = runtimeDir === defaultDir ? [runtimeDir] : [runtimeDir, defaultDir];
+  const candidates = db.prepare("SELECT id, user_id FROM files WHERE filename = ? AND kind = 'pdf'").all(filename);
+  const fileRow = candidates.find(item => canAccessFile(item.id, req.user.id));
+  if (!fileRow) return res.status(404).json({ error: '文件不存在' });
   let filePath = null;
   for (const base of baseDirs) {
-    const p = path.join(base, String(req.user.id), 'pdf', filename);
+    const p = path.join(base, String(fileRow.user_id), 'pdf', filename);
     if (fs.existsSync(p)) { filePath = p; break; }
   }
   if (!filePath) return res.status(404).json({ error: '文件不存在' });
@@ -665,17 +700,29 @@ router.get('/pdf/:filename', (req, res) => {
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=300');
   if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10) || 0;
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+    if (!match) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+    const start = Number(match[1]);
+    const end = match[2] ? Number(match[2]) : fileSize - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= fileSize || end < start || end >= fileSize) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
     const chunksize = end - start + 1;
     res.status(206);
     res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
     res.setHeader('Content-Length', chunksize);
-    fs.createReadStream(filePath, { start, end }).pipe(res);
+    const stream = fs.createReadStream(filePath, { start, end });
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   } else {
     res.setHeader('Content-Length', fileSize);
-    fs.createReadStream(filePath).pipe(res);
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   }
 });
 

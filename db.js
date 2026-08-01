@@ -11,11 +11,16 @@ if (!fs.existsSync(DB_PATH)) {
 const db = new Database(path.join(DB_PATH, 'treeks.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
+db.pragma('synchronous = NORMAL');
 
 function initDatabase() {
-  // 兼容旧库：先补字段，再执行 CREATE TABLE/INDEX（确保索引引用的列存在）
+  // Existing tables need new columns before indexes are created. On a fresh
+  // database PRAGMA returns no columns, so the current CREATE definitions below
+  // create the complete schema directly.
   const addColumnIfMissing = (table, column, def) => {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (cols.length === 0) return;
     if (!cols.includes(column)) {
       try {
         db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
@@ -72,6 +77,7 @@ function initDatabase() {
       status TEXT DEFAULT 'active',
       storage_limit INTEGER DEFAULT 104857600,
       theme TEXT DEFAULT 'green',
+      last_active_at TEXT DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -85,6 +91,10 @@ function initDatabase() {
       tags TEXT,
       is_pinned INTEGER DEFAULT 0,
       is_public INTEGER DEFAULT 0,
+      visibility TEXT DEFAULT 'private',
+      folder_id INTEGER DEFAULT NULL,
+      pdf_filename TEXT DEFAULT NULL,
+      pdf_pages INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -133,6 +143,7 @@ function initDatabase() {
       url TEXT NOT NULL,
       folder TEXT DEFAULT '',
       annotations TEXT,
+      thumbnail_url TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -254,6 +265,7 @@ function initDatabase() {
       sender_id INTEGER NOT NULL,
       recipient_id INTEGER NOT NULL,
       diary_id INTEGER,
+      file_id INTEGER,
       subject TEXT DEFAULT '',
       content TEXT DEFAULT '',
       is_read INTEGER DEFAULT 0,
@@ -261,7 +273,8 @@ function initDatabase() {
       read_at TEXT,
       FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE SET NULL
+      FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE SET NULL,
+      FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_letters_recipient ON letters(recipient_id, is_read);
@@ -314,7 +327,29 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_messages_recipient_pair ON messages(recipient_id, sender_id, created_at);
   `);
 
-  // 兼容旧库：补字段（已在 initDatabase 开头执行）
+  // Normalize future inserts even when an old SQLite table still has a
+  // datetime('now', 'localtime') default in its persisted schema.
+  const timestampTables = [
+    'users', 'diaries', 'folders', 'images', 'files', 'file_folders',
+    'admin_logs', 'schedules', 'friends', 'friend_requests',
+    'diary_collaborators', 'diary_visible_to', 'letters', 'user_blocks',
+    'diary_attachments', 'messages', 'diary_versions'
+  ];
+  for (const table of timestampTables) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes('created_at') || !cols.includes('id')) continue;
+    const updatedAt = cols.includes('updated_at')
+      ? ", updated_at = CASE WHEN updated_at = datetime('now', 'localtime') THEN datetime('now') ELSE updated_at END"
+      : '';
+    db.exec(`DROP TRIGGER IF EXISTS trg_${table}_utc_insert;
+      CREATE TRIGGER trg_${table}_utc_insert
+      AFTER INSERT ON ${table}
+      WHEN datetime('now', 'localtime') != datetime('now')
+       AND NEW.created_at = datetime('now', 'localtime')
+      BEGIN
+        UPDATE ${table} SET created_at = datetime('now')${updatedAt} WHERE id = NEW.id;
+      END;`);
+  }
 
   // 默认设置
   const defaultSettings = {
@@ -460,6 +495,22 @@ function initDatabase() {
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pdf_attach_migration_v1', ?)").run(String(attMigrated));
     if (attMigrated > 0) console.log(`[DB] 已迁移 ${attMigrated} 条旧 PDF 绑定到 diary_attachments 表`);
   }
+
+  // 乱码修复一次性自动迁移：修正历史 files 表中误存为 latin1 的乱码 original_name
+  try {
+    const filesToFix = db.prepare("SELECT id, original_name FROM files WHERE original_name LIKE '%ä%' OR original_name LIKE '%æ%' OR original_name LIKE '%å%'").all();
+    let fixedCount = 0;
+    for (const f of filesToFix) {
+      try {
+        const fixed = Buffer.from(f.original_name, 'latin1').toString('utf8');
+        if (fixed && !fixed.includes('\uFFFD') && /[\u4e00-\u9fa5]/.test(fixed)) {
+          db.prepare('UPDATE files SET original_name = ? WHERE id = ?').run(fixed, f.id);
+          fixedCount++;
+        }
+      } catch (_) {}
+    }
+    if (fixedCount > 0) console.log(`[DB] 已修复 ${fixedCount} 个历史乱码文件名`);
+  } catch (_) {}
 
   console.log('[DB] 数据库初始化完成');
 }

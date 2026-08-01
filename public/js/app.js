@@ -2298,6 +2298,18 @@ function formatDate(s) {
   return d.toLocaleDateString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit' });
 }
 
+function fixChineseFilenameFront(name) {
+  if (!name) return '文件';
+  try {
+    if (/[\u0080-\u00FF]/.test(name) && !/[\u4e00-\u9fa5]/.test(name)) {
+      const bytes = new Uint8Array(Array.from(name).map(c => c.charCodeAt(0)));
+      const decoded = new TextDecoder('utf-8').decode(bytes);
+      if (decoded && !decoded.includes('\uFFFD')) return decoded;
+    }
+  } catch (_) {}
+  return name;
+}
+
 // ===== 状态管理 =====
 const initialToken = localStorage.getItem('treeks_token');
 if (initialToken) {
@@ -11389,17 +11401,18 @@ function renderMsgMessages() {
   box.innerHTML = moreHtml + msgState.messages.map(m => {
     const mine = m.sender_id === meId;
     const time = formatMsgTime(m.created_at);
-    let isPureImage = false;
+    let hasFile = false;
     let fileHtml = '';
 
     if (m.file_id) {
-      const fname = m.file_original_name || m.file_filename || '文件';
+      hasFile = true;
+      const rawFname = m.file_original_name || m.file_filename || '文件';
+      const fname = fixChineseFilenameFront(rawFname);
       const fkind = m.file_kind || 'other';
       const furl = m.file_url || '#';
       const isImg = fkind === 'image' || /\.(jpe?g|png|gif|webp|svg)$/i.test(furl);
 
       if (isImg && furl !== '#') {
-        isPureImage = true;
         fileHtml = `<div class="msg-bubble-media-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击查看高清大图">
           <img src="${escapeHtml(furl)}" class="msg-bubble-media-img" alt="${escapeHtml(fname)}" loading="lazy" />
           <div class="msg-bubble-media-glass">
@@ -11407,11 +11420,11 @@ function renderMsgMessages() {
           </div>
         </div>`;
       } else {
-        fileHtml = `<div class="msg-bubble-file-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击预览或下载文件">
+        fileHtml = `<div class="msg-bubble-file-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击在线预览或阅读 PDF">
           <div class="msg-file-icon-badge" data-kind="${fkind}">${kindInitial(fkind)}</div>
           <div class="msg-file-info">
             <div class="msg-file-name">${escapeHtml(fname)}</div>
-            <div class="msg-file-meta">${fkind.toUpperCase()} 附件</div>
+            <div class="msg-file-meta">${fkind.toUpperCase()} 附件 · 点击在线预览/阅读</div>
           </div>
           <a class="msg-file-dl-btn" href="${escapeHtml(furl)}" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="下载原文件">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -11421,10 +11434,10 @@ function renderMsgMessages() {
     }
 
     const textContent = (m.content || '').trim();
-    // 如果是自动生成的"发送了文件: xxx"且带有图片，则隐藏冗余提示文本，直接展现精美图片卡片
-    const showText = textContent && !(isPureImage && /^发送了文件:/.test(textContent));
+    // 如果是自动生成的"发送了文件: xxx"，剥离冗余的文本框，直接展现通透大方的图片或 PDF 文件卡片
+    const showText = textContent && !(hasFile && /^发送了文件:/.test(textContent));
 
-    if (isPureImage && !showText) {
+    if (hasFile && !showText) {
       return `
         <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
           <div class="msg-bubble-container">
