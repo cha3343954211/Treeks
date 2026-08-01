@@ -2461,6 +2461,8 @@ const state = {
   // 文件夹相关
   folders: [],          // 后端返回的文件夹列表（含 diary_count）
   currentFolder: 'all', // 当前选中：'all' | null(默认文件夹) | <数字ID>
+  // 编辑器光标位置记录（模板插入等场景使用；弹窗打开抢焦点后仍能定位原光标）
+  editorCursor: null,   // { start, end } 或 null（未在编辑器中停留过光标）
 };
 
 // 触发文件下载：使用 fetch + Blob，避免 ORB / 导航中止问题
@@ -3455,6 +3457,7 @@ async function openEditor(id) {
     collabLeave(collabCurrentDiaryId);
   }
   state.editingId = id || null;
+  state.editorCursor = null; // 重置光标位置记录（进入新日记后旧光标失效）
   showView('editor');
 
   // 重置编辑器模式为 split（默认），清除预览模式全屏状态
@@ -7860,6 +7863,19 @@ function bindEvents() {
       return;
     }
     runPostInput();
+    // 记录当前光标位置（模板插入等场景使用）
+    state.editorCursor = { start: textarea.selectionStart, end: textarea.selectionEnd };
+  });
+
+  // 点击/键盘移动/选择时持续记录编辑器光标位置
+  textarea.addEventListener('click', () => {
+    state.editorCursor = { start: textarea.selectionStart, end: textarea.selectionEnd };
+  });
+  textarea.addEventListener('keyup', () => {
+    state.editorCursor = { start: textarea.selectionStart, end: textarea.selectionEnd };
+  });
+  textarea.addEventListener('select', () => {
+    state.editorCursor = { start: textarea.selectionStart, end: textarea.selectionEnd };
   });
 
   // 标题变更广播
@@ -12353,17 +12369,42 @@ async function useTemplateFromGallery(id) {
   const titleInput = document.getElementById('editor-title');
 
   if (textarea) {
-    if (isAlreadyInEditor && textarea.value.trim().length > 10) {
-      if (confirm('当前编辑器中已有日记内容。\n点击【确定】将模板追加在文本末尾；\n点击【取消】将直接替换为新模板内容。')) {
-        textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + tpl.content;
+    const hasContent = textarea.value.trim().length > 0;
+    // 成功提示文案（末尾统一输出，避免被覆盖）
+    let successMsg = `已成功套用模板：${tpl.name}`;
+
+    // 有内容时：光标位置插入 / 无光标追加末尾 / 取消则不执行
+    if (hasContent) {
+      // 光标是否有位置：编辑器中有过光标停留记录（弹窗打开抢焦点后仍可定位）
+      const cur = state.editorCursor;
+      const cursorInEditor = cur && typeof cur.start === 'number' && cur.start >= 0 && cur.start <= textarea.value.length;
+      const modeDesc = cursorInEditor ? '在光标所在位置插入' : '追加到文章末尾';
+
+      if (!confirm(`当前编辑器中已有日记内容。\n点击【确定】将模板${modeDesc}；\n点击【取消】将放弃本次操作。`)) {
+        toast('已取消套用模板，内容保持不变', 'info');
+        return;
+      }
+
+      if (cursorInEditor) {
+        // 在光标处插入模板内容
+        const pos = cur.start;
+        const end = typeof cur.end === 'number' && cur.end >= pos ? cur.end : pos;
+        textarea.value = textarea.value.slice(0, pos) + tpl.content + textarea.value.slice(end);
+        const newPos = pos + tpl.content.length;
+        textarea.setSelectionRange(newPos, newPos);
       } else {
-        textarea.value = tpl.content;
+        // 光标无位置：追加到文章末尾并提示
+        textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + tpl.content;
+        successMsg = '光标不在编辑器正文中，模板已追加到文章末尾';
       }
     } else {
+      // 空编辑器：直接填入模板
       textarea.value = tpl.content;
     }
 
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    // 更新光标记录为模板插入后的位置
+    state.editorCursor = { start: textarea.selectionStart, end: textarea.selectionEnd };
 
     if (titleInput && (!titleInput.value || titleInput.value === '无标题' || !isAlreadyInEditor)) {
       const todayStr = new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
@@ -12375,7 +12416,7 @@ async function useTemplateFromGallery(id) {
     if (typeof updateWordCount === 'function') updateWordCount();
     textarea.focus();
 
-    toast(`已成功套用模板：${tpl.name}`, 'success');
+    toast(successMsg, successMsg.startsWith('光标') ? 'info' : 'success');
   } else {
     toast('载入模板失败，请重试', 'error');
   }
