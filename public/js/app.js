@@ -461,21 +461,43 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// ⚡ 0-Reflow 坐标计算（使用下笔时预缓存的 bounds，消去 pointermove 期间 getBoundingClientRect 的强制重排）
+// ⚡ 归一化相对坐标计算（解决双栏分栏模式、屏幕缩放、窗口改变下的标注偏移难题）
 function getSvgPoint(evt) {
+  const wrapper = document.getElementById('preview-content-wrapper');
+  const w = (wrapper && wrapper.clientWidth) || 800;
+  const h = (wrapper && wrapper.clientHeight) || 600;
+
+  let x = 0, y = 0;
   if (brushState.cachedBounds) {
+    x = evt.clientX - brushState.cachedBounds.left;
+    y = evt.clientY - brushState.cachedBounds.top;
+  } else {
+    const svg = document.getElementById('annotation-layer');
+    if (svg) {
+      const rect = svg.getBoundingClientRect();
+      x = evt.clientX - rect.left;
+      y = evt.clientY - rect.top;
+    }
+  }
+
+  return {
+    x: x,
+    y: y,
+    relX: w > 0 ? x / w : 0,
+    relY: h > 0 ? y / h : 0
+  };
+}
+
+// 根据相对比例坐标与当前容器实时宽高，精准还原绝对像素坐标
+function getAbsPoint(pt, wrapperW, wrapperH) {
+  if (!pt) return { x: 0, y: 0 };
+  if (pt.relX !== undefined && pt.relY !== undefined && wrapperW > 0 && wrapperH > 0) {
     return {
-      x: evt.clientX - brushState.cachedBounds.left,
-      y: evt.clientY - brushState.cachedBounds.top
+      x: pt.relX * wrapperW,
+      y: pt.relY * wrapperH
     };
   }
-  const svg = document.getElementById('annotation-layer');
-  if (!svg) return { x: 0, y: 0 };
-  const rect = svg.getBoundingClientRect();
-  return {
-    x: evt.clientX - rect.left,
-    y: evt.clientY - rect.top
-  };
+  return { x: pt.x || 0, y: pt.y || 0 };
 }
 
 // 创建 SVG 元素辅助函数
@@ -489,25 +511,49 @@ function svgEl(tag, attrs) {
   return el;
 }
 
+// GoodNotes 级别二次贝塞尔 Spline 平滑算法（把折线 polyline 提升为曲线 path d="M... Q..."，支持双栏归一化像素映射）
+function generateSmoothSvgPath(pts, wrapperW, wrapperH) {
+  if (!pts || pts.length === 0) return '';
+  const p0 = getAbsPoint(pts[0], wrapperW, wrapperH);
+  if (pts.length === 1) {
+    return `M ${p0.x.toFixed(1)} ${p0.y.toFixed(1)} L ${p0.x.toFixed(1)} ${p0.y.toFixed(1)}`;
+  }
+  const p1 = getAbsPoint(pts[1], wrapperW, wrapperH);
+  if (pts.length === 2) {
+    return `M ${p0.x.toFixed(1)} ${p0.y.toFixed(1)} L ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+  }
+
+  let str = `M ${p0.x.toFixed(1)} ${p0.y.toFixed(1)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const curr = getAbsPoint(pts[i], wrapperW, wrapperH);
+    const next = getAbsPoint(pts[i + 1], wrapperW, wrapperH);
+    const midX = (curr.x + next.x) / 2;
+    const midY = (curr.y + next.y) / 2;
+    str += ` Q ${curr.x.toFixed(1)} ${curr.y.toFixed(1)}, ${midX.toFixed(1)} ${midY.toFixed(1)}`;
+  }
+  const last = getAbsPoint(pts[pts.length - 1], wrapperW, wrapperH);
+  str += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return str;
+}
+
 // 根据笔刷类型创建路径元素
-// type: 'highlight' | 'pen' | 'annotate' | 'text' | 'rect' | 'ellipse'
-// opacity: 0-1（可选，默认 1）；text: 文本内容（仅 type='text' 使用）
 function createBrushElement(type, color, size, points, opacity, text) {
   if (!points || points.length === 0) return null;
   const op = (opacity === undefined || opacity === null || isNaN(opacity)) ? 1 : Math.max(0, Math.min(1, opacity));
+  const wrapper = document.getElementById('preview-content-wrapper');
+  const w = (wrapper && wrapper.clientWidth) || 800;
+  const h = (wrapper && wrapper.clientHeight) || 600;
 
   if (type === 'annotate') {
-    // 讲解笔：起点到终点的箭头线段（改进的填充三角形箭头）
     if (points.length < 2) return null;
-    const start = points[0];
-    const end = points[points.length - 1];
+    const start = getAbsPoint(points[0], w, h);
+    const end = getAbsPoint(points[points.length - 1], w, h);
     const g = svgEl('g', {
       'data-brush': 'annotate',
       'data-color': color,
       'data-size': size,
       'opacity': op
     });
-    // 主线段（终点稍向后退，避免穿透箭头）
     const angle = Math.atan2(end.y - start.y, end.x - start.x);
     const arrowLen = Math.max(10, size * 3);
     const lineEndX = end.x - arrowLen * 0.55 * Math.cos(angle);
@@ -521,7 +567,6 @@ function createBrushElement(type, color, size, points, opacity, text) {
       fill: 'none'
     });
     g.appendChild(line);
-    // 填充三角形箭头（更美观）
     const arrowHalfWidth = Math.max(6, size * 1.8);
     const arrowAngle = Math.PI / 7;
     const baseX = end.x - arrowLen * Math.cos(angle);
@@ -542,8 +587,7 @@ function createBrushElement(type, color, size, points, opacity, text) {
   }
 
   if (type === 'text') {
-    // 文本标注：用 SVG <text>，字体大小与笔刷粗细关联
-    const p = points[0];
+    const p = getAbsPoint(points[0], w, h);
     const fontSize = Math.max(12, size * 2.5);
     const textEl = svgEl('text', {
       x: p.x,
@@ -557,21 +601,20 @@ function createBrushElement(type, color, size, points, opacity, text) {
       'data-color': color,
       'data-size': size
     });
-    // 使用 textContent 避免 XSS；空字符串也允许（橡皮命中即可删除）
     textEl.textContent = text || '';
     return textEl;
   }
 
   if (type === 'rect') {
     if (points.length < 2) return null;
-    const a = points[0];
-    const b = points[points.length - 1];
-    const x = Math.min(a.x, b.x);
-    const y = Math.min(a.y, b.y);
-    const w = Math.max(1, Math.abs(b.x - a.x));
-    const h = Math.max(1, Math.abs(b.y - a.y));
+    const a = getAbsPoint(points[0], w, h);
+    const b = getAbsPoint(points[points.length - 1], w, h);
+    const rx = Math.min(a.x, b.x);
+    const ry = Math.min(a.y, b.y);
+    const rw = Math.max(1, Math.abs(b.x - a.x));
+    const rh = Math.max(1, Math.abs(b.y - a.y));
     return svgEl('rect', {
-      x: x, y: y, width: w, height: h,
+      x: rx, y: ry, width: rw, height: rh,
       rx: Math.max(2, size * 0.3),
       ry: Math.max(2, size * 0.3),
       fill: hexToRgba(color, op * 0.18),
@@ -587,14 +630,14 @@ function createBrushElement(type, color, size, points, opacity, text) {
 
   if (type === 'ellipse') {
     if (points.length < 2) return null;
-    const a = points[0];
-    const b = points[points.length - 1];
+    const a = getAbsPoint(points[0], w, h);
+    const b = getAbsPoint(points[points.length - 1], w, h);
     const cx = (a.x + b.x) / 2;
     const cy = (a.y + b.y) / 2;
-    const rx = Math.max(1, Math.abs(b.x - a.x) / 2);
-    const ry = Math.max(1, Math.abs(b.y - a.y) / 2);
+    const erx = Math.max(1, Math.abs(b.x - a.x) / 2);
+    const ery = Math.max(1, Math.abs(b.y - a.y) / 2);
     return svgEl('ellipse', {
-      cx: cx, cy: cy, rx: rx, ry: ry,
+      cx: cx, cy: cy, rx: erx, ry: ery,
       fill: hexToRgba(color, op * 0.18),
       stroke: color,
       'stroke-width': Math.max(2, size * 0.6),
@@ -605,32 +648,11 @@ function createBrushElement(type, color, size, points, opacity, text) {
     });
   }
 
-// GoodNotes 级别二次贝塞尔 Spline 平滑算法（把折线 polyline 提升为曲线 path d="M... Q..."）
-function generateSmoothSvgPath(pts) {
-  if (!pts || pts.length === 0) return '';
-  if (pts.length === 1) {
-    return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} L ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
-  }
-  if (pts.length === 2) {
-    return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} L ${pts[1].x.toFixed(1)} ${pts[1].y.toFixed(1)}`;
-  }
-
-  let str = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const midX = (pts[i].x + pts[i + 1].x) / 2;
-    const midY = (pts[i].y + pts[i + 1].y) / 2;
-    str += ` Q ${pts[i].x.toFixed(1)} ${pts[i].y.toFixed(1)}, ${midX.toFixed(1)} ${midY.toFixed(1)}`;
-  }
-  const last = pts[pts.length - 1];
-  str += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
-  return str;
-}
-
-  // 荧光笔 / 钢笔：使用 GoodNotes 二次贝塞尔 Spline 平滑曲线绘制
+  // 荧光笔 / 钢笔：使用 GoodNotes 二次贝塞尔 Spline 平滑曲线绘制（传入 w, h 支持双栏归一化映射）
   const isHighlight = type === 'highlight';
   const strokeColor = color;
   const strokeWidth = isHighlight ? Math.max(size, 10) * 1.8 : size;
-  const pathD = generateSmoothSvgPath(points);
+  const pathD = generateSmoothSvgPath(points, w, h);
   
   const attrs = {
     d: pathD,
@@ -1365,11 +1387,12 @@ function setupBrushAnnotations() {
     }
   });
 
-  // 监听预览内容尺寸变化（图片加载、内容更新等），保持 SVG 与内容同步
+  // 监听预览内容尺寸变化（双栏切换、窗口拉伸、图片加载等），保持 SVG 与内容同步并零偏移重绘
   const wrapper = document.getElementById('preview-content-wrapper');
   if (wrapper && window.ResizeObserver) {
     const ro = new ResizeObserver(() => {
       resizeAnnotationLayer();
+      renderAllAnnotations();
     });
     ro.observe(wrapper);
   }
