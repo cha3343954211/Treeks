@@ -139,7 +139,8 @@ function renderKatex(expr, displayMode) {
     displayMode,
     throwOnError: true,
     output: 'html',
-    strict: 'ignore'
+    strict: 'warn',
+    trust: false
   });
 }
 
@@ -2329,7 +2330,7 @@ const state = {
 
 // 触发文件下载：使用 fetch + Blob，避免 ORB / 导航中止问题
 // url: 请求地址；fallbackFilename: 服务端未返回文件名时使用
-async function triggerDownload(url, fallbackFilename) {
+async function downloadAuthenticatedUrl(url, fallbackFilename) {
   try {
     const res = await fetch(url, {
       headers: state.token ? { 'Authorization': 'Bearer ' + state.token } : {}
@@ -2506,7 +2507,6 @@ function setAuth(token, user) {
   state.user = user;
   localStorage.setItem('treeks_token', token);
   localStorage.setItem('treeks_user', JSON.stringify(user));
-  document.cookie = `treeks_token=${encodeURIComponent(token)}; path=/; max-age=604800; SameSite=Lax`;
 }
 
 async function logout() {
@@ -2518,7 +2518,6 @@ async function logout() {
   state.user = null;
   localStorage.removeItem('treeks_token');
   localStorage.removeItem('treeks_user');
-  document.cookie = 'treeks_token=; path=/; max-age=0; SameSite=Lax';
   stopHeartbeat();
   showAuthView();
 }
@@ -3601,6 +3600,12 @@ function updateWordCount() {
 }
 
 async function saveDiary() {
+  clearTimeout(setSaveStatus._draftTimer);
+  setSaveStatus._draftTimer = null;
+  if (_autoSaveTimer) {
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
+  }
   const title = document.getElementById('editor-title').value.trim();
   const content = document.getElementById('editor-textarea').value;
   const mood = document.getElementById('editor-mood').value.trim();
@@ -4972,12 +4977,12 @@ function showDownloadOnly(f) {
       <button class="btn btn-primary" id="file-viewer-download-only">下载文件</button>
     </div>`;
     const btn = document.getElementById('file-viewer-download-only');
-    if (btn) btn.addEventListener('click', () => downloadFile(f));
+    if (btn) btn.addEventListener('click', () => downloadUserFile(f));
   }
 }
 
 // 下载文件
-function downloadFile(f) {
+function downloadUserFile(f) {
   if (!f.url) return;
   // 文本/文档/其他：通过 fetch + Authorization 头获取 blob
   if (f.kind === 'text' || f.kind === 'document' || f.kind === 'other') {
@@ -5053,7 +5058,7 @@ function bindFileViewerEvents() {
   // 下载
   document.getElementById('file-viewer-download').addEventListener('click', () => {
     if (!fileViewerState.id) return;
-    downloadFile({
+    downloadUserFile({
       id: fileViewerState.id,
       kind: fileViewerState.kind,
       url: fileViewerState.url,
@@ -6589,6 +6594,10 @@ function setupEditorDragUpload() {
   });
 }
 
+// 全局阻止浏览器拖放默认打开文件行为
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
 function setupFilesDragUpload() {
   const viewFiles = document.getElementById('view-files');
   const dropzone = document.getElementById('files-dropzone');
@@ -6693,11 +6702,11 @@ function setupMsgChatDragUpload() {
       for (const file of files) {
         toast(`正在发送文件: ${file.name}...`, 'info');
         try {
-          const res = await apiUploadFile(file);
+          const res = await apiUpload(file);
           await api('/api/messages', {
             method: 'POST',
             body: JSON.stringify({
-              recipientId: msgState.peerId,
+              peerId: msgState.peerId,
               content: `发送了文件: ${file.name}`,
               fileId: res.id
             })
@@ -7584,7 +7593,6 @@ function bindEvents() {
 
   // 编辑器实时预览
   const textarea = document.getElementById('editor-textarea');
-  let typingTimer;
   // 移动端 IME（中文/日文/韩文输入法）输入处理：
   // 在 composition 过程中，input 事件会反复触发（每次按键一次），
   // 此时 textarea 的 value 并非最终结果，若同步触发预览重渲染和协同广播，
@@ -7598,8 +7606,9 @@ function bindEvents() {
     updatePreview();
     updateWordCount();
     setSaveStatus('编辑中…', 'saving');
-    clearTimeout(typingTimer);
-    typingTimer = setTimeout(() => {
+    clearTimeout(setSaveStatus._draftTimer);
+    setSaveStatus._draftTimer = setTimeout(() => {
+      setSaveStatus._draftTimer = null;
       setSaveStatus('未保存', 'draft');
     }, 800);
     collabSendEdit('content', textarea.value);
@@ -8009,7 +8018,7 @@ async function performExport() {
       } else {
         url = `/api/diaries/${id}/export.pdf?template=${encodeURIComponent(template)}`;
       }
-      await downloadFile(url, state.token);
+      await downloadExportFile(url, state.token);
       setExportProgress(100, '完成');
       toast('已导出', 'success');
       setTimeout(closeExportModal, 600);
@@ -8031,7 +8040,7 @@ async function performExport() {
 }
 
 // 通用下载工具：GET 请求带 token，触发浏览器下载
-async function downloadFile(url, token) {
+async function downloadExportFile(url, token) {
   const res = await fetch(url, {
     headers: { 'Authorization': 'Bearer ' + token }
   });
@@ -8048,7 +8057,7 @@ async function downloadFile(url, token) {
   const m2 = cd.match(/filename="([^"]+)"/);
   if (m1) filename = decodeURIComponent(m1[1]);
   else if (m2) filename = decodeURIComponent(m2[1]);
-  triggerDownload(blob, filename);
+  saveBlob(blob, filename);
 }
 
 // POST 下载（用于批量导出）
@@ -8073,10 +8082,10 @@ async function downloadFilePost(url, body, token) {
   const m2 = cd.match(/filename="([^"]+)"/);
   if (m1) filename = decodeURIComponent(m1[1]);
   else if (m2) filename = decodeURIComponent(m2[1]);
-  triggerDownload(blob, filename);
+  saveBlob(blob, filename);
 }
 
-function triggerDownload(blob, filename) {
+function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -8920,11 +8929,11 @@ async function loadAdminData() {
     // 绑定事件
     document.getElementById('btn-export-platform-json').onclick = () => {
       toast('正在导出 JSON...', 'success');
-      triggerDownload('/api/admin/export/all?images=0');
+      downloadAuthenticatedUrl('/api/admin/export/all?images=0');
     };
     document.getElementById('btn-export-platform-zip').onclick = () => {
       toast('正在打包 ZIP（含图片），请稍候...', 'success');
-      triggerDownload('/api/admin/export/all?images=1');
+      downloadAuthenticatedUrl('/api/admin/export/all?images=1');
     };
     document.getElementById('admin-import-file').onchange = async (e) => {
       const file = e.target.files[0];
@@ -9293,11 +9302,11 @@ async function loadMyData() {
 
   document.getElementById('btn-export-my-json').onclick = () => {
     toast('正在导出 JSON...', 'success');
-    triggerDownload('/api/diaries/user-data/export?images=0');
+    downloadAuthenticatedUrl('/api/diaries/user-data/export?images=0');
   };
   document.getElementById('btn-export-my-zip').onclick = () => {
     toast('正在打包 ZIP（含图片），请稍候...', 'success');
-    triggerDownload('/api/diaries/user-data/export?images=1');
+    downloadAuthenticatedUrl('/api/diaries/user-data/export?images=1');
   };
   document.getElementById('my-import-file').onchange = async (e) => {
     const file = e.target.files[0];
@@ -9831,7 +9840,7 @@ function openComposeLetterModal(diaryId, presetRecipientId) {
         if (!file) return;
         toast(`正在上传附件: ${file.name}...`, 'info');
         try {
-          const res = await apiUploadFile(file);
+          const res = await apiUpload(file);
           toast(`附件已上传`, 'success');
           loadUserFilesSelect(res.id);
         } catch (err) {
@@ -10378,7 +10387,7 @@ async function loadLettersList(tab) {
   }
 }
 
-function renderLettersList(items, tab) {
+function renderLettersListLegacy(items, tab) {
   const c = document.getElementById('letters-content');
   if (!items.length) {
     c.innerHTML = `<div class="empty-state"><p>${tab === 'inbox' ? '收件箱为空' : '发件箱为空'}</p></div>`;
@@ -10411,7 +10420,7 @@ function renderLettersList(items, tab) {
   });
 }
 
-async function openLetterDetail(id) {
+async function openLetterDetailLegacy(id) {
   try {
     const l = await api(`/api/letters/${id}`);
     const body = `
@@ -10472,7 +10481,7 @@ async function openLetterDetail(id) {
 }
 
 // 写信弹窗
-function openComposeLetterModal(diaryId, presetRecipientId) {
+function openComposeLetterModalLegacy(diaryId, presetRecipientId) {
   const body = `
     <div class="compose-form">
       <div class="form-group">
@@ -11383,11 +11392,20 @@ function renderMsgMessages() {
     if (m.file_id) {
       const fname = m.file_original_name || m.file_filename || '文件';
       const fkind = m.file_kind || 'other';
-      fileHtml = `<a class="msg-bubble-file" href="${escapeHtml(m.file_url || '#')}" target="_blank" rel="noopener">
-        <span class="att-file-icon" data-kind="${fkind}" style="width:22px;height:22px;font-size:9px;">${kindInitial(fkind)}</span>
-        <span>${escapeHtml(fname)}</span>
-        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      </a>`;
+      const furl = m.file_url || '#';
+      const isImg = fkind === 'image' || /\.(jpe?g|png|gif|webp|svg)$/i.test(furl);
+
+      if (isImg && furl !== '#') {
+        fileHtml = `<div class="msg-bubble-image-box" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击查看大图">
+          <img src="${escapeHtml(furl)}" class="msg-bubble-image" alt="${escapeHtml(fname)}" loading="lazy" />
+        </div>`;
+      } else {
+        fileHtml = `<a class="msg-bubble-file" href="${escapeHtml(furl)}" target="_blank" rel="noopener">
+          <span class="att-file-icon" data-kind="${fkind}" style="width:22px;height:22px;font-size:9px;">${kindInitial(fkind)}</span>
+          <span>${escapeHtml(fname)}</span>
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </a>`;
+      }
     }
     return `
       <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">

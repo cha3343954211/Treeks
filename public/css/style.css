@@ -10554,3 +10554,30 @@ textarea,
     z-index: 10001 !important; /* 确保高于移动底栏 999 */
   }
 }
+
+/* 防拖拽碰撞误关：让 Dropzone 子元素穿透鼠标事件 */
+.files-dropzone * {
+  pointer-events: none;
+}
+
+/* ---- 消息气泡中的文件与图片预览卡片 ---- */
+.msg-bubble-image-box {
+  margin-top: 8px;
+  max-width: 260px;
+  border-radius: var(--radius-md, 10px);
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.05);
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.msg-bubble-image-box:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.msg-bubble-image {
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  display: block;
+}
