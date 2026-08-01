@@ -7320,15 +7320,16 @@ function bindEvents() {
     document.getElementById('on-this-day-modal').style.display = 'none';
   });
 
-  // 模态模板库
+  // 模板功能绑定
   const tplBtn = document.getElementById('btn-template-gallery');
   if (tplBtn) tplBtn.addEventListener('click', openTemplateGalleryModal);
   const navTplBtn = document.getElementById('btn-nav-template-gallery');
-  if (navTplBtn) navTplBtn.addEventListener('click', openTemplateGalleryModal);
-  const closeTpl = document.getElementById('btn-close-template-gallery');
-  if (closeTpl) closeTpl.addEventListener('click', () => {
-    document.getElementById('template-gallery-modal').style.display = 'none';
-  });
+  if (navTplBtn) {
+    navTplBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigateTo('templates');
+    });
+  }
 
   // 私密锁按钮
   const lockBtn = document.getElementById('btn-lock-diary');
@@ -12403,44 +12404,137 @@ function setupTemplateGalleryEvents() {
   }
 }
 
+// 🌟 Spotlight 快捷指令级【模板选择弹窗】引擎
+let spotlightSelectedIdx = 0;
+let spotlightTemplatesCache = [];
+
 function openTemplateGalleryModal() {
   const modal = document.getElementById('template-gallery-modal');
   if (!modal) return;
+
   modal.style.display = 'flex';
+  const input = document.getElementById('template-spotlight-input');
+  const backdrop = document.getElementById('template-gallery-backdrop');
+  const goWorkspaceBtn = document.getElementById('btn-spotlight-go-workspace');
 
-  // 绑定 Tab 筛选
-  const tabs = modal.querySelectorAll('.template-tab');
-  tabs.forEach(tab => {
-    tab.onclick = () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const cat = tab.dataset.cat;
-      modal.querySelectorAll('.template-card').forEach(card => {
-        if (cat === 'all' || card.dataset.category === cat) {
-          card.style.display = 'flex';
-        } else {
-          card.style.display = 'none';
-        }
-      });
+  if (backdrop) {
+    backdrop.onclick = () => modal.style.display = 'none';
+  }
+  if (goWorkspaceBtn) {
+    goWorkspaceBtn.onclick = () => {
+      modal.style.display = 'none';
+      navigateTo('templates');
     };
-  });
+  }
 
-  // 绑定卡片套用
-  document.querySelectorAll('.template-card').forEach(card => {
-    card.onclick = () => {
-      const type = card.dataset.template;
-      if (!type) return;
+  if (input) {
+    input.value = '';
+    setTimeout(() => input.focus(), 50);
+  }
 
-      const textarea = document.getElementById('editor-textarea');
-      if (textarea && textarea.value.trim().length > 20 && state.currentView === 'editor') {
-        if (confirm('当前编辑器中已有内容。按【确定】将模板追加在末尾，按【取消】将新建一篇模态日记。')) {
-          applyTemplateToEditor(type, 'append');
-        } else {
-          applyTemplateToEditor(type, 'new');
+  renderSpotlightTemplateList('');
+
+  // 绑定事件（单次）
+  if (input && !input.dataset.boundSpotlight) {
+    input.dataset.boundSpotlight = 'true';
+
+    input.addEventListener('input', (e) => {
+      renderSpotlightTemplateList(e.target.value);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      const listEl = document.getElementById('template-spotlight-list');
+      if (!listEl) return;
+      const items = listEl.querySelectorAll('.cmd-item');
+      if (items.length === 0) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        spotlightSelectedIdx = (spotlightSelectedIdx + 1) % items.length;
+        updateSpotlightSelection(items);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        spotlightSelectedIdx = (spotlightSelectedIdx - 1 + items.length) % items.length;
+        updateSpotlightSelection(items);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (items[spotlightSelectedIdx]) {
+          items[spotlightSelectedIdx].click();
         }
-      } else {
-        applyTemplateToEditor(type, 'smart');
+      } else if (e.key === 'Escape') {
+        modal.style.display = 'none';
       }
+    });
+  }
+}
+
+function updateSpotlightSelection(items) {
+  items.forEach((it, idx) => {
+    if (idx === spotlightSelectedIdx) {
+      it.classList.add('active');
+      it.scrollIntoView({ block: 'nearest' });
+    } else {
+      it.classList.remove('active');
+    }
+  });
+}
+
+function renderSpotlightTemplateList(query = '') {
+  const listEl = document.getElementById('template-spotlight-list');
+  if (!listEl) return;
+
+  const all = TemplateManager.getAllTemplates();
+  let filtered = all;
+
+  if (query && query.trim()) {
+    const q = query.trim().toLowerCase();
+    filtered = all.filter(t => 
+      (t.name && t.name.toLowerCase().includes(q)) ||
+      (t.desc && t.desc.toLowerCase().includes(q)) ||
+      (t.content && t.content.toLowerCase().includes(q))
+    );
+  }
+
+  spotlightTemplatesCache = filtered;
+  spotlightSelectedIdx = 0;
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = `
+      <div class="cmd-empty" style="padding: 24px; text-align: center; color: var(--fg-muted);">
+        没有匹配的日记模板
+      </div>
+    `;
+    return;
+  }
+
+  const iconMap = { sunrise: '🌅', grid: '🧩', star: '🌟', target: '🎯', book: '📖', code: '💻' };
+
+  listEl.innerHTML = filtered.map((t, idx) => {
+    const icon = iconMap[t.icon] || t.icon || '📝';
+    return `
+      <div class="cmd-item ${idx === 0 ? 'active' : ''}" data-spotlight-tpl-id="${t.id}">
+        <div class="cmd-item-icon" style="font-size: 20px;">${icon}</div>
+        <div class="cmd-item-main">
+          <div class="cmd-item-title" style="display:flex;align-items:center;gap:8px;">
+            <span>${escapeHtml(t.name)}</span>
+            <span class="template-card-badge ${t.isCustom ? 'badge-custom' : ''}" style="font-size: 10px; padding: 1px 6px;">
+              ${t.isCustom ? '✍️ 我的自定义' : '🌟 官方精选'}
+            </span>
+          </div>
+          <div class="cmd-item-desc">${escapeHtml(t.desc || '快捷 Markdown 骨架框架模板')}</div>
+        </div>
+        <div class="cmd-item-action" style="font-size:12px;color:var(--accent);">回车套用</div>
+      </div>
+    `;
+  }).join('');
+
+  // 绑定点击事件
+  listEl.querySelectorAll('.cmd-item').forEach(item => {
+    item.onclick = () => {
+      const id = item.dataset.spotlightTplId;
+      const modal = document.getElementById('template-gallery-modal');
+      if (modal) modal.style.display = 'none';
+      useTemplateFromGallery(id);
     };
   });
 }

@@ -3217,6 +3217,12 @@ html, body {
   width: 90%;
   border-radius: 24px;
 }
+
+/* 🌟 Spotlight 快捷模板弹窗样式 */
+.template-spotlight-dialog {
+  max-width: 680px !important;
+  width: 90% !important;
+}
 .admin-table tr:last-child td { border-bottom: none; }
 .admin-table tbody tr {
   transition: background 0.15s var(--ease);
