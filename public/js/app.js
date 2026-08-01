@@ -6992,10 +6992,6 @@ function openUniversalFilePreview(file) {
 function setupEscCloseModals() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (document.body.classList.contains('zen-active')) {
-        toggleZenMode();
-        return;
-      }
       const cmdModal = document.getElementById('cmd-modal');
       if (cmdModal && cmdModal.style.display !== 'none') {
         cmdModal.style.display = 'none';
@@ -7174,10 +7170,6 @@ function bindEvents() {
   // 历史版本按钮
   const verBtn = document.getElementById('btn-version-history');
   if (verBtn) verBtn.addEventListener('click', openVersionHistoryModal);
-
-  // 禅/专注沉浸模式
-  const zenBtn = document.getElementById('btn-zen-mode');
-  if (zenBtn) zenBtn.addEventListener('click', toggleZenMode);
 
   // 那年今日记忆胶囊
   const otdBtn = document.getElementById('btn-nav-on-this-day');
@@ -11707,36 +11699,7 @@ function handleIncomingWsMessage(payload) {
   }
 }
 
-async function toggleZenMode() {
-  if (state.currentView !== 'editor' || !document.getElementById('editor-textarea')) {
-    if (typeof openEditor === 'function') {
-      await openEditor(state.editingId || null);
-    } else {
-      showView('editor');
-    }
-  }
 
-  const editorView = document.getElementById('view-editor');
-  if (editorView) editorView.classList.add('active');
-
-  const isZen = document.body.classList.toggle('zen-active');
-  const exitBtn = document.getElementById('zen-exit-floating-btn');
-
-  if (isZen) {
-    if (exitBtn) {
-      exitBtn.style.display = 'block';
-      exitBtn.onclick = () => toggleZenMode();
-    }
-    toast('已开启 Zen 专注书写模式 (点击顶部胶囊或按 Esc 退出)', 'info');
-    setTimeout(() => {
-      const textarea = document.getElementById('editor-textarea');
-      if (textarea) textarea.focus();
-    }, 100);
-  } else {
-    if (exitBtn) exitBtn.style.display = 'none';
-    toast('已退出 专注书写模式', 'info');
-  }
-}
 
 // ===== 📅 那年今日 (On This Day / Time Capsule) =====
 async function openOnThisDayModal() {
@@ -11776,10 +11739,11 @@ async function openOnThisDayModal() {
   }
 }
 
-// ===== 📋 模态精美模板库 (Rich Template Gallery) =====
+// ===== 📋 模态精美模板库 (Rich Template Gallery Engine) =====
 const DIARY_TEMPLATES = {
   morning: {
-    title: '晨间日记',
+    category: 'daily',
+    title: '晨间三件事日记',
     mood: '🌅 积极',
     content: `# 🌅 晨间三件事日记
 
@@ -11795,6 +11759,7 @@ const DIARY_TEMPLATES = {
 `
   },
   ninegrid: {
+    category: 'daily',
     title: '曼陀罗九宫格复盘',
     mood: '🧩 充实',
     content: `# 🧩 曼陀罗九宫格思考复盘
@@ -11813,7 +11778,8 @@ const DIARY_TEMPLATES = {
 `
   },
   weekly: {
-    title: '周度总结与规划',
+    category: 'work',
+    title: '周度总结与下周规划',
     mood: '📊 专注',
     content: `# 📊 周度总结与下周规划
 
@@ -11829,22 +11795,42 @@ const DIARY_TEMPLATES = {
 `
   },
   reading: {
-    title: '读书/影视笔记',
+    category: 'read',
+    title: '读书/卡片笔记',
     mood: '📖 思考',
-    content: `# 📖 读书/影视卡片笔记
+    content: `# 📖 读书卡片笔记
 
-- **作品名称**: 
-- **作者/导演**: 
+- **书名**: 
+- **作者**: 
 - **推荐指数**: ⭐⭐⭐⭐⭐
 
 ## 💬 精彩金句摘录
 > 
 
-## 💡 个人感悟与行动
+## 💡 核心启发与行动
 - 
 `
   },
+  movie: {
+    category: 'read',
+    title: '电影/剧集影评',
+    mood: '🎬 触动',
+    content: `# 🎬 电影/剧集观影卡片
+
+- **片名**: 
+- **导演/主演**: 
+- **观影日期**: 
+- **个人评分**: ⭐⭐⭐⭐⭐
+
+## 🍿 剧情高光与画面触动
+- 
+
+## 💬 记忆最深台词
+> 
+`
+  },
   okr: {
+    category: 'work',
     title: 'OKR 目标进度追踪',
     mood: '🎯 目标',
     content: `# 🎯 OKR 目标进度追踪
@@ -11859,7 +11845,8 @@ const DIARY_TEMPLATES = {
 `
   },
   night: {
-    title: '睡前感恩日记',
+    category: 'life',
+    title: '晚间睡前感恩日记',
     mood: '🌙 平和',
     content: `# 🌙 晚间睡前感恩日记
 
@@ -11871,24 +11858,47 @@ const DIARY_TEMPLATES = {
 ## 🧘 心情释放与自我关怀
 - 
 `
+  },
+  travel: {
+    category: 'life',
+    title: '旅行/游记回忆清单',
+    mood: '✈️ 欢快',
+    content: `# ✈️ 旅行游记与美好回忆
+
+- **目的地**: 
+- **同行伙伴**: 
+- **天气与心情**: 
+
+## 📸 行程高光片段
+1. 
+2. 
+
+## 🍜 当地美食与新奇体验
+- 
+`
   }
 };
 
-async function applyTemplateToEditor(templateKey) {
+async function applyTemplateToEditor(templateKey, insertMode = 'smart') {
   const modal = document.getElementById('template-gallery-modal');
   if (modal) modal.style.display = 'none';
 
   const tpl = DIARY_TEMPLATES[templateKey];
   if (!tpl) return;
 
-  // 1. 如果当前不在编辑器视图，自动打开新建日记
-  if (state.currentNav !== 'editor' || !document.getElementById('editor-textarea')) {
+  // 1. 如果当前不在编辑器视图，或者强制新建模式，自动唤起新日记
+  if (state.currentView !== 'editor' || insertMode === 'new') {
     if (typeof openEditor === 'function') {
       await openEditor(null);
+    } else {
+      showView('editor');
     }
   }
 
-  // 2. 轮询等待编辑器 DOM 挂载完成（保障 100% 成功）
+  const editorView = document.getElementById('view-editor');
+  if (editorView) editorView.classList.add('active');
+
+  // 2. 轮询等待编辑器 DOM 挂载完成
   let retries = 0;
   while (!document.getElementById('editor-textarea') && retries < 20) {
     await new Promise(r => setTimeout(r, 50));
@@ -11900,16 +11910,20 @@ async function applyTemplateToEditor(templateKey) {
   const moodInput = document.getElementById('editor-mood');
 
   if (textarea) {
-    textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + tpl.content;
+    if (insertMode === 'replace') {
+      textarea.value = tpl.content;
+    } else {
+      textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + tpl.content;
+    }
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
 
-    // 自动填写建议的标题与心情（如果原本为空）
-    if (titleInput && (!titleInput.value || titleInput.value === '无标题')) {
+    // 智能填写标题与心情
+    if (titleInput && (!titleInput.value || titleInput.value === '无标题' || insertMode === 'replace' || insertMode === 'new')) {
       const todayStr = new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
       titleInput.value = `${tpl.title} (${todayStr})`;
       titleInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
-    if (moodInput && !moodInput.value) {
+    if (moodInput && (!moodInput.value || insertMode === 'replace' || insertMode === 'new')) {
       moodInput.value = tpl.mood;
       moodInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -11918,9 +11932,9 @@ async function applyTemplateToEditor(templateKey) {
     if (typeof updateWordCount === 'function') updateWordCount();
     textarea.focus();
 
-    toast(`已成功载入【${tpl.title}】创作模板！`, 'success');
+    toast(`已成功载入【${tpl.title}】模态模板！`, 'success');
   } else {
-    toast('开启编辑器失败，请稍后重试', 'error');
+    toast('开启编辑器失败，请重试', 'error');
   }
 }
 
@@ -11929,10 +11943,39 @@ function openTemplateGalleryModal() {
   if (!modal) return;
   modal.style.display = 'flex';
 
+  // 绑定 Tab 筛选
+  const tabs = modal.querySelectorAll('.template-tab');
+  tabs.forEach(tab => {
+    tab.onclick = () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const cat = tab.dataset.cat;
+      modal.querySelectorAll('.template-card').forEach(card => {
+        if (cat === 'all' || card.dataset.category === cat) {
+          card.style.display = 'flex';
+        } else {
+          card.style.display = 'none';
+        }
+      });
+    };
+  });
+
+  // 绑定卡片套用
   document.querySelectorAll('.template-card').forEach(card => {
     card.onclick = () => {
       const type = card.dataset.template;
-      if (type) applyTemplateToEditor(type);
+      if (!type) return;
+
+      const textarea = document.getElementById('editor-textarea');
+      if (textarea && textarea.value.trim().length > 20 && state.currentView === 'editor') {
+        if (confirm('当前编辑器中已有内容。按【确定】将模板追加在末尾，按【取消】将新建一篇模态日记。')) {
+          applyTemplateToEditor(type, 'append');
+        } else {
+          applyTemplateToEditor(type, 'new');
+        }
+      } else {
+        applyTemplateToEditor(type, 'smart');
+      }
     };
   });
 }
