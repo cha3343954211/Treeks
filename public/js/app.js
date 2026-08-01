@@ -750,27 +750,26 @@ function setBrushTool(tool) {
   svg.classList.remove('eraser-mode', 'eraser-stroke-mode', 'eraser-pixel-mode',
                        'text-mode', 'shape-mode', 'lasso-mode', 'lasso-selected');
   if (tool === 'none') {
+    svg.style.pointerEvents = 'none';
     svg.classList.remove('active');
     previewPane.classList.remove('annotate-active');
-  } else if (tool === 'eraser') {
-    if (brushState.eraserMode === 'pixel') {
-      svg.classList.add('active', 'eraser-mode', 'eraser-pixel-mode');
-    } else {
-      svg.classList.add('active', 'eraser-mode', 'eraser-stroke-mode');
-    }
-    previewPane.classList.add('annotate-active');
-  } else if (tool === 'lasso') {
-    svg.classList.add('active', 'lasso-mode');
-    previewPane.classList.add('annotate-active');
-  } else if (tool === 'text') {
-    svg.classList.add('active', 'text-mode');
-    previewPane.classList.add('annotate-active');
-  } else if (tool === 'rect' || tool === 'ellipse') {
-    svg.classList.add('active', 'shape-mode');
-    previewPane.classList.add('annotate-active');
   } else {
+    svg.style.pointerEvents = 'auto';
     svg.classList.add('active');
     previewPane.classList.add('annotate-active');
+    if (tool === 'eraser') {
+      if (brushState.eraserMode === 'pixel') {
+        svg.classList.add('eraser-mode', 'eraser-pixel-mode');
+      } else {
+        svg.classList.add('eraser-mode', 'eraser-stroke-mode');
+      }
+    } else if (tool === 'lasso') {
+      svg.classList.add('lasso-mode');
+    } else if (tool === 'text') {
+      svg.classList.add('text-mode');
+    } else if (tool === 'rect' || tool === 'ellipse') {
+      svg.classList.add('shape-mode');
+    }
   }
 
   // 切换工具时提交未完成的文本输入
