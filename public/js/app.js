@@ -7121,6 +7121,11 @@ function openUniversalFilePreview(file) {
 function setupEscCloseModals() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      const tplModal = document.getElementById('template-gallery-modal');
+      if (tplModal && tplModal.style.display !== 'none') {
+        tplModal.style.display = 'none';
+        return;
+      }
       const cmdModal = document.getElementById('cmd-modal');
       if (cmdModal && cmdModal.style.display !== 'none') {
         cmdModal.style.display = 'none';
@@ -12311,18 +12316,24 @@ function saveTemplateFromEditor() {
 
 // 点击「使用此模板」
 async function useTemplateFromGallery(id) {
+  const modal = document.getElementById('template-gallery-modal');
+  if (modal) modal.style.display = 'none';
+
   const all = TemplateManager.getAllTemplates();
   const tpl = all.find(t => t.id === id);
   if (!tpl) return;
 
-  // 1. 如果当前没有新建编辑器，唤起新编辑器
-  if (typeof openEditor === 'function') {
-    await openEditor(null);
-  } else {
-    showView('editor');
+  const isAlreadyInEditor = (state.currentView === 'editor' || document.getElementById('view-editor')?.style.display !== 'none');
+
+  if (!isAlreadyInEditor) {
+    if (typeof openEditor === 'function') {
+      await openEditor(null);
+    } else {
+      showView('editor');
+    }
   }
 
-  // 2. 轮询等待编辑器准备就绪
+  // 轮询等待编辑器文本框挂载
   let retries = 0;
   while (!document.getElementById('editor-textarea') && retries < 20) {
     await new Promise(r => setTimeout(r, 50));
@@ -12333,10 +12344,19 @@ async function useTemplateFromGallery(id) {
   const titleInput = document.getElementById('editor-title');
 
   if (textarea) {
-    textarea.value = tpl.content;
+    if (isAlreadyInEditor && textarea.value.trim().length > 10) {
+      if (confirm('当前编辑器中已有日记内容。\n点击【确定】将模板追加在文本末尾；\n点击【取消】将直接替换为新模板内容。')) {
+        textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + tpl.content;
+      } else {
+        textarea.value = tpl.content;
+      }
+    } else {
+      textarea.value = tpl.content;
+    }
+
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
 
-    if (titleInput && (!titleInput.value || titleInput.value === '无标题')) {
+    if (titleInput && (!titleInput.value || titleInput.value === '无标题' || !isAlreadyInEditor)) {
       const todayStr = new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
       titleInput.value = `${tpl.name} (${todayStr})`;
       titleInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -12346,7 +12366,9 @@ async function useTemplateFromGallery(id) {
     if (typeof updateWordCount === 'function') updateWordCount();
     textarea.focus();
 
-    toast(`已套用模板：${tpl.name}`, 'success');
+    toast(`已成功套用模板：${tpl.name}`, 'success');
+  } else {
+    toast('载入模板失败，请重试', 'error');
   }
 }
 
@@ -12411,62 +12433,87 @@ let spotlightSelectedIdx = 0;
 let spotlightTemplatesCache = [];
 
 function openTemplateGalleryModal() {
-  const modal = document.getElementById('template-gallery-modal');
-  if (!modal) return;
+  try {
+    const modal = document.getElementById('template-gallery-modal');
+    if (!modal) return;
 
-  modal.style.display = 'flex';
-  const input = document.getElementById('template-spotlight-input');
-  const backdrop = document.getElementById('template-gallery-backdrop');
-  const goWorkspaceBtn = document.getElementById('btn-spotlight-go-workspace');
+    modal.style.display = 'flex';
+    const input = document.getElementById('template-spotlight-input');
+    const backdrop = document.getElementById('template-gallery-backdrop');
+    const goWorkspaceBtn = document.getElementById('btn-spotlight-go-workspace');
 
-  if (backdrop) {
-    backdrop.onclick = () => modal.style.display = 'none';
-  }
-  if (goWorkspaceBtn) {
-    goWorkspaceBtn.onclick = () => {
-      modal.style.display = 'none';
-      navigateTo('templates');
-    };
-  }
-
-  if (input) {
-    input.value = '';
-    setTimeout(() => input.focus(), 50);
-  }
-
-  renderSpotlightTemplateList('');
-
-  // 绑定事件（单次）
-  if (input && !input.dataset.boundSpotlight) {
-    input.dataset.boundSpotlight = 'true';
-
-    input.addEventListener('input', (e) => {
-      renderSpotlightTemplateList(e.target.value);
-    });
-
-    input.addEventListener('keydown', (e) => {
-      const listEl = document.getElementById('template-spotlight-list');
-      if (!listEl) return;
-      const items = listEl.querySelectorAll('.cmd-item');
-      if (items.length === 0) return;
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        spotlightSelectedIdx = (spotlightSelectedIdx + 1) % items.length;
-        updateSpotlightSelection(items);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        spotlightSelectedIdx = (spotlightSelectedIdx - 1 + items.length) % items.length;
-        updateSpotlightSelection(items);
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        if (items[spotlightSelectedIdx]) {
-          items[spotlightSelectedIdx].click();
-        }
-      } else if (e.key === 'Escape') {
+    // 关闭按钮事件绑定
+    const closeBtn = document.getElementById('btn-close-template-gallery');
+    if (closeBtn) {
+      closeBtn.onclick = (e) => {
+        if (e) e.stopPropagation();
         modal.style.display = 'none';
-      }
-    });
+      };
+    }
+
+    const kbdBtn = document.getElementById('btn-kbd-close-template-gallery');
+    if (kbdBtn) {
+      kbdBtn.onclick = (e) => {
+        if (e) e.stopPropagation();
+        modal.style.display = 'none';
+      };
+    }
+
+    if (backdrop) {
+      backdrop.onclick = (e) => {
+        if (e) e.stopPropagation();
+        modal.style.display = 'none';
+      };
+    }
+    if (goWorkspaceBtn) {
+      goWorkspaceBtn.onclick = (e) => {
+        if (e) e.stopPropagation();
+        modal.style.display = 'none';
+        navigateTo('templates');
+      };
+    }
+
+    if (input) {
+      input.value = '';
+      setTimeout(() => input.focus(), 50);
+    }
+
+    renderSpotlightTemplateList('');
+
+    // 绑定事件（单次）
+    if (input && !input.dataset.boundSpotlight) {
+      input.dataset.boundSpotlight = 'true';
+
+      input.addEventListener('input', (e) => {
+        renderSpotlightTemplateList(e.target.value);
+      });
+
+      input.addEventListener('keydown', (e) => {
+        const listEl = document.getElementById('template-spotlight-list');
+        if (!listEl) return;
+        const items = listEl.querySelectorAll('.cmd-item');
+        if (items.length === 0) return;
+
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          spotlightSelectedIdx = (spotlightSelectedIdx + 1) % items.length;
+          updateSpotlightSelection(items);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          spotlightSelectedIdx = (spotlightSelectedIdx - 1 + items.length) % items.length;
+          updateSpotlightSelection(items);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (items[spotlightSelectedIdx]) {
+            items[spotlightSelectedIdx].click();
+          }
+        } else if (e.key === 'Escape') {
+          modal.style.display = 'none';
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[TemplateModal] Error openTemplateGalleryModal:', err);
   }
 }
 
