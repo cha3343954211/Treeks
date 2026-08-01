@@ -2745,7 +2745,14 @@ function showView(name) {
 
 function navigateTo(nav) {
   if (nav === 'templates') {
-    openTemplateGalleryModal();
+    showView('templates');
+    if (typeof renderTemplatePageGrid === 'function') {
+      renderTemplatePageGrid();
+    }
+    state.currentNav = nav;
+    document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
+    const btn = document.querySelector(`.sidebar-nav .nav-item[data-nav="${nav}"]`);
+    if (btn) btn.classList.add('active');
     return;
   }
   state.currentNav = nav;
@@ -7351,6 +7358,9 @@ function bindEvents() {
   setupEditorSyncScroll();
   setupEditorKeybindings();
   setupEditorDragUpload();
+  if (typeof setupTemplateGalleryEvents === 'function') {
+    setupTemplateGalleryEvents();
+  }
   setupFilesDragUpload();
   setupMsgChatDragUpload();
 
@@ -12069,6 +12079,327 @@ async function applyTemplateToEditor(templateKey, insertMode = 'smart') {
     toast(`已成功载入【${tpl.title}】模态模板！`, 'success');
   } else {
     toast('开启编辑器失败，请重试', 'error');
+  }
+}
+
+// ===== 🎨 独立模板工坊 & 自定义模板持久化引擎 =====
+const TemplateManager = {
+  KEY: 'treeks_custom_templates_v2',
+
+  getCustomTemplates() {
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  saveCustomTemplate(tpl) {
+    const list = this.getCustomTemplates();
+    if (tpl.id) {
+      const idx = list.findIndex(t => t.id === tpl.id);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...tpl, updatedAt: Date.now() };
+      } else {
+        list.push({ ...tpl, createdAt: Date.now() });
+      }
+    } else {
+      tpl.id = 'tpl_custom_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+      tpl.isCustom = true;
+      tpl.createdAt = Date.now();
+      list.push(tpl);
+    }
+    localStorage.setItem(this.KEY, JSON.stringify(list));
+    return tpl;
+  },
+
+  deleteCustomTemplate(id) {
+    let list = this.getCustomTemplates();
+    list = list.filter(t => t.id !== id);
+    localStorage.setItem(this.KEY, JSON.stringify(list));
+  },
+
+  getAllTemplates() {
+    const customList = this.getCustomTemplates();
+    const presets = Object.keys(DIARY_TEMPLATES).map(k => {
+      const item = DIARY_TEMPLATES[k];
+      return {
+        id: k,
+        name: item.title,
+        category: item.category || 'preset',
+        icon: item.mood ? item.mood.split(' ')[0] : '🌟',
+        desc: item.mood || '官方精选开箱即用模板',
+        content: item.content,
+        isCustom: false
+      };
+    });
+    return [...customList, ...presets];
+  }
+};
+
+// 渲染大屏模板工坊网格 (疏朗大方 320px 网格)
+let currentTemplateCategory = 'all';
+let currentTemplateSearch = '';
+
+function renderTemplatePageGrid(filterCat = currentTemplateCategory, searchQuery = currentTemplateSearch) {
+  currentTemplateCategory = filterCat;
+  currentTemplateSearch = searchQuery;
+
+  const grid = document.getElementById('template-page-grid');
+  if (!grid) return;
+
+  let all = TemplateManager.getAllTemplates();
+
+  // 分类筛选
+  if (filterCat === 'custom') {
+    all = all.filter(t => t.isCustom);
+  } else if (filterCat === 'preset') {
+    all = all.filter(t => !t.isCustom);
+  } else if (filterCat !== 'all') {
+    all = all.filter(t => t.category === filterCat);
+  }
+
+  // 搜索关键字
+  if (searchQuery && searchQuery.trim()) {
+    const q = searchQuery.trim().toLowerCase();
+    all = all.filter(t =>
+      (t.name && t.name.toLowerCase().includes(q)) ||
+      (t.desc && t.desc.toLowerCase().includes(q)) ||
+      (t.content && t.content.toLowerCase().includes(q))
+    );
+  }
+
+  if (all.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state" style="grid-column: 1 / -1; padding: 60px 20px; text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 12px;">🎨</div>
+        <h3 style="margin-bottom: 8px; color: var(--fg);">暂无匹配的模板</h3>
+        <p style="color: var(--fg-muted); margin-bottom: 20px;">试着新建一份您的专属 Markdown 日记模板吧！</p>
+        <button class="btn btn-primary" id="btn-empty-create-template">+ 新建自定义模板</button>
+      </div>
+    `;
+    const btn = document.getElementById('btn-empty-create-template');
+    if (btn) btn.addEventListener('click', () => openTemplateEditorModal());
+    return;
+  }
+
+  const iconMap = {
+    sunrise: '🌅',
+    grid: '🧩',
+    star: '🌟',
+    target: '🎯',
+    book: '📖',
+    code: '💻'
+  };
+
+  grid.innerHTML = all.map(t => {
+    const displayIcon = iconMap[t.icon] || t.icon || '📝';
+    return `
+    <div class="template-page-card" data-tpl-id="${t.id}">
+      <div class="template-card-top">
+        <div class="template-card-icon">${displayIcon}</div>
+        <div class="template-card-meta">
+          <div class="template-card-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</div>
+          <span class="template-card-badge ${t.isCustom ? 'badge-custom' : ''}">
+            ${t.isCustom ? '✍️ 我的自定义' : '🌟 官方精选'}
+          </span>
+        </div>
+      </div>
+      <div class="template-card-desc">${escapeHtml(t.desc || '暂无描述')}</div>
+      <div class="template-card-preview-box">${escapeHtml(t.content || '')}</div>
+      <div class="template-card-actions">
+        <button class="btn btn-primary btn-sm btn-use" onclick="useTemplateFromGallery('${t.id}')">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><polyline points="20 6 9 17 4 12"/></svg>
+          使用此模板
+        </button>
+        ${t.isCustom ? `
+          <button class="btn btn-ghost btn-sm btn-icon-only" onclick="editCustomTemplate('${t.id}')" title="编辑模板">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn btn-danger-ghost btn-sm btn-icon-only" onclick="deleteCustomTemplateItem('${t.id}')" title="删除模板">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        ` : ''}
+      </div>
+    </div>
+  `;
+  }).join('');
+}
+
+// 打开自定义模板编辑 Modal
+function openTemplateEditorModal(tplData = null) {
+  const modal = document.getElementById('template-editor-modal');
+  if (!modal) return;
+
+  const titleEl = document.getElementById('template-editor-title');
+  const idInput = document.getElementById('template-edit-id');
+  const nameInput = document.getElementById('template-edit-name');
+  const catInput = document.getElementById('template-edit-category');
+  const iconInput = document.getElementById('template-edit-icon');
+  const descInput = document.getElementById('template-edit-desc');
+  const contentInput = document.getElementById('template-edit-content');
+
+  if (tplData) {
+    titleEl.textContent = '编辑自定义日记模板';
+    idInput.value = tplData.id || '';
+    nameInput.value = tplData.name || '';
+    catInput.value = tplData.category || 'custom';
+    iconInput.value = tplData.icon || 'star';
+    descInput.value = tplData.desc || '';
+    contentInput.value = tplData.content || '';
+  } else {
+    titleEl.textContent = '新建日记模板';
+    idInput.value = '';
+    nameInput.value = '';
+    catInput.value = 'custom';
+    iconInput.value = 'star';
+    descInput.value = '';
+    contentInput.value = `# 📝 我的自定义日记模板\n\n## 1. 今日核心重点\n- \n\n## 2. 启发与反思\n- \n`;
+  }
+
+  modal.style.display = 'flex';
+  setTimeout(() => nameInput.focus(), 50);
+}
+
+// 关闭模板编辑 Modal
+function closeTemplateEditorModal() {
+  const modal = document.getElementById('template-editor-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+// 保存模板
+function saveTemplateFromEditor() {
+  const nameInput = document.getElementById('template-edit-name');
+  const contentInput = document.getElementById('template-edit-content');
+  const name = (nameInput.value || '').trim();
+  const content = (contentInput.value || '').trim();
+
+  if (!name) {
+    toast('请输入模板名称', 'warning');
+    nameInput.focus();
+    return;
+  }
+  if (!content) {
+    toast('请输入模板默认 Markdown 内容', 'warning');
+    contentInput.focus();
+    return;
+  }
+
+  const id = document.getElementById('template-edit-id').value;
+  const category = document.getElementById('template-edit-category').value;
+  const icon = document.getElementById('template-edit-icon').value;
+  const desc = (document.getElementById('template-edit-desc').value || '').trim();
+
+  TemplateManager.saveCustomTemplate({
+    id: id || null,
+    name,
+    category,
+    icon,
+    desc,
+    content,
+    isCustom: true
+  });
+
+  closeTemplateEditorModal();
+  renderTemplatePageGrid();
+  toast(id ? '模板修改已保存！' : '新自定义模板已成功创建！', 'success');
+}
+
+// 点击「使用此模板」
+async function useTemplateFromGallery(id) {
+  const all = TemplateManager.getAllTemplates();
+  const tpl = all.find(t => t.id === id);
+  if (!tpl) return;
+
+  // 1. 如果当前没有新建编辑器，唤起新编辑器
+  if (typeof openEditor === 'function') {
+    await openEditor(null);
+  } else {
+    showView('editor');
+  }
+
+  // 2. 轮询等待编辑器准备就绪
+  let retries = 0;
+  while (!document.getElementById('editor-textarea') && retries < 20) {
+    await new Promise(r => setTimeout(r, 50));
+    retries++;
+  }
+
+  const textarea = document.getElementById('editor-textarea');
+  const titleInput = document.getElementById('editor-title');
+
+  if (textarea) {
+    textarea.value = tpl.content;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+
+    if (titleInput && (!titleInput.value || titleInput.value === '无标题')) {
+      const todayStr = new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+      titleInput.value = `${tpl.name} (${todayStr})`;
+      titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    if (typeof _runUpdatePreview === 'function') _runUpdatePreview();
+    if (typeof updateWordCount === 'function') updateWordCount();
+    textarea.focus();
+
+    toast(`已套用模板：${tpl.name}`, 'success');
+  }
+}
+
+// 编辑已有的自定义模板
+function editCustomTemplate(id) {
+  const all = TemplateManager.getAllTemplates();
+  const tpl = all.find(t => t.id === id && t.isCustom);
+  if (tpl) {
+    openTemplateEditorModal(tpl);
+  }
+}
+
+// 删除自定义模板
+function deleteCustomTemplateItem(id) {
+  if (!confirm('确定要删除这个自定义模板吗？')) return;
+  TemplateManager.deleteCustomTemplate(id);
+  renderTemplatePageGrid();
+  toast('已删除自定义模板', 'success');
+}
+
+// 在 setupTemplateGalleryEvents 中绑定页面事件
+function setupTemplateGalleryEvents() {
+  // 新建模板按钮
+  const createBtn = document.getElementById('btn-create-custom-template');
+  if (createBtn) createBtn.addEventListener('click', () => openTemplateEditorModal());
+
+  // 模态框关闭与保存按钮
+  const closeBtn = document.getElementById('btn-close-template-editor');
+  const cancelBtn = document.getElementById('btn-cancel-template-editor');
+  const saveBtn = document.getElementById('btn-save-template-editor');
+  const overlay = document.getElementById('template-editor-overlay');
+
+  if (closeBtn) closeBtn.addEventListener('click', closeTemplateEditorModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeTemplateEditorModal);
+  if (overlay) overlay.addEventListener('click', closeTemplateEditorModal);
+  if (saveBtn) saveBtn.addEventListener('click', saveTemplateFromEditor);
+
+  // 搜索框
+  const searchInput = document.getElementById('template-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      renderTemplatePageGrid(currentTemplateCategory, e.target.value);
+    });
+  }
+
+  // 分类 Tabs
+  const tabWrap = document.getElementById('template-category-tabs');
+  if (tabWrap) {
+    tabWrap.querySelectorAll('.template-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabWrap.querySelectorAll('.template-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const cat = tab.dataset.cat || 'all';
+        renderTemplatePageGrid(cat, currentTemplateSearch);
+      });
+    });
   }
 }
 

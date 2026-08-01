@@ -791,6 +791,41 @@
           </div>
         </div>
 
+        <!-- 🎨 模板库视图 (独立大屏一等公民页面) -->
+        <div id="view-templates" class="content-view view-templates">
+          <div class="content-header template-hero-header">
+            <div class="template-hero-title">
+              <h2>🎨 日记模板工坊</h2>
+              <p class="template-hero-sub">精选开箱即用多维模板，支持自定义编辑与创作专属模板</p>
+            </div>
+            <div class="template-hero-actions">
+              <button class="btn btn-primary" id="btn-create-custom-template">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                + 新建自定义模板
+              </button>
+            </div>
+          </div>
+
+          <!-- 模板控制栏 (搜索 + 胶囊分类 Filter) -->
+          <div class="template-page-bar">
+            <div class="template-search-wrap">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="template-search-input" placeholder="搜索模板标题、内容关键词..." class="template-search-input">
+            </div>
+            <div class="template-category-tabs" id="template-category-tabs">
+              <button class="template-tab active" data-cat="all">全部模板</button>
+              <button class="template-tab" data-cat="custom">✍️ 我的自定义</button>
+              <button class="template-tab" data-cat="preset">🌟 官方精选</button>
+              <button class="template-tab" data-cat="life">📖 生活感悟</button>
+              <button class="template-tab" data-cat="work">⚡ 效率工作</button>
+              <button class="template-tab" data-cat="study">🎓 学习复盘</button>
+            </div>
+          </div>
+
+          <!-- 模板大屏网格 (疏朗大方 320px 网格) -->
+          <div id="template-page-grid" class="template-page-grid"></div>
+        </div>
+
         <!-- 个人设置视图 -->
         <div id="view-profile" class="content-view">
           <div class="content-header">
@@ -1236,6 +1271,60 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="version-history-cancel">关闭</button>
         <button class="btn btn-primary" id="version-history-revert-btn" disabled style="display:none;">恢复到此版本</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ✍️ 自定义模板创建与编辑 Modal -->
+  <div class="modal" id="template-editor-modal" style="display:none;">
+    <div class="modal-overlay" id="template-editor-overlay"></div>
+    <div class="modal-card template-editor-card">
+      <div class="modal-header">
+        <h3 id="template-editor-title">新建日记模板</h3>
+        <button class="btn-close" id="btn-close-template-editor">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="template-editor-form">
+          <input type="hidden" id="template-edit-id">
+          <div class="form-group">
+            <label>模板名称 <span style="color:var(--danger)">*</span></label>
+            <input type="text" id="template-edit-name" placeholder="如：我的晨间清醒三件事" required class="form-input">
+          </div>
+          <div class="form-row" style="display:flex;gap:12px;">
+            <div class="form-group" style="flex:1;">
+              <label>模板分类</label>
+              <select id="template-edit-category" class="filter-select" style="width:100%;">
+                <option value="life">📖 生活感悟</option>
+                <option value="work">⚡ 效率工作</option>
+                <option value="study">🎓 学习复盘</option>
+                <option value="custom" selected>✍️ 个人专属</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label>图标主题</label>
+              <select id="template-edit-icon" class="filter-select" style="width:100%;">
+                <option value="sunrise">🌅 晨间/清晨</option>
+                <option value="grid">🧩 结构复盘</option>
+                <option value="star">🌟 极简精选</option>
+                <option value="target">🎯 目标/计划</option>
+                <option value="book">📖 读书/笔记</option>
+                <option value="code">💻 代码/技术</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>简短描述</label>
+            <input type="text" id="template-edit-desc" placeholder="一句话介绍此模板的用途..." class="form-input">
+          </div>
+          <div class="form-group">
+            <label>模板 Markdown 默认正文 <span style="color:var(--danger)">*</span></label>
+            <textarea id="template-edit-content" rows="10" placeholder="在此输入 Markdown 格式的默认骨架框架..." required class="form-textarea" style="font-family:var(--font-mono);"></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btn-cancel-template-editor">取消</button>
+        <button class="btn btn-primary" id="btn-save-template-editor">💾 保存模板</button>
       </div>
     </div>
   </div>
