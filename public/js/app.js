@@ -11851,6 +11851,7 @@ function openTemplateGalleryModal() {
           const textarea = document.getElementById('editor-textarea');
           if (textarea) {
             textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + DIARY_TEMPLATES[type];
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
             if (typeof _runUpdatePreview === 'function') _runUpdatePreview();
             if (typeof updateWordCount === 'function') updateWordCount();
             textarea.focus();

@@ -10680,59 +10680,117 @@ textarea,
   background: rgba(255, 255, 255, 0.25);
 }
 
-/* ---- 🧘 专注 Zen Mode 沉浸模式 ---- */
+/* ---- 🧘 专注 Zen Mode 沉浸模式（终极弹起与全屏复位） ---- */
 .zen-exit-floating-btn {
   position: fixed;
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 99999;
-  padding: 8px 18px;
-  border-radius: 20px;
+  padding: 8px 20px;
+  border-radius: 24px;
   background: var(--accent);
-  color: white;
+  color: #ffffff;
   border: 1px solid rgba(255, 255, 255, 0.3);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
   cursor: pointer;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   transition: all 0.25s var(--ease-spring);
 }
 .zen-exit-floating-btn:hover {
   transform: translateX(-50%) scale(1.06);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+}
+
+body.zen-active,
+body.zen-active #app,
+body.zen-active .main-view {
+  display: block !important;
+  width: 100vw !important;
+  min-height: 100vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: var(--bg-paper) !important;
+  grid-template-columns: 1fr !important;
+  overflow-x: hidden !important;
 }
 
 body.zen-active .sidebar,
 body.zen-active .mobile-header,
 body.zen-active .mobile-bottom-nav,
-body.zen-active .editor-meta,
+body.zen-active .editor-toolbar-wrapper,
+body.zen-active .editor-options,
 body.zen-active .editor-preview-container,
-body.zen-active .editor-header-actions {
+body.zen-active .preview-pane,
+body.zen-active #btn-back-list,
+body.zen-active .editor-header-actions,
+body.zen-active .editor-footer,
+body.zen-active .editor-pane::before {
   display: none !important;
 }
-body.zen-active {
-  background: var(--bg-paper) !important;
-}
+
 body.zen-active .main-content {
-  margin-left: 0 !important;
-  max-width: 860px !important;
   margin: 0 auto !important;
-  padding: 30px 20px !important;
+  width: 100% !important;
+  max-width: 860px !important;
+  padding: 70px 24px 40px 24px !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
 }
-body.zen-active .editor-container {
+
+body.zen-active #view-editor,
+body.zen-active .editor-container,
+body.zen-active .editor-body,
+body.zen-active .editor-pane {
+  display: block !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: calc(100vh - 160px) !important;
+  background: transparent !important;
   border: none !important;
   box-shadow: none !important;
-  background: transparent !important;
-  min-height: calc(100vh - 120px);
+  padding: 0 !important;
+  margin: 0 !important;
+  grid-template-columns: 1fr !important;
 }
-body.zen-active #editor-textarea {
-  font-size: 16px !important;
-  line-height: 1.8 !important;
-  padding: 20px 0 !important;
+
+body.zen-active .editor-header-wrapper,
+body.zen-active .editor-header {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin-bottom: 20px !important;
+  box-shadow: none !important;
+}
+
+body.zen-active #editor-title {
+  font-size: 32px !important;
+  font-weight: 700 !important;
   border: none !important;
   background: transparent !important;
+  padding: 0 !important;
+  width: 100% !important;
+  color: var(--fg) !important;
+  outline: none !important;
+}
+
+body.zen-active #editor-textarea {
+  width: 100% !important;
+  min-height: calc(100vh - 240px) !important;
+  font-size: 17px !important;
+  line-height: 1.85 !important;
+  letter-spacing: 0.01em !important;
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: var(--fg) !important;
+  resize: none !important;
+  padding: 10px 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
 }
 
 /* ---- 😍 消息 Emoji 表情回应挂件 ---- */
