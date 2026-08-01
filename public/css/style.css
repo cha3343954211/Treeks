@@ -1418,9 +1418,13 @@ html, body {
   box-shadow: 0 0 0 2px var(--accent), 0 4px 10px rgba(0, 0, 0, 0.2);
 }
 
-/* ⚡ GoodNotes 级 0 延迟动态 Canvas 实时墨水画板与 SVG 堆叠图层 */
+/* ===== 📜 GoodNotes 级 840px 标准纸张画布容器 (固定字幅排版不拥挤) ===== */
 .preview-content-wrapper {
   position: relative !important;
+  max-width: 840px !important;
+  margin: 0 auto !important;
+  width: 100% !important;
+  box-sizing: border-box;
 }
 
 #annotation-layer {
@@ -1447,6 +1451,8 @@ html, body {
 #editor-preview {
   position: relative;
   z-index: 1;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .markdown-body pre,
