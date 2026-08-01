@@ -11448,13 +11448,13 @@ function renderMsgMessages() {
       `;
     }
 
+    const bubbleInner = showText ? escapeHtml(textContent) : '';
+    const fullInner = (bubbleInner && fileHtml) ? (bubbleInner + fileHtml) : (bubbleInner || fileHtml);
+
     return `
       <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
         <div class="msg-bubble-container">
-          <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">
-            ${showText ? escapeHtml(textContent) : ''}
-            ${fileHtml}
-          </div>
+          <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${fullInner}</div>
           <div class="msg-bubble-time">${time}</div>
         </div>
       </div>

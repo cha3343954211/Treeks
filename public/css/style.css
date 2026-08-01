@@ -9165,26 +9165,31 @@ html, body {
   align-items: flex-start;
 }
 .msg-bubble {
-  padding: 10px 15px;
+  padding: 8px 14px;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.5;
   letter-spacing: 0.01em;
   word-wrap: break-word;
   word-break: break-word;
   white-space: pre-wrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .msg-bubble.mine {
   background: var(--accent);
   color: #ffffff;
   border-radius: 16px 16px 4px 16px;
   font-weight: 500;
+  align-self: flex-end;
 }
 .msg-bubble.theirs {
   background: var(--bg-paper);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 16px 16px 16px 4px;
+  align-self: flex-start;
 }
 .msg-bubble-time {
   font-size: 11px;
