@@ -461,8 +461,14 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// 获取 SVG 坐标系下的鼠标位置
+// ⚡ 0-Reflow 坐标计算（使用下笔时预缓存的 bounds，消去 pointermove 期间 getBoundingClientRect 的强制重排）
 function getSvgPoint(evt) {
+  if (brushState.cachedBounds) {
+    return {
+      x: evt.clientX - brushState.cachedBounds.left,
+      y: evt.clientY - brushState.cachedBounds.top
+    };
+  }
   const svg = document.getElementById('annotation-layer');
   if (!svg) return { x: 0, y: 0 };
   const rect = svg.getBoundingClientRect();
@@ -1576,11 +1582,55 @@ function commitTextInput() {
   brushState.textInput = null;
 }
 
+// ⚡ GoodNotes 级 0 延迟同步增量出墨 + 笔尖预测绘制引擎 (Direct Synchronous Ink Engine)
+function drawDirectIncrementalSegment(p0, p1, predP) {
+  const canvas = document.getElementById('brush-active-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const type = brushState.tool;
+  const isHighlight = type === 'highlight';
+  const color = brushState.color || '#ffeb3b';
+  const size = brushState.size || 6;
+  const op = brushState.opacity !== undefined ? brushState.opacity : 1;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = isHighlight ? Math.max(size, 10) * 1.8 : size;
+  ctx.globalAlpha = isHighlight ? (0.45 * op) : op;
+
+  if (isHighlight) {
+    const isDark = document.documentElement.getAttribute('data-mode') === 'dark';
+    if (!isDark) ctx.globalCompositeOperation = 'multiply';
+  }
+
+  ctx.beginPath();
+  const midX = (p0.x + p1.x) / 2;
+  const midY = (p0.y + p1.y) / 2;
+  ctx.moveTo(p0.x, p0.y);
+  ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
+
+  if (predP) {
+    // 🔮 笔尖外推预测：向前方微延伸 0.5 个步进，形成物理级完全跟手
+    ctx.quadraticCurveTo(midX, midY, predP.x, predP.y);
+  } else {
+    ctx.lineTo(p1.x, p1.y);
+  }
+
+  ctx.stroke();
+  ctx.restore();
+}
+
 // 鼠标按下：开始绘制
 function onBrushPointerDown(e) {
   if (brushState.tool === 'none') return;
   const svg = document.getElementById('annotation-layer');
   if (!svg) return;
+
+  // ⚡ 0-Reflow：下笔瞬间缓存布局 Bounds，消去 pointermove 期间的强行 Layout 死锁
+  brushState.cachedBounds = svg.getBoundingClientRect();
 
   const pt = getSvgPoint(e);
 
@@ -1626,62 +1676,6 @@ function onBrushPointerDown(e) {
     return;
   }
 
-// ⚡ GoodNotes 级 0 延迟动态 Canvas 实时出墨渲染（120Hz 极速跟手，0 毫秒延迟）
-let activeCanvasRafId = null;
-function renderActiveCanvasInk() {
-  if (activeCanvasRafId) cancelAnimationFrame(activeCanvasRafId);
-  activeCanvasRafId = requestAnimationFrame(() => {
-    const canvas = document.getElementById('brush-active-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const pts = brushState.points;
-    if (!pts || pts.length === 0) return;
-
-    // 清空画板
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const type = brushState.tool;
-    const isHighlight = type === 'highlight';
-    const color = brushState.color || '#ffeb3b';
-    const size = brushState.size || 6;
-    const op = brushState.opacity !== undefined ? brushState.opacity : 1;
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = color;
-    ctx.lineWidth = isHighlight ? Math.max(size, 10) * 1.8 : size;
-    ctx.globalAlpha = isHighlight ? (0.45 * op) : op;
-
-    if (isHighlight) {
-      const isDark = document.documentElement.getAttribute('data-mode') === 'dark';
-      if (!isDark) ctx.globalCompositeOperation = 'multiply';
-    }
-
-    ctx.beginPath();
-    if (pts.length === 1) {
-      ctx.arc(pts[0].x, pts[0].y, ctx.lineWidth / 2, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-    } else if (pts.length === 2) {
-      ctx.moveTo(pts[0].x, pts[0].y);
-      ctx.lineTo(pts[1].x, pts[1].y);
-      ctx.stroke();
-    } else {
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const midX = (pts[i].x + pts[i + 1].x) / 2;
-        const midY = (pts[i].y + pts[i + 1].y) / 2;
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
-      }
-      const last = pts[pts.length - 1];
-      ctx.lineTo(last.x, last.y);
-      ctx.stroke();
-    }
-    ctx.restore();
-  });
-}
-
   brushState.drawing = true;
   brushState.points = [pt];
   brushState.startPoint = pt;
@@ -1701,7 +1695,6 @@ function renderActiveCanvasInk() {
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, w, h);
     }
-    renderActiveCanvasInk();
   } else if (brushState.tool === 'annotate') {
     // 讲解笔：先画临时线段，松开时确定
     const g = svgEl('g', { 'data-temp': 'true' });
@@ -1727,7 +1720,7 @@ function renderActiveCanvasInk() {
   }
 }
 
-// 鼠标移动：实时更新绘制
+// 鼠标移动：0 延迟同步实时出墨
 function onBrushPointerMove(e) {
   const pt = getSvgPoint(e);
 
@@ -1745,23 +1738,46 @@ function onBrushPointerMove(e) {
   }
 
   if (!brushState.drawing) return;
+
+  if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
+    const pts = brushState.points;
+    const lastPt = pts[pts.length - 1];
+    
+    // 过滤同点微小震荡
+    if (lastPt && Math.hypot(pt.x - lastPt.x, pt.y - lastPt.y) < 1.2) {
+      return;
+    }
+
+    // 计算笔尖预测点 (Prediction Point)
+    let predPt = null;
+    if (pts.length >= 2) {
+      const prev = pts[pts.length - 2];
+      const vx = pt.x - prev.x;
+      const vy = pt.y - prev.y;
+      predPt = { x: pt.x + vx * 0.4, y: pt.y + vy * 0.4 };
+    }
+
+    pts.push(pt);
+    // ⚡ 0 延迟同步增量出墨：指针到达的同毫秒内，墨水立刻渲染呈现！
+    drawDirectIncrementalSegment(lastPt || pt, pt, predPt);
+    return;
+  }
+
   const svg = document.getElementById('annotation-layer');
   if (!svg) return;
 
-  // 精细橡皮擦：连续记录轨迹，按步进采样避免点过密
+  // 精细橡皮擦
   if (brushState.tool === 'eraser' && brushState.eraserMode === 'pixel') {
     const last = brushState.eraserPath[brushState.eraserPath.length - 1];
-    // 步进 ≈ radius/2，保证覆盖连续不漏擦
     const minStep = Math.max(2, brushState.eraserRadius / 2);
     if (!last || dist2D(last, pt) >= minStep) {
       brushState.eraserPath.push(pt);
-      // 实时预览橡皮圆环（用最后一节段画一个圆）
       renderEraserPreview();
     }
     return;
   }
 
-  // 套索：记录路径
+  // 套索
   if (brushState.tool === 'lasso' && brushState.lassoDragging) {
     const last = brushState.lassoPath[brushState.lassoPath.length - 1];
     if (!last || dist2D(last, pt) >= 3) {
@@ -1769,11 +1785,6 @@ function onBrushPointerMove(e) {
       renderLassoPreview();
     }
     return;
-  }
-
-  if (brushState.tool === 'highlight' || brushState.tool === 'pen') {
-    brushState.points.push(pt);
-    renderActiveCanvasInk();
   } else if (brushState.tool === 'annotate') {
     // 更新临时线段
     if (brushState.currentPath) {
@@ -1864,6 +1875,7 @@ function renderLassoPreview() {
 
 // 鼠标松开：完成绘制
 function onBrushPointerUp(e) {
+  brushState.cachedBounds = null;
   // 文本拖动结束
   if (brushState.tool === 'text' && brushState.draggingAnno) {
     brushState.draggingAnno = null;
