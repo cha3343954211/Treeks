@@ -11039,6 +11039,7 @@ textarea,
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
   cursor: pointer;
   backdrop-filter: blur(12px);
+}
 /* ===== ⚡ 极速快捷模板应用弹窗样式 ===== */
 .quick-template-popover {
   position: fixed;
