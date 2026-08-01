@@ -10,11 +10,11 @@
   <title>Treeks · 日记</title>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" id="hljs-theme" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked@14.1.2/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
   <!-- PDF.js（PDF 阅读 + 笔刷标注）：使用 UMD 旧版构建以便全局变量 pdfjsLib 可用 -->
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
   <!-- mammoth.js（docx → HTML 转换）：用于 Word 文档预览 -->
@@ -678,6 +678,18 @@
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                   历史
                 </button>
+                <button class="btn btn-ghost btn-sm" id="btn-template-gallery" title="从开箱即用的精致模态模板库快速创作">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                  模板
+                </button>
+                <button class="btn btn-ghost btn-sm" id="btn-lock-diary" title="设置私密 PIN 码保护这篇日记">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  私密锁
+                </button>
+                <button class="btn btn-ghost btn-sm" id="btn-zen-mode" title="开启 Zen 专注无燥沉浸模式">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+                  专注
+                </button>
                 <button class="btn btn-ghost btn-sm" id="btn-export-diary" title="导出当前日记">
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   导出
@@ -711,6 +723,13 @@
             <h2>统计概览</h2>
           </div>
           <div id="stats-content" class="stats-content"></div>
+          <div class="card mood-heatmap-card" style="margin-top:20px;">
+            <div class="card-header">
+              <h3>🟢 过去一年情绪与创作热力矩阵</h3>
+              <div style="font-size:12px;color:var(--fg-muted);">不同深浅色块代表每日心情与日记产出</div>
+            </div>
+            <div id="mood-heatmap-grid" class="mood-heatmap-grid"></div>
+          </div>
         </div>
 
         <!-- 我的文件视图（包含图片、PDF、文本、Office 文档等） -->
@@ -1566,7 +1585,87 @@
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       <span>设置</span>
     </button>
-  </nav>
+  <!-- 那年今日 (Time Capsule) 弹窗 -->
+  <div class="modal" id="on-this-day-modal" style="display:none;">
+    <div class="modal-content" style="max-width: 640px;">
+      <div class="modal-header">
+        <h3>📅 那年今日 · 记忆胶囊</h3>
+        <button class="btn-close" id="btn-close-on-this-day">&times;</button>
+      </div>
+      <div class="modal-body" id="on-this-day-body" style="max-height: 480px; overflow-y: auto;">
+        <div class="att-empty">正在拉取往年同期的思考与记录...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 精美模板库弹窗 -->
+  <div class="modal" id="template-gallery-modal" style="display:none;">
+    <div class="modal-content" style="max-width: 680px;">
+      <div class="modal-header">
+        <h3>📋 精美创作模板库</h3>
+        <button class="btn-close" id="btn-close-template-gallery">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="template-grid" id="template-grid">
+          <div class="template-card" data-template="morning">
+            <div class="template-icon">🌅</div>
+            <div class="template-title">晨间三件事日记</div>
+            <div class="template-desc">开启积极高效的一天，记录今日目标与感恩项</div>
+          </div>
+          <div class="template-card" data-template="ninegrid">
+            <div class="template-icon">🧩</div>
+            <div class="template-title">曼陀罗九宫格复盘</div>
+            <div class="template-desc">健康、工作、财务、学习、人际等多维度平衡思考</div>
+          </div>
+          <div class="template-card" data-template="weekly">
+            <div class="template-icon">📊</div>
+            <div class="template-title">周度总结与规划</div>
+            <div class="template-desc">回顾本周进展、成功体验、遗憾与下周重点行动</div>
+          </div>
+          <div class="template-card" data-template="reading">
+            <div class="template-icon">📖</div>
+            <div class="template-title">读书/影视金句笔记</div>
+            <div class="template-desc">摘录精彩片段、记录个人触动与实践见解</div>
+          </div>
+          <div class="template-card" data-template="okr">
+            <div class="template-icon">🎯</div>
+            <div class="template-title">OKR 目标进度追踪</div>
+            <div class="template-desc">明确核心目标 Objectives 与关键结果 Key Results 达成率</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 私密锁 PIN 码解锁弹窗 -->
+  <div class="modal" id="pin-unlock-modal" style="display:none;">
+    <div class="modal-content" style="max-width: 360px; text-align: center;">
+      <div class="modal-header">
+        <h3>🔒 解锁私密日记</h3>
+        <button class="btn-close" id="btn-close-pin-unlock">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size: 13px; color: var(--fg-muted); margin-bottom: 16px;">请输入 4 位数字 PIN 码解密查看正文</div>
+        <div class="pin-dots" id="pin-dots">
+          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+        </div>
+        <div class="pin-keypad">
+          <button class="pin-key" data-val="1">1</button>
+          <button class="pin-key" data-val="2">2</button>
+          <button class="pin-key" data-val="3">3</button>
+          <button class="pin-key" data-val="4">4</button>
+          <button class="pin-key" data-val="5">5</button>
+          <button class="pin-key" data-val="6">6</button>
+          <button class="pin-key" data-val="7">7</button>
+          <button class="pin-key" data-val="8">8</button>
+          <button class="pin-key" data-val="9">9</button>
+          <button class="pin-key pin-clear" id="btn-pin-clear">C</button>
+          <button class="pin-key" data-val="0">0</button>
+          <button class="pin-key pin-submit" id="btn-pin-submit">✓</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/js/app.js"></script>
 </body>

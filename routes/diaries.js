@@ -16,6 +16,26 @@ function stringifyTags(tagsArr) {
   return JSON.stringify(tagsArr || []);
 }
 
+function validateDiaryBody(body, partial = false) {
+  const fields = [
+    ['title', 200], ['content', 10 * 1024 * 1024], ['mood', 50], ['weather', 50]
+  ];
+  for (const [key, max] of fields) {
+    if (body[key] === undefined && partial) continue;
+    if (body[key] != null && typeof body[key] !== 'string') return `${key} 格式无效`;
+    if (typeof body[key] === 'string' && body[key].length > max) return `${key} 内容过长`;
+  }
+  if (body.tags !== undefined) {
+    if (!Array.isArray(body.tags) || body.tags.length > 50 || body.tags.some(t => typeof t !== 'string' || t.length > 50)) {
+      return 'tags 格式无效';
+    }
+  }
+  if (body.visibleTo !== undefined && (!Array.isArray(body.visibleTo) || body.visibleTo.length > 100)) {
+    return 'visibleTo 格式无效';
+  }
+  return null;
+}
+
 // 本地日期字符串（YYYY-MM-DD），避免 toISOString 返回 UTC 日期与日记 created_at（localtime）错位
 function localDateStr(d) {
   const y = d.getFullYear();
@@ -222,6 +242,18 @@ router.get('/', (req, res) => {
   });
 });
 
+// This single-segment route must be declared before /:id.
+router.get('/blocked-users', (req, res) => {
+  const rows = db.prepare(
+    `SELECT u.id, u.username, u.nickname, u.avatar, ub.created_at AS blocked_at
+     FROM user_blocks ub
+     JOIN users u ON u.id = ub.blocked_user_id
+     WHERE ub.user_id = ?
+     ORDER BY ub.created_at DESC`
+  ).all(req.user.id);
+  res.json({ items: rows, total: rows.length });
+});
+
 // 获取单篇日记（支持协作者/被授权用户读取他人日记）
 router.get('/:id', (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -265,6 +297,8 @@ router.get('/:id', (req, res) => {
 
 // 创建日记
 router.post('/', (req, res) => {
+  const validationError = validateDiaryBody(req.body || {});
+  if (validationError) return res.status(400).json({ error: validationError });
   const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators, folder_id, pdf_filename, pdf_pages } = req.body || {};
   const vis = ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : 'private';
 
@@ -326,6 +360,9 @@ router.post('/', (req, res) => {
 // 更新日记（协作者也可编辑）
 router.put('/:id', (req, res) => {
   const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '日记 ID 无效' });
+  const validationError = validateDiaryBody(req.body || {}, true);
+  if (validationError) return res.status(400).json({ error: validationError });
   const existing = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '日记不存在' });
 
@@ -656,18 +693,6 @@ router.get('/shared/list', (req, res) => {
 
 // ===== 屏蔽用户管理 =====
 
-// 获取已屏蔽用户列表
-router.get('/blocked-users', (req, res) => {
-  const rows = db.prepare(
-    `SELECT u.id, u.username, u.nickname, u.avatar, ub.created_at AS blocked_at
-     FROM user_blocks ub
-     JOIN users u ON u.id = ub.blocked_user_id
-     WHERE ub.user_id = ?
-     ORDER BY ub.created_at DESC`
-  ).all(req.user.id);
-  res.json({ items: rows, total: rows.length });
-});
-
 // 屏蔽用户
 router.post('/blocked-users', (req, res) => {
   const { blockedUserId } = req.body || {};
@@ -895,7 +920,41 @@ router.get('/stats/summary', (req, res) => {
      GROUP BY date ORDER BY date DESC`
   ).all(req.user.id);
 
-  res.json({ total, pinned, moodStats, topTags, recentDays });
+  // 过去 365 天情绪热力矩阵
+  const yearHeatmap = db.prepare(
+    `SELECT substr(created_at, 1, 10) as date, mood, COUNT(*) as count
+     FROM diaries WHERE user_id = ?
+     AND created_at >= datetime('now', '-365 days')
+     GROUP BY date, mood ORDER BY date ASC`
+  ).all(req.user.id);
+
+  res.json({ total, pinned, moodStats, topTags, recentDays, yearHeatmap });
+});
+
+  // 那年今日 (On This Day / Time Capsule)
+router.get('/on-this-day', (req, res) => {
+  const monthDay = new Date().toISOString().slice(5, 10); // MM-DD
+  const rows = db.prepare(`
+    SELECT id, title, content, mood, weather, tags, created_at
+    FROM diaries
+    WHERE user_id = ? AND strftime('%m-%d', created_at) = ? AND strftime('%Y', created_at) != strftime('%Y', 'now')
+    ORDER BY created_at DESC
+  `).all(req.user.id, monthDay);
+
+  res.json({ items: rows.map(r => ({ ...r, tags: parseTags(r.tags) })) });
+});
+
+// 解锁私密日记
+router.post('/:id/unlock', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { pin } = req.body || {};
+  const diary = db.prepare('SELECT * FROM diaries WHERE id = ? AND user_id = ?').get(id, req.user.id);
+  if (!diary) return res.status(404).json({ error: '日记不存在' });
+  if (!diary.is_locked) return res.json({ success: true, diary });
+  if (diary.pin_code && diary.pin_code !== String(pin)) {
+    return res.status(400).json({ error: '解锁 PIN 码错误' });
+  }
+  res.json({ success: true, diary: { ...diary, tags: parseTags(diary.tags) } });
 });
 
 module.exports = router;

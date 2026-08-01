@@ -95,10 +95,25 @@ router.get('/with/:peerId', (req, res) => {
        LIMIT ?`
     ).all(req.user.id, peerId, peerId, req.user.id, limit);
   }
-  // 标记为已读
-  db.prepare("UPDATE messages SET is_read = 1, read_at = datetime('now') WHERE recipient_id = ? AND sender_id = ? AND is_read = 0")
-    .run(req.user.id, peerId);
-  res.json({ items: rows.reverse() });
+  // 聚合反应 Emoji
+  const msgIds = rows.map(r => r.id);
+  const reactMap = {};
+  if (msgIds.length > 0) {
+    const reactRows = db.prepare(`
+      SELECT message_id, emoji, COUNT(*) as count, MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) as mine
+      FROM message_reactions WHERE message_id IN (${msgIds.map(()=>'?').join(',')}) GROUP BY message_id, emoji
+    `).all(req.user.id, ...msgIds);
+    for (const r of reactRows) {
+      if (!reactMap[r.message_id]) reactMap[r.message_id] = [];
+      reactMap[r.message_id].push({ emoji: r.emoji, count: r.count, mine: !!r.mine });
+    }
+  }
+
+  const items = rows.reverse().map(r => ({
+    ...r,
+    reactions: reactMap[r.id] || []
+  }));
+  res.json({ items });
 });
 
 // 发送消息（body: { peerId, content, fileId }）
@@ -112,7 +127,8 @@ router.post('/', (req, res) => {
   const recipient = db.prepare('SELECT status FROM users WHERE id = ?').get(rid);
   if (!recipient) return res.status(404).json({ error: '收件人不存在' });
   if (recipient.status !== 'active') return res.status(400).json({ error: '收件人已被停用' });
-  const text = (content || '').toString().slice(0, 4000);
+  if (content != null && typeof content !== 'string') return res.status(400).json({ error: '消息内容格式无效' });
+  const text = (content || '').slice(0, 4000);
   let fid = null;
   if (fileId) {
     fid = parseInt(fileId, 10);
@@ -153,14 +169,30 @@ router.post('/read/:peerId', (req, res) => {
   res.json({ message: '已标记为已读' });
 });
 
-// 删除单条消息（仅发送者可删自己的消息）
-router.delete('/:id', (req, res) => {
+// 切换消息 Emoji 表情回应（点赞/添加/取消）
+router.post('/:id/reactions', (req, res) => {
   const mid = parseInt(req.params.id, 10);
-  const msg = db.prepare('SELECT sender_id FROM messages WHERE id = ?').get(mid);
-  if (!msg) return res.status(404).json({ error: '消息不存在' });
-  if (msg.sender_id !== req.user.id) return res.status(403).json({ error: '只能删除自己发送的消息' });
-  db.prepare('DELETE FROM messages WHERE id = ?').run(mid);
-  res.json({ message: '已删除' });
+  const { emoji } = req.body || {};
+  if (!mid || !emoji) return res.status(400).json({ error: '参数错误' });
+
+  const msg = db.prepare('SELECT sender_id, recipient_id FROM messages WHERE id = ?').get(mid);
+  if (!msg || (msg.sender_id !== req.user.id && msg.recipient_id !== req.user.id)) {
+    return res.status(403).json({ error: '无权操作此消息' });
+  }
+
+  const existing = db.prepare('SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?').get(mid, req.user.id, emoji);
+  if (existing) {
+    db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
+  } else {
+    db.prepare('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)').run(mid, req.user.id, emoji);
+  }
+
+  const reactions = db.prepare(`
+    SELECT emoji, COUNT(*) as count, MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) as mine
+    FROM message_reactions WHERE message_id = ? GROUP BY emoji
+  `).all(req.user.id, mid);
+
+  res.json({ messageId: mid, reactions });
 });
 
 module.exports = router;

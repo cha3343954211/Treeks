@@ -3859,6 +3859,9 @@ async function loadStats() {
         </div>
       </div>
     `;
+    if (typeof renderMoodHeatmap === 'function') {
+      renderMoodHeatmap(summary.yearHeatmap || []);
+    }
     bindHeatmapInteractions();
   } catch (e) {
     container.innerHTML = `<p style="color:var(--danger);">${escapeHtml(e.message)}</p>`;
@@ -7144,6 +7147,34 @@ function bindEvents() {
   // 历史版本按钮
   const verBtn = document.getElementById('btn-version-history');
   if (verBtn) verBtn.addEventListener('click', openVersionHistoryModal);
+
+  // 禅/专注沉浸模式
+  const zenBtn = document.getElementById('btn-zen-mode');
+  if (zenBtn) zenBtn.addEventListener('click', toggleZenMode);
+
+  // 那年今日记忆胶囊
+  const otdBtn = document.getElementById('btn-nav-on-this-day');
+  if (otdBtn) otdBtn.addEventListener('click', openOnThisDayModal);
+  const closeOtd = document.getElementById('btn-close-on-this-day');
+  if (closeOtd) closeOtd.addEventListener('click', () => {
+    document.getElementById('on-this-day-modal').style.display = 'none';
+  });
+
+  // 模态模板库
+  const tplBtn = document.getElementById('btn-template-gallery');
+  if (tplBtn) tplBtn.addEventListener('click', openTemplateGalleryModal);
+  const closeTpl = document.getElementById('btn-close-template-gallery');
+  if (closeTpl) closeTpl.addEventListener('click', () => {
+    document.getElementById('template-gallery-modal').style.display = 'none';
+  });
+
+  // 私密锁按钮
+  const lockBtn = document.getElementById('btn-lock-diary');
+  if (lockBtn) lockBtn.addEventListener('click', openLockDiaryPrompt);
+  const closePin = document.getElementById('btn-close-pin-unlock');
+  if (closePin) closePin.addEventListener('click', () => {
+    document.getElementById('pin-unlock-modal').style.display = 'none';
+  });
 
   // 触控快捷指令按钮
   const touchCmdBtn = document.getElementById('btn-touch-cmd');
@@ -11451,10 +11482,19 @@ function renderMsgMessages() {
     const bubbleInner = showText ? escapeHtml(textContent) : '';
     const fullInner = (bubbleInner && fileHtml) ? (bubbleInner + fileHtml) : (bubbleInner || fileHtml);
 
+    let reactionsHtml = '';
+    const reacts = m.reactions || [];
+    reactionsHtml = `<div class="msg-reaction-bar">
+      ${reacts.map(r => `<span class="msg-reaction-pill ${r.mine ? 'mine' : ''}" onclick="toggleMsgReaction(${m.id}, '${r.emoji}')">${r.emoji} ${r.count}</span>`).join('')}
+      <span class="msg-reaction-pill" style="opacity:0.6;" onclick="toggleMsgReaction(${m.id}, '👍')">+👍</span>
+      <span class="msg-reaction-pill" style="opacity:0.6;" onclick="toggleMsgReaction(${m.id}, '❤️')">+❤️</span>
+    </div>`;
+
     return `
       <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
         <div class="msg-bubble-container">
           <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${fullInner}</div>
+          ${reactionsHtml}
           <div class="msg-bubble-time">${time}</div>
         </div>
       </div>
@@ -11636,4 +11676,266 @@ function handleIncomingWsMessage(payload) {
   if (state.currentNav === 'messages') {
     loadMsgConversations();
   }
+}
+
+// ===== 🧘 禅/专注沉浸模式 (Zen Focus Mode) =====
+function toggleZenMode() {
+  const isZen = document.body.classList.toggle('zen-active');
+  if (isZen) {
+    toast('已开启 Zen 专注书写模式 (按 Esc 退出)', 'info');
+  } else {
+    toast('已退出 专注书写模式', 'info');
+  }
+}
+
+// ===== 📅 那年今日 (On This Day / Time Capsule) =====
+async function openOnThisDayModal() {
+  const modal = document.getElementById('on-this-day-modal');
+  const body = document.getElementById('on-this-day-body');
+  if (!modal || !body) return;
+
+  modal.style.display = 'flex';
+  body.innerHTML = '<div class="att-empty">正在调取往年同期的思考与记忆胶囊...</div>';
+
+  try {
+    const res = await api('/api/diaries/on-this-day');
+    if (!res.items || !res.items.length) {
+      body.innerHTML = '<div class="att-empty" style="padding: 40px 0;">🌟 历史上的今天暂未留下思考碎片，继续记录当下吧！</div>';
+      return;
+    }
+
+    body.innerHTML = res.items.map(d => {
+      const year = new Date(d.created_at).getFullYear();
+      const yearsAgo = new Date().getFullYear() - year;
+      return `
+        <div class="card diary-card" style="margin-bottom: 14px;" onclick="document.getElementById('on-this-day-modal').style.display='none'; openEditor(${d.id});">
+          <div class="diary-card-header">
+            <h4 class="diary-card-title">${escapeHtml(d.title || '无标题')}</h4>
+            <span class="badge" style="background:var(--accent-light);color:var(--accent);">${yearsAgo} 年前的今天 (${year})</span>
+          </div>
+          <div class="diary-card-preview">${escapeHtml(d.content || '').slice(0, 150)}...</div>
+          <div class="diary-card-footer" style="margin-top:8px;font-size:12px;color:var(--fg-muted);">
+            <span>${d.mood || '🌱 心情'} · ${d.weather || '☀️ 天气'}</span>
+            <span>点击查看完整日记 &rarr;</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="att-empty" style="color:var(--error);">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ===== 📋 模态精美模板库 (Rich Template Gallery) =====
+const DIARY_TEMPLATES = {
+  morning: `# 🌅 晨间日记
+
+## 🎯 今日 3 个核心目标
+1. [ ] 
+2. [ ] 
+3. [ ] 
+
+## 关注感恩事项
+- 
+
+## 💡 一句给自己的肯定
+`,
+  ninegrid: `# 🧩 曼陀罗九宫格复盘
+
+| 领域 | 思考与进展 |
+|---|---|
+| 🏃‍♂️ 健康体能 | |
+| 💼 事业工作 | |
+| 💰 财务理财 | |
+| 📚 学习成长 | |
+| 🤝 人际社交 | |
+| 🏡 家庭生活 | |
+| 🎨 兴趣爱好 | |
+| 🧘 心灵修养 | |
+| 🌟 年度大愿 | |
+`,
+  weekly: `# 📊 周度总结与规划
+
+## ✨ 本周 Hook & 亮点成就
+- 
+
+## 🚧 遇到的阻碍与反思
+- 
+
+## 🎯 下周关键行动行动项
+1. 
+2. 
+`,
+  reading: `# 📖 读书/影视卡片笔记
+
+- **作品名称**: 
+- **作者/导演**: 
+- **推荐指数**: ⭐⭐⭐⭐⭐
+
+## 💬 精彩金句摘录
+> 
+
+## 💡 个人感悟与行动行动项
+- 
+`,
+  okr: `# 🎯 OKR 目标进度追踪
+
+## 核心目标 O: 
+### 关键结果 KR 1:  (进度: 0%)
+### 关键结果 KR 2:  (进度: 0%)
+### 关键结果 KR 3:  (进度: 0%)
+
+## 📋 支撑关键行动
+- [ ] 
+`
+};
+
+function openTemplateGalleryModal() {
+  const modal = document.getElementById('template-gallery-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+
+  document.querySelectorAll('.template-card').forEach(card => {
+    card.onclick = () => {
+      const type = card.dataset.template;
+      if (type && DIARY_TEMPLATES[type]) {
+        const textarea = document.getElementById('editor-textarea');
+        if (textarea) {
+          textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + DIARY_TEMPLATES[type];
+          if (typeof updatePreview === 'function') updatePreview();
+          if (typeof updateWordCount === 'function') updateWordCount();
+        }
+        modal.style.display = 'none';
+        toast('已成功载入模态创作模板！', 'success');
+      }
+    };
+  });
+}
+
+// ===== 🔒 私密锁与 PIN 码设置 =====
+let currentPinBuffer = '';
+let currentLockingDiaryId = null;
+
+function openLockDiaryPrompt() {
+  const pin = prompt('请输入 4 位数字密码设置私密保护锁（留空取消加锁）：');
+  if (pin === null) return;
+
+  if (pin.trim() === '') {
+    if (state.editingId) {
+      api(`/api/diaries/${state.editingId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_locked: 0, pin_code: '' })
+      }).then(() => toast('已取消该日记的私密锁！', 'success')).catch(e => toast(e.message, 'error'));
+    }
+    return;
+  }
+
+  if (!/^\d{4}$/.test(pin.trim())) {
+    toast('私密密码必须为 4 位纯数字！', 'error');
+    return;
+  }
+
+  if (state.editingId) {
+    api(`/api/diaries/${state.editingId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ is_locked: 1, pin_code: pin.trim() })
+    }).then(() => toast('已为当前日记设置私密锁！', 'success')).catch(e => toast(e.message, 'error'));
+  }
+}
+
+function promptPinUnlock(diaryId) {
+  currentLockingDiaryId = diaryId;
+  currentPinBuffer = '';
+  updatePinDots();
+  const modal = document.getElementById('pin-unlock-modal');
+  if (modal) modal.style.display = 'flex';
+
+  document.querySelectorAll('.pin-key[data-val]').forEach(key => {
+    key.onclick = () => {
+      if (currentPinBuffer.length < 4) {
+        currentPinBuffer += key.dataset.val;
+        updatePinDots();
+      }
+    };
+  });
+
+  const clearBtn = document.getElementById('btn-pin-clear');
+  if (clearBtn) clearBtn.onclick = () => {
+    currentPinBuffer = '';
+    updatePinDots();
+  };
+
+  const submitBtn = document.getElementById('btn-pin-submit');
+  if (submitBtn) submitBtn.onclick = submitPinUnlock;
+}
+
+function updatePinDots() {
+  document.querySelectorAll('#pin-dots .pin-dot').forEach((dot, idx) => {
+    if (idx < currentPinBuffer.length) dot.classList.add('active');
+    else dot.classList.remove('active');
+  });
+}
+
+async function submitPinUnlock() {
+  if (currentPinBuffer.length !== 4) {
+    toast('请输入完整的 4 位 PIN 码', 'error');
+    return;
+  }
+  try {
+    const res = await api(`/api/diaries/${currentLockingDiaryId}/unlock`, {
+      method: 'POST',
+      body: JSON.stringify({ pin: currentPinBuffer })
+    });
+    document.getElementById('pin-unlock-modal').style.display = 'none';
+    toast('解密成功！', 'success');
+    openEditor(currentLockingDiaryId);
+  } catch (e) {
+    toast(`解锁失败：${e.message}`, 'error');
+    currentPinBuffer = '';
+    updatePinDots();
+  }
+}
+
+// ===== 😍 消息 Emoji 表情回应微互动 =====
+async function toggleMsgReaction(msgId, emoji) {
+  try {
+    const res = await api(`/api/messages/${msgId}/reactions`, {
+      method: 'POST',
+      body: JSON.stringify({ emoji })
+    });
+    // 更新本地状态与渲染
+    const m = msgState.messages.find(x => x.id === msgId);
+    if (m) {
+      m.reactions = res.reactions;
+      renderMsgMessages();
+    }
+  } catch (e) {
+    toast(`回应失败：${e.message}`, 'error');
+  }
+}
+
+// ===== 🟢 过去一年情绪贡献热力墙网格渲染 =====
+function renderMoodHeatmap(yearHeatmap) {
+  const container = document.getElementById('mood-heatmap-grid');
+  if (!container) return;
+
+  if (!yearHeatmap || !yearHeatmap.length) {
+    container.innerHTML = '<div class="att-empty" style="padding: 20px 0;">坚持写日记，这里将凝聚您的全彩情绪热力墙！</div>';
+    return;
+  }
+
+  const map = {};
+  yearHeatmap.forEach(h => { map[h.date] = h.count; });
+
+  const html = [];
+  const today = new Date();
+  for (let i = 180; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const count = map[dateStr] || 0;
+    const level = count > 3 ? 4 : count;
+    html.push(`<div class="mood-heatmap-cell" data-level="${level}" title="${dateStr}: ${count} 篇日记"></div>`);
+  }
+  container.innerHTML = html.join('');
 }

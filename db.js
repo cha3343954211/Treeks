@@ -512,6 +512,34 @@ function initDatabase() {
     if (fixedCount > 0) console.log(`[DB] 已修复 ${fixedCount} 个历史乱码文件名`);
   } catch (_) {}
 
+  // 补列 diaries.is_locked 与 diaries.pin_code (私密锁功能)
+  try {
+    const cols = db.prepare("PRAGMA table_info(diaries)").all();
+    if (!cols.some(c => c.name === 'is_locked')) {
+      db.prepare("ALTER TABLE diaries ADD COLUMN is_locked INTEGER DEFAULT 0").run();
+      console.log('[DB] 补字段: diaries.is_locked');
+    }
+    if (!cols.some(c => c.name === 'pin_code')) {
+      db.prepare("ALTER TABLE diaries ADD COLUMN pin_code TEXT").run();
+      console.log('[DB] 补字段: diaries.pin_code');
+    }
+  } catch (e) {
+    console.warn('[DB] 检查/补 diaries.is_locked/pin_code 异常:', e.message);
+  }
+
+  // 新建 message_reactions 消息表情回应表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_reactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      emoji TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(message_id, user_id, emoji)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id);
+  `);
+
   console.log('[DB] 数据库初始化完成');
 }
 
