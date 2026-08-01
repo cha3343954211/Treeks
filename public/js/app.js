@@ -3091,19 +3091,29 @@ function renderDiaryList(data, opts = {}) {
   }
 
   list.innerHTML = data.items.map(d => `
-    <article class="diary-card ${d.is_pinned ? 'pinned' : ''}" data-id="${d.id}">
+    <article class="diary-card ${d.is_pinned ? 'pinned' : ''} ${d.is_locked ? 'locked' : ''}" data-id="${d.id}" data-locked="${d.is_locked ? '1' : '0'}">
       <div class="diary-card-select" style="display:none;">
         <input type="checkbox" class="batch-checkbox" data-id="${d.id}">
       </div>
       <div class="diary-card-header">
-        <div class="diary-card-title"><span class="diary-card-title-text">${escapeHtml(d.title || '无标题')}</span></div>
+        <div class="diary-card-title">
+          ${d.is_locked ? '<span style="color:var(--accent);margin-right:4px;" title="已设置私密锁">🔒</span>' : ''}
+          <span class="diary-card-title-text">${escapeHtml(d.title || '无标题')}</span>
+        </div>
         <div class="diary-card-meta">
           ${d.mood ? `<span class="diary-card-meta-item" title="心情">${escapeHtml(d.mood)}</span>` : ''}
           ${d.weather ? `<span class="diary-card-meta-item" title="天气">${escapeHtml(d.weather)}</span>` : ''}
           <span class="diary-card-meta-item date">${formatDate(d.created_at)}</span>
         </div>
       </div>
-      <div class="diary-card-excerpt">${escapeHtml(excerpt(d.content))}</div>
+      ${d.is_locked ? `
+        <div class="diary-card-excerpt" style="color:var(--accent);font-weight:500;">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:4px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          私密保护日记 · 点击输入 4 位 PIN 码解锁
+        </div>
+      ` : `
+        <div class="diary-card-excerpt">${escapeHtml(excerpt(d.content))}</div>
+      `}
       ${d.tags && d.tags.length ? `
         <div class="diary-card-tags">
           ${d.tags.map(t => `<span class="tag-chip">${escapeHtml(t)}</span>`).join('')}
@@ -3142,7 +3152,11 @@ function renderDiaryList(data, opts = {}) {
         const id = parseInt(actionBtn.dataset.id, 10);
         if (isNaN(id)) return;
         if (actionBtn.classList.contains('pin-btn')) togglePin(id);
-        else if (actionBtn.classList.contains('edit-btn')) openEditor(id);
+        else if (actionBtn.classList.contains('edit-btn')) {
+          const card = actionBtn.closest('.diary-card');
+          if (card && card.dataset.locked === '1') promptPinUnlock(id);
+          else openEditor(id);
+        }
         else if (actionBtn.classList.contains('del-btn')) confirmDelete(id);
         else if (actionBtn.classList.contains('export-card-btn')) openExportModal([id]);
         else if (actionBtn.classList.contains('move-folder-btn')) openMoveFolderMenu(actionBtn);
@@ -3160,7 +3174,12 @@ function renderDiaryList(data, opts = {}) {
         }
         return;
       }
-      openEditor(parseInt(card.dataset.id, 10));
+      const cardId = parseInt(card.dataset.id, 10);
+      if (card.dataset.locked === '1') {
+        promptPinUnlock(cardId);
+      } else {
+        openEditor(cardId);
+      }
     });
     // change 事件不冒泡到 click，单独委托
     list.addEventListener('change', e => {

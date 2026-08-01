@@ -254,6 +254,19 @@ router.get('/blocked-users', (req, res) => {
   res.json({ items: rows, total: rows.length });
 });
 
+// 那年今日 (On This Day / Time Capsule) - 必须放在 /:id 通配符之前！
+router.get('/on-this-day', (req, res) => {
+  const monthDay = new Date().toISOString().slice(5, 10); // MM-DD
+  const rows = db.prepare(`
+    SELECT id, title, content, mood, weather, tags, created_at
+    FROM diaries
+    WHERE user_id = ? AND strftime('%m-%d', created_at) = ? AND strftime('%Y', created_at) != strftime('%Y', 'now')
+    ORDER BY created_at DESC
+  `).all(req.user.id, monthDay);
+
+  res.json({ items: rows.map(r => ({ ...r, tags: parseTags(r.tags) })) });
+});
+
 // 获取单篇日记（支持协作者/被授权用户读取他人日记）
 router.get('/:id', (req, res) => {
   const id = parseInt(req.params.id, 10);
