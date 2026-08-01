@@ -11389,7 +11389,9 @@ function renderMsgMessages() {
   box.innerHTML = moreHtml + msgState.messages.map(m => {
     const mine = m.sender_id === meId;
     const time = formatMsgTime(m.created_at);
+    let isPureImage = false;
     let fileHtml = '';
+
     if (m.file_id) {
       const fname = m.file_original_name || m.file_filename || '文件';
       const fkind = m.file_kind || 'other';
@@ -11397,21 +11399,49 @@ function renderMsgMessages() {
       const isImg = fkind === 'image' || /\.(jpe?g|png|gif|webp|svg)$/i.test(furl);
 
       if (isImg && furl !== '#') {
-        fileHtml = `<div class="msg-bubble-image-box" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击查看大图">
-          <img src="${escapeHtml(furl)}" class="msg-bubble-image" alt="${escapeHtml(fname)}" loading="lazy" />
+        isPureImage = true;
+        fileHtml = `<div class="msg-bubble-media-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击查看高清大图">
+          <img src="${escapeHtml(furl)}" class="msg-bubble-media-img" alt="${escapeHtml(fname)}" loading="lazy" />
+          <div class="msg-bubble-media-glass">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          </div>
         </div>`;
       } else {
-        fileHtml = `<a class="msg-bubble-file" href="${escapeHtml(furl)}" target="_blank" rel="noopener">
-          <span class="att-file-icon" data-kind="${fkind}" style="width:22px;height:22px;font-size:9px;">${kindInitial(fkind)}</span>
-          <span>${escapeHtml(fname)}</span>
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </a>`;
+        fileHtml = `<div class="msg-bubble-file-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击预览或下载文件">
+          <div class="msg-file-icon-badge" data-kind="${fkind}">${kindInitial(fkind)}</div>
+          <div class="msg-file-info">
+            <div class="msg-file-name">${escapeHtml(fname)}</div>
+            <div class="msg-file-meta">${fkind.toUpperCase()} 附件</div>
+          </div>
+          <a class="msg-file-dl-btn" href="${escapeHtml(furl)}" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="下载原文件">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </a>
+        </div>`;
       }
     }
+
+    const textContent = (m.content || '').trim();
+    // 如果是自动生成的"发送了文件: xxx"且带有图片，则隐藏冗余提示文本，直接展现精美图片卡片
+    const showText = textContent && !(isPureImage && /^发送了文件:/.test(textContent));
+
+    if (isPureImage && !showText) {
+      return `
+        <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
+          <div class="msg-bubble-container">
+            ${fileHtml}
+            <div class="msg-bubble-time">${time}</div>
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
         <div class="msg-bubble-container">
-          <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${escapeHtml(m.content || '')}${fileHtml}</div>
+          <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">
+            ${showText ? escapeHtml(textContent) : ''}
+            ${fileHtml}
+          </div>
           <div class="msg-bubble-time">${time}</div>
         </div>
       </div>

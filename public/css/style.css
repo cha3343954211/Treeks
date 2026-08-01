@@ -10560,24 +10560,120 @@ textarea,
   pointer-events: none;
 }
 
-/* ---- 消息气泡中的文件与图片预览卡片 ---- */
-.msg-bubble-image-box {
-  margin-top: 8px;
-  max-width: 260px;
-  border-radius: var(--radius-md, 10px);
+/* ---- 消息气泡中的纯通透图片与富文件卡片预览 ---- */
+.msg-bubble-media-card {
+  position: relative;
+  max-width: 280px;
+  border-radius: var(--radius-lg, 16px);
   overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   cursor: pointer;
-  background: rgba(0, 0, 0, 0.05);
-  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  background: rgba(0, 0, 0, 0.04);
+  transition: transform 0.25s var(--ease-spring), box-shadow 0.25s var(--ease);
 }
-.msg-bubble-image-box:hover {
-  transform: scale(1.02);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+.msg-bubble-media-card:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 0 12px var(--accent-light, rgba(76, 153, 92, 0.2));
 }
-.msg-bubble-image {
+.msg-bubble-media-card:hover .msg-bubble-media-glass {
+  opacity: 1;
+}
+.msg-bubble-media-img {
   width: 100%;
-  max-height: 220px;
+  max-height: 280px;
   object-fit: cover;
   display: block;
+}
+.msg-bubble-media-glass {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease);
+}
+
+/* 富文件附件卡片 */
+.msg-bubble-file-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: var(--radius-md, 12px);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  margin-top: 6px;
+  color: var(--fg);
+  transition: all 0.2s var(--ease);
+}
+.msg-bubble.mine .msg-bubble-file-card {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: white;
+}
+.msg-bubble-file-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.msg-file-icon-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.msg-bubble.mine .msg-file-icon-badge {
+  background: rgba(255, 255, 255, 0.3);
+}
+.msg-file-info {
+  flex: 1;
+  min-width: 0;
+}
+.msg-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msg-file-meta {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 1px;
+}
+.msg-file-dl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  color: inherit;
+  transition: background 0.15s var(--ease);
+}
+.msg-bubble.mine .msg-file-dl-btn {
+  background: rgba(255, 255, 255, 0.25);
+}
+.msg-file-dl-btn:hover {
+  background: rgba(0, 0, 0, 0.12);
 }
