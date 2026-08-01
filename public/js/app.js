@@ -6210,7 +6210,7 @@ async function cropAndUploadAvatar() {
   confirmBtn.disabled = true;
   confirmBtn.textContent = '上传中...';
   try {
-    const uploadData = await apiUpload(new File([blob], 'avatar.png', { type: 'image/png' }));
+    const uploadData = await apiUploadFile(new File([blob], 'avatar.png', { type: 'image/png' }));
     const data = await api('/api/auth/profile', {
       method: 'PUT',
       body: JSON.stringify({ avatar: uploadData.url })
@@ -6642,8 +6642,9 @@ function setupFilesDragUpload() {
 
     const files = e.dataTransfer.files;
     if (files && files.length) {
-      if (typeof uploadFilesList === 'function') {
-        uploadFilesList(files);
+      const curFolder = (typeof filesState !== 'undefined' && filesState.currentFolder) ? filesState.currentFolder : '';
+      if (typeof uploadFiles === 'function') {
+        uploadFiles(files, curFolder);
       }
     }
   });
@@ -6702,11 +6703,11 @@ function setupMsgChatDragUpload() {
       for (const file of files) {
         toast(`正在发送文件: ${file.name}...`, 'info');
         try {
-          const res = await apiUpload(file);
+          const res = await apiUploadFile(file);
           await api('/api/messages', {
             method: 'POST',
             body: JSON.stringify({
-              peerId: msgState.peerId,
+              recipientId: msgState.peerId,
               content: `发送了文件: ${file.name}`,
               fileId: res.id
             })
