@@ -11769,19 +11769,26 @@ async function openOnThisDayModal() {
 
 // ===== 📋 模态精美模板库 (Rich Template Gallery) =====
 const DIARY_TEMPLATES = {
-  morning: `# 🌅 晨间日记
+  morning: {
+    title: '晨间日记',
+    mood: '🌅 积极',
+    content: `# 🌅 晨间三件事日记
 
 ## 🎯 今日 3 个核心目标
 1. [ ] 
 2. [ ] 
 3. [ ] 
 
-## 关注感恩事项
+## 关注与感恩事项
 - 
 
 ## 💡 一句给自己的肯定
-`,
-  ninegrid: `# 🧩 曼陀罗九宫格复盘
+`
+  },
+  ninegrid: {
+    title: '曼陀罗九宫格复盘',
+    mood: '🧩 充实',
+    content: `# 🧩 曼陀罗九宫格思考复盘
 
 | 领域 | 思考与进展 |
 |---|---|
@@ -11794,20 +11801,28 @@ const DIARY_TEMPLATES = {
 | 🎨 兴趣爱好 | |
 | 🧘 心灵修养 | |
 | 🌟 年度大愿 | |
-`,
-  weekly: `# 📊 周度总结与规划
+`
+  },
+  weekly: {
+    title: '周度总结与规划',
+    mood: '📊 专注',
+    content: `# 📊 周度总结与下周规划
 
-## ✨ 本周 Hook & 亮点成就
+## ✨ 本周亮点成就
 - 
 
 ## 🚧 遇到的阻碍与反思
 - 
 
-## 🎯 下周关键行动行动项
+## 🎯 下周关键行动项
 1. 
 2. 
-`,
-  reading: `# 📖 读书/影视卡片笔记
+`
+  },
+  reading: {
+    title: '读书/影视笔记',
+    mood: '📖 思考',
+    content: `# 📖 读书/影视卡片笔记
 
 - **作品名称**: 
 - **作者/导演**: 
@@ -11816,10 +11831,14 @@ const DIARY_TEMPLATES = {
 ## 💬 精彩金句摘录
 > 
 
-## 💡 个人感悟与行动行动项
+## 💡 个人感悟与行动
 - 
-`,
-  okr: `# 🎯 OKR 目标进度追踪
+`
+  },
+  okr: {
+    title: 'OKR 目标进度追踪',
+    mood: '🎯 目标',
+    content: `# 🎯 OKR 目标进度追踪
 
 ## 核心目标 O: 
 ### 关键结果 KR 1:  (进度: 0%)
@@ -11829,7 +11848,72 @@ const DIARY_TEMPLATES = {
 ## 📋 支撑关键行动
 - [ ] 
 `
+  },
+  night: {
+    title: '睡前感恩日记',
+    mood: '🌙 平和',
+    content: `# 🌙 晚间睡前感恩日记
+
+## 🌟 今天发生的 3 件微小幸运
+1. 
+2. 
+3. 
+
+## 🧘 心情释放与自我关怀
+- 
+`
+  }
 };
+
+async function applyTemplateToEditor(templateKey) {
+  const modal = document.getElementById('template-gallery-modal');
+  if (modal) modal.style.display = 'none';
+
+  const tpl = DIARY_TEMPLATES[templateKey];
+  if (!tpl) return;
+
+  // 1. 如果当前不在编辑器视图，自动打开新建日记
+  if (state.currentNav !== 'editor' || !document.getElementById('editor-textarea')) {
+    if (typeof openEditor === 'function') {
+      await openEditor(null);
+    }
+  }
+
+  // 2. 轮询等待编辑器 DOM 挂载完成（保障 100% 成功）
+  let retries = 0;
+  while (!document.getElementById('editor-textarea') && retries < 20) {
+    await new Promise(r => setTimeout(r, 50));
+    retries++;
+  }
+
+  const textarea = document.getElementById('editor-textarea');
+  const titleInput = document.getElementById('editor-title');
+  const moodInput = document.getElementById('editor-mood');
+
+  if (textarea) {
+    textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + tpl.content;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // 自动填写建议的标题与心情（如果原本为空）
+    if (titleInput && (!titleInput.value || titleInput.value === '无标题')) {
+      const todayStr = new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+      titleInput.value = `${tpl.title} (${todayStr})`;
+      titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    if (moodInput && !moodInput.value) {
+      moodInput.value = tpl.mood;
+      moodInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    if (typeof _runUpdatePreview === 'function') _runUpdatePreview();
+    if (typeof updateWordCount === 'function') updateWordCount();
+    textarea.focus();
+
+    toast(`已成功载入【${tpl.title}】创作模板！`, 'success');
+  } else {
+    toast('开启编辑器失败，请稍后重试', 'error');
+  }
+}
 
 function openTemplateGalleryModal() {
   const modal = document.getElementById('template-gallery-modal');
@@ -11837,29 +11921,9 @@ function openTemplateGalleryModal() {
   modal.style.display = 'flex';
 
   document.querySelectorAll('.template-card').forEach(card => {
-    card.onclick = async () => {
+    card.onclick = () => {
       const type = card.dataset.template;
-      if (type && DIARY_TEMPLATES[type]) {
-        // 如果当前不在编辑器视图，自动唤起新日记编辑
-        if (state.currentNav !== 'editor' || !document.getElementById('editor-textarea')) {
-          if (typeof openEditor === 'function') {
-            await openEditor(null);
-          }
-        }
-
-        setTimeout(() => {
-          const textarea = document.getElementById('editor-textarea');
-          if (textarea) {
-            textarea.value = (textarea.value ? textarea.value + '\n\n' : '') + DIARY_TEMPLATES[type];
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            if (typeof _runUpdatePreview === 'function') _runUpdatePreview();
-            if (typeof updateWordCount === 'function') updateWordCount();
-            textarea.focus();
-          }
-          modal.style.display = 'none';
-          toast('已成功载入模态创作模板！', 'success');
-        }, 100);
-      }
+      if (type) applyTemplateToEditor(type);
     };
   });
 }

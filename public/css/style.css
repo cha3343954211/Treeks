@@ -10727,9 +10727,27 @@ body.zen-active .editor-preview-container,
 body.zen-active .preview-pane,
 body.zen-active #btn-back-list,
 body.zen-active .editor-header-actions,
-body.zen-active .editor-footer,
 body.zen-active .editor-pane::before {
   display: none !important;
+}
+
+body.zen-active .editor-footer {
+  display: flex !important;
+  position: fixed !important;
+  bottom: 20px !important;
+  right: 24px !important;
+  z-index: 99999 !important;
+  background: var(--bg-paper) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 20px !important;
+  padding: 4px 14px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08) !important;
+  font-size: 11.5px !important;
+  opacity: 0.75 !important;
+  transition: opacity 0.2s var(--ease) !important;
+}
+body.zen-active .editor-footer:hover {
+  opacity: 1 !important;
 }
 
 body.zen-active .main-content {
