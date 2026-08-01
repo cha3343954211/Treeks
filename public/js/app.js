@@ -7325,10 +7325,13 @@ function bindEvents() {
     document.getElementById('on-this-day-modal').style.display = 'none';
   });
 
-  // 模板功能绑定：写日记界面按钮触发 Spotlight 快捷弹窗，侧边栏按钮触发大屏跳转
+  // 模板功能绑定：所有模板入口统一平滑导航至独立全屏【日记模板工坊】大屏页面
   const tplBtn = document.getElementById('btn-template-gallery');
   if (tplBtn) {
-    tplBtn.addEventListener('click', openTemplateGalleryModal);
+    tplBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigateTo('templates');
+    });
   }
   const navTplBtn = document.getElementById('btn-nav-template-gallery');
   if (navTplBtn) {
@@ -12588,13 +12591,13 @@ function renderSpotlightTemplateList(query = '') {
   });
 }
 
-// ⚡ 全局零死角捕获【模板】按钮点击，解决任何事件冒泡阻断问题
+// ⚡ 全局零死角捕获【模板】按钮点击，无缝导航至大屏【日记模板工坊】
 document.addEventListener('click', (e) => {
   const tplBtn = e.target.closest('#btn-template-gallery');
   if (tplBtn) {
     e.preventDefault();
     e.stopPropagation();
-    openTemplateGalleryModal();
+    navigateTo('templates');
   }
 });
 
