@@ -2662,6 +2662,9 @@ async function logout() {
 function showAuthView() {
   document.getElementById('auth-view').style.display = 'flex';
   document.getElementById('main-view').style.display = 'none';
+  // 登录/注册页不显示移动端底部导航
+  const nav = document.querySelector('.mobile-bottom-nav');
+  if (nav) nav.classList.remove('show');
 }
 
 function showMainView() {
@@ -2674,6 +2677,9 @@ function showMainView() {
   updateNavBadges();
   // 启动心跳：保持当前用户活跃状态（用于好友在线/离线判定）
   startHeartbeat();
+  // 已登录：恢复移动端底部导航显示
+  const nav = document.querySelector('.mobile-bottom-nav');
+  if (nav) nav.classList.add('show');
 }
 
 // ===== 心跳：每 30s 一次，用于在线/离线判定（结合 WebSocket 协同） =====
@@ -3323,9 +3329,81 @@ function renderDiaryList(data, opts = {}) {
         updateBatchCount();
       }
     });
+    // 移动端长按日记卡片弹出快捷操作菜单
+    // 支持触摸长按（600ms 无移动触发）与桌面右键（contextmenu）
+    if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) {
+      let longPressTimer = null;
+      let longPressStart = null;
+      list.addEventListener('touchstart', e => {
+        const card = e.target.closest('.diary-card');
+        if (!card || state.selectMode) return;
+        if (e.target.closest('.action-btn') || e.target.closest('.batch-checkbox')) return;
+        longPressStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        longPressTimer = setTimeout(() => {
+          longPressTimer = null;
+          const id = parseInt(card.dataset.id, 10);
+          if (!isNaN(id)) showDiaryQuickActions(card, id);
+          if (navigator.vibrate) navigator.vibrate(15);
+        }, 600);
+      }, { passive: true });
+      list.addEventListener('touchmove', e => {
+        if (!longPressStart) return;
+        const t = e.touches[0];
+        if (Math.hypot(t.clientX - longPressStart.x, t.clientY - longPressStart.y) > 10) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+          longPressStart = null;
+        }
+      }, { passive: true });
+      list.addEventListener('touchend', () => {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+        longPressStart = null;
+      }, { passive: true });
+      list.addEventListener('touchcancel', () => {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+        longPressStart = null;
+      }, { passive: true });
+    }
   }
 
   renderPagination(data);
+}
+
+// 移动端长按日记卡片：弹出快捷操作菜单
+function showDiaryQuickActions(card, id) {
+  const title = card.querySelector('.diary-card-title-text');
+  const name = title ? title.textContent.trim() : ('日记 #' + id);
+  const isPinned = card.classList.contains('pinned');
+  const isLocked = card.dataset.locked === '1';
+  showModal(`📄 ${escapeHtml(name).slice(0, 24)}`, `
+    <div class="quick-action-menu">
+      <button class="qa-item" data-act="edit">✏️ 编辑</button>
+      <button class="qa-item" data-act="pin">${isPinned ? '📌 取消置顶' : '📌 置顶'}</button>
+      <button class="qa-item" data-act="export">📤 导出</button>
+      <button class="qa-item" data-act="move">📁 移动文件夹</button>
+      <button class="qa-item danger" data-act="delete">🗑 删除</button>
+    </div>`, null, { hideFooter: true, hideCancel: true });
+  // 点击操作项直接执行并关闭弹窗
+  document.querySelectorAll('.quick-action-menu .qa-item').forEach(item => {
+    item.onclick = () => {
+      const action = item.dataset.act;
+      closeModal();
+      if (action === 'edit') {
+        if (isLocked) promptPinUnlock(id); else openEditor(id);
+      } else if (action === 'pin') {
+        togglePin(id);
+      } else if (action === 'export') {
+        openExportModal([id]);
+      } else if (action === 'move') {
+        const moveBtn = card.querySelector('.move-folder-btn');
+        if (moveBtn) openMoveFolderMenu(moveBtn);
+      } else if (action === 'delete') {
+        confirmDelete(id);
+      }
+    };
+  });
 }
 
 // 打开"移动到文件夹"下拉菜单
@@ -3471,6 +3549,13 @@ async function openEditor(id) {
   document.querySelectorAll('#editor-mode-toggle .mode-btn').forEach(b => b.classList.remove('active'));
   const splitBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="split"]');
   if (splitBtn) splitBtn.classList.add('active');
+
+  // 手机（<=768px）split 在窄屏已退化（预览栏被 CSS 隐藏），
+  // 自动切入编辑模式，避免 split 按钮高亮但无预览的状态不一致
+  if (window.matchMedia('(max-width: 768px)').matches) {
+    const editBtn = document.querySelector('#editor-mode-toggle .mode-btn[data-mode="edit"]');
+    if (editBtn) editBtn.click();
+  }
 
   const titleInput = document.getElementById('editor-title');
   const textarea = document.getElementById('editor-textarea');
@@ -7152,6 +7237,72 @@ function setupEscCloseModals() {
   });
 }
 
+// ===== 移动端下拉刷新（日记列表页） =====
+function setupPullToRefresh() {
+  if (!window.matchMedia('(hover: none) and (pointer: coarse)').matches) return;
+  const view = document.getElementById('view-list');
+  const ptr = document.getElementById('pull-to-refresh');
+  const text = document.getElementById('ptr-text');
+  if (!view || !ptr) return;
+
+  const PTR_THRESHOLD = 56;
+  let startY = 0;
+  let pulling = false;
+  let tracking = false;
+
+  view.addEventListener('touchstart', (e) => {
+    if (view.scrollTop > 0) return;
+    if (state.currentView !== 'list' && state.currentNav !== 'list') return;
+    if (e.touches.length !== 1) return;
+    if (state.selectMode) return;
+    startY = e.touches[0].clientY;
+    tracking = true;
+    pulling = false;
+  }, { passive: true });
+
+  view.addEventListener('touchmove', (e) => {
+    if (!tracking) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy <= 0 || view.scrollTop > 0) return;
+    // 下拉距离（带阻尼）
+    const dist = Math.min(dy * 0.5, 90);
+    if (dist > 4) pulling = true;
+    ptr.style.display = 'flex';
+    ptr.style.transform = `scaleY(${Math.min(dist / PTR_THRESHOLD, 1)})`;
+    const ready = dist >= PTR_THRESHOLD;
+    text.textContent = ready ? '松开刷新' : '下拉刷新';
+    ptr.querySelector('.ptr-spinner').classList.toggle('pull', !ready);
+    ptr.style.opacity = Math.min(dist / PTR_THRESHOLD, 1);
+  }, { passive: true });
+
+  const finish = () => {
+    if (!pulling) { tracking = false; return; }
+    ptr.style.transform = '';
+    ptr.style.opacity = '';
+    ptr.querySelector('.ptr-spinner').classList.remove('pull');
+    if (text.textContent === '松开刷新') {
+      text.textContent = '刷新中...';
+      ptr.querySelector('.ptr-spinner').classList.add('pull');
+      const isPinned = state.currentNav === 'pinned';
+      Promise.resolve(isPinned ? loadDiaries({ pinned: true }) : loadDiaries()).finally(() => {
+        if (typeof loadFolders === 'function') loadFolders();
+        toast('已刷新', 'success');
+        ptr.style.display = 'none';
+      });
+    } else {
+      ptr.style.display = 'none';
+    }
+    tracking = false;
+    pulling = false;
+  };
+  view.addEventListener('touchend', finish, { passive: true });
+  view.addEventListener('touchcancel', () => {
+    ptr.style.display = 'none';
+    tracking = false;
+    pulling = false;
+  }, { passive: true });
+}
+
 function setupMobileNav() {
   document.querySelectorAll('.mobile-nav-item').forEach(item => {
     item.addEventListener('click', () => {
@@ -7165,28 +7316,6 @@ function setupMobileNav() {
       }
     });
   });
-}
-
-function setupSidebarOverlay() {
-  const overlay = document.getElementById('sidebar-overlay');
-  const sidebar = document.getElementById('sidebar');
-  if (!overlay || !sidebar) return;
-
-  overlay.addEventListener('click', () => {
-    sidebar.classList.remove('open');
-    overlay.classList.remove('active');
-  });
-
-  const toggleBtn = document.getElementById('sidebar-toggle');
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => {
-      if (sidebar.classList.contains('open')) {
-        overlay.classList.add('active');
-      } else {
-        overlay.classList.remove('active');
-      }
-    });
-  }
 }
 
 // ===== 日记历史版本与 Diff 对比 =====
@@ -7371,7 +7500,7 @@ function bindEvents() {
 
   // 平台高级 UX 功能与移动端触控优化
   setupMobileNav();
-  setupSidebarOverlay();
+  setupPullToRefresh();
   setupCommandPalette();
   setupAutoSave();
   setupEscCloseModals();
@@ -7576,9 +7705,17 @@ function bindEvents() {
     }
   }, { passive: true });
 
-  // ===== 移动端：双指捏合调整字体大小（在日记内容区） =====
+  // ===== 移动端：双指捏合调整字体大小（日记内容区 + Markdown 预览区） =====
   let lastPinchDistance = 0;
   let currentFontSize = 16;
+  const applyPinchZoomTarget = () => {
+    // 预览模式/全屏预览时缩放 Markdown 预览内容；否则缩放日记详情内容
+    const viewEditor = document.getElementById('view-editor');
+    const inEditorPreview = viewEditor && (viewEditor.classList.contains('preview-fullscreen') || (document.querySelector('.editor-body') && document.querySelector('.editor-body').classList.contains('mode-preview')));
+    return inEditorPreview
+      ? document.querySelector('.preview-content')
+      : document.querySelector('.diary-content');
+  };
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
       lastPinchDistance = Math.hypot(
@@ -7594,8 +7731,8 @@ function bindEvents() {
       e.touches[0].clientY - e.touches[1].clientY
     );
     const scale = dist / lastPinchDistance;
-    // 仅在日记内容视图中生效
-    const contentEl = document.querySelector('.diary-content');
+    // 缩放目标：预览模式预览区或日记内容区
+    const contentEl = applyPinchZoomTarget();
     if (!contentEl) return;
     let newSize = Math.round(currentFontSize * scale);
     newSize = Math.max(12, Math.min(28, newSize));
@@ -7965,6 +8102,32 @@ function bindEvents() {
     handleImageUpload(Array.from(e.target.files));
     e.target.value = '';
   });
+
+  // ===== 移动端软键盘适配 =====
+  // 软键盘弹起时 visualViewport 高度缩小，使用 dvh 无法感知键盘高度；
+  // 通过 visualViewport 动态调整编辑器正文区高度，避免底部被键盘遮挡
+  if (window.visualViewport) {
+    const editorBodyEl = document.querySelector('.editor-body');
+    const onVvpResize = () => {
+      if (window.innerWidth > 768) return; // 仅手机端
+      const isFocused = document.activeElement === textarea;
+      if (!isFocused) return;
+      const vv = window.visualViewport;
+      const topBar = document.getElementById('editor-header-wrapper');
+      const toolBar = document.getElementById('editor-toolbar-wrapper');
+      const topOffset = (topBar ? topBar.offsetHeight : 0) + (toolBar ? toolBar.offsetHeight : 0) + (document.querySelector('.mobile-topbar') && getComputedStyle(document.querySelector('.mobile-topbar')).display !== 'none' ? document.querySelector('.mobile-topbar').offsetHeight : 0);
+      if (editorBodyEl) {
+        editorBodyEl.style.height = Math.max(120, vv.height - topOffset - 60) + 'px';
+      }
+    };
+    window.visualViewport.addEventListener('resize', onVvpResize);
+    window.visualViewport.addEventListener('scroll', onVvpResize);
+    // 聚焦/失焦也触发一次校准
+    textarea.addEventListener('focus', () => setTimeout(onVvpResize, 50));
+    textarea.addEventListener('blur', () => {
+      if (editorBodyEl) editorBodyEl.style.height = '';
+    });
+  }
 
   // 图片库上传（兼容旧 ID #gallery-upload，转发到通用 files 上传）
   const galleryInput = document.getElementById('gallery-upload');

@@ -2198,7 +2198,7 @@ html, body {
 .editor-textarea {
   width: 100%;
   height: 100%;
-  min-height: 400px;
+  min-height: 300px;
   border: none;
   outline: none;
   resize: none;
@@ -2209,6 +2209,10 @@ html, body {
   color: var(--fg);
   letter-spacing: 0;
   tab-size: 2;
+}
+@media (max-width: 768px) {
+  /* 移动端 textarea 随编辑器高度自适应，避免固定 min-height 超出可视区 */
+  .editor-textarea { min-height: 0; }
 }
 .editor-textarea::placeholder { color: var(--fg-tertiary); }
 .preview-pane { background: rgba(255, 255, 255, 0.5); }
@@ -5513,7 +5517,7 @@ html, body {
 .modal {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  z-index: 1001; /* 高于移动底栏 999，避免 iPad 竖屏等场景被底栏遮挡 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7464,7 +7468,7 @@ html, body {
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  z-index: 60;
+  z-index: 1100; /* 低于抽屉侧栏 1200，高于页面内容 */
   opacity: 0;
   transition: opacity 0.25s var(--ease);
 }
@@ -7482,10 +7486,10 @@ html, body {
   .nav-item { justify-content: center; padding: 12px 8px; }
   .nav-new { padding: 12px; }
   .user-card { justify-content: center; padding: 8px; }
-  /* 小屏幕下分屏模式退化为编辑模式 */
-  .editor-body.mode-split, .editor-body:not(.mode-edit):not(.mode-preview) { grid-template-columns: 1fr; }
-  .editor-body.mode-split .preview-pane, .editor-body:not(.mode-edit):not(.mode-preview) .preview-pane { display: none; }
-  .editor-body.mode-split .editor-pane, .editor-body:not(.mode-edit):not(.mode-preview) .editor-pane { border-right: none; }
+  /* 平板（769-900px）：分屏保留但改为非对称比例，编辑区优先 */
+  .editor-body.mode-split, .editor-body:not(.mode-edit):not(.mode-preview) {
+    grid-template-columns: 1.15fr 1fr;
+  }
   .content-header h2 { font-size: 24px; }
 }
 
@@ -7493,8 +7497,12 @@ html, body {
 @media (max-width: 768px) {
   .main-view {
     grid-template-columns: 1fr;
-    padding-top: 52px;
+    padding-top: calc(52px + var(--safe-area-inset-top));
   }
+  /* 手机：分屏模式退化为编辑模式（预览通过模式切换进入全屏） */
+  .editor-body.mode-split, .editor-body:not(.mode-edit):not(.mode-preview) { grid-template-columns: 1fr; }
+  .editor-body.mode-split .preview-pane, .editor-body:not(.mode-edit):not(.mode-preview) .preview-pane { display: none; }
+  .editor-body.mode-split .editor-pane, .editor-body:not(.mode-edit):not(.mode-preview) .editor-pane { border-right: none; }
   /* 移动端不使用桌面收起逻辑 */
   .main-view.sidebar-collapsed { grid-template-columns: 1fr; }
   .main-view.sidebar-collapsed .sidebar { transform: none; pointer-events: auto; }
@@ -7597,6 +7605,12 @@ html, body {
   .tool-spacer { display: none; }
   .tool-mode-toggle { flex-shrink: 0; }
   .tool-btn { min-width: 36px; height: 36px; }
+  /* 移动端：模式切换按钮移到工具栏最前并常驻，方便快速切换编辑/预览 */
+  .tool-mode-toggle { order: -1; }
+  .tool-mode-toggle .mode-btn {
+    min-width: 38px;
+    height: 36px;
+  }
 
   /* 编辑器底部 */
   .editor-footer {
@@ -7823,8 +7837,8 @@ html, body {
 
 /* 横屏模式优化 */
 @media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
-  .mobile-topbar { height: 44px; }
-  .main-view { padding-top: 44px; }
+  .mobile-topbar { height: calc(44px + var(--safe-area-inset-top)); }
+  .main-view { padding-top: calc(44px + var(--safe-area-inset-top)); }
   .topbar { top: 44px; padding: 8px 12px; }
   .topbar { flex-direction: row; flex-wrap: wrap; }
   .content-view { padding: 12px; }
@@ -9691,6 +9705,7 @@ html, body {
 
 /* ---- 3. mobile-topbar 安全区域适配 ---- */
 .mobile-topbar {
+  height: calc(52px + var(--safe-area-inset-top));
   padding-top: var(--safe-area-inset-top);
   box-sizing: border-box;
 }
@@ -9826,14 +9841,17 @@ html, body {
 
 /* ---- 8. 编辑器移动端优化 ---- */
 @media (max-width: 768px) {
-  /* 编辑器内容区域适配软键盘弹出 */
-  .editor-content {
-    /* 使用 dvh（dynamic viewport height）适配移动端浏览器 UI 占用 */
+  /* 编辑器内容区域适配软键盘弹出（dvh 动态视口高度） */
+  .editor-body {
     min-height: 40dvh;
   }
   /* 编辑器底部工具栏适配 Home Indicator */
   .editor-bottom-bar {
     padding-bottom: calc(8px + var(--safe-area-inset-bottom));
+  }
+  /* 编辑器 footer 避开移动端底部导航栏 */
+  .editor-footer {
+    padding-bottom: calc(10px + var(--safe-area-inset-bottom));
   }
   /* 文本输入框字号 ≥16px 防止 iOS Safari 自动放大 */
   .editor-content[contenteditable],
@@ -10662,7 +10680,7 @@ textarea,
   bottom: 0;
   left: 0;
   right: 0;
-  height: 60px;
+  height: calc(60px + env(safe-area-inset-bottom));
   background: var(--bg-paper);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -10671,6 +10689,7 @@ textarea,
   justify-content: space-around;
   align-items: center;
   padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
 }
 .mobile-nav-item {
   display: flex;
@@ -10700,34 +10719,16 @@ textarea,
 }
 
 /* ---- 移动端侧边栏抽屉遮罩 ---- */
-.sidebar-overlay {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  z-index: 1100;
-  opacity: 0;
-  transition: opacity 0.25s var(--ease);
-}
-.sidebar-overlay.active {
-  display: block;
-  opacity: 1;
-}
 
 @media (max-width: 768px) {
   .sidebar {
     z-index: 1200;
   }
-  .mobile-bottom-nav {
+  .mobile-bottom-nav.show {
     display: flex;
   }
   body {
-    padding-bottom: 60px;
+    padding-bottom: calc(60px + env(safe-area-inset-bottom));
   }
 }
 
@@ -10905,6 +10906,34 @@ textarea,
 /* 防拖拽碰撞误关：让 Dropzone 子元素穿透鼠标事件 */
 .files-dropzone * {
   pointer-events: none;
+}
+
+/* ---- 移动端下拉刷新 ---- */
+.pull-to-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  transform-origin: top;
+}
+.ptr-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ptrSpin 0.8s linear infinite;
+}
+.ptr-spinner.pull {
+  animation: none;
+  border-top-color: transparent;
+  border-right-color: var(--accent);
+}
+@keyframes ptrSpin {
+  to { transform: rotate(360deg); }
 }
 
 /* ---- 消息气泡中的纯通透图片与富文件卡片预览 ---- */
@@ -11213,10 +11242,6 @@ textarea,
   opacity: 0.8;
   text-decoration: underline;
 }
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-}
-
-
 
 /* ---- 😍 消息 Emoji 表情回应挂件 ---- */
 .msg-reaction-bar {
@@ -11353,3 +11378,33 @@ textarea,
 .msg-file-dl-btn:hover {
   background: rgba(0, 0, 0, 0.12);
 }
+
+
+/* ---- 移动端长按日记卡片快捷操作菜单 ---- */
+.quick-action-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qa-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 16px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s var(--ease);
+}
+.qa-item:active { background: rgba(0, 0, 0, 0.05); }
+.qa-item.danger { color: var(--danger); }
+.qa-item.danger:active { background: rgba(217, 104, 92, 0.1); }
+[data-theme='dark'] .qa-item:active { background: rgba(255, 255, 255, 0.08); }
+[data-theme='dark'] .qa-item.danger:active { background: rgba(217, 104, 92, 0.18); }
