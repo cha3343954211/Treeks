@@ -1933,6 +1933,7 @@ html, body {
 .annotation-layer.active {
   pointer-events: auto;
   cursor: crosshair;
+  touch-action: none;
 }
 .annotation-layer.eraser-mode {
   cursor: not-allowed;
@@ -2433,6 +2434,73 @@ html, body {
   padding: 0 18px !important;
   box-shadow: 0 2px 8px rgba(76, 153, 92, 0.25);
   border-radius: var(--radius-pill) !important;
+}
+
+/* ===== 编辑器顶部/底部可收起 ===== */
+.editor-header-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  align-self: flex-start;
+  min-width: 0;
+}
+.editor-collapsed-title {
+  display: none;
+  max-width: min(38vw, 420px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+.editor-collapse-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.editor-collapse-btn:hover {
+  background: rgba(76, 153, 92, 0.1);
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+.editor-collapse-btn svg { transition: transform 0.25s var(--ease-spring); }
+
+/* 顶部收起：隐藏标题/属性/工具栏，仅保留返回键 + 紧凑标题 + 展开按钮 */
+#view-editor.editor-top-collapsed .editor-header {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+#view-editor.editor-top-collapsed .editor-meta { display: none; }
+#view-editor.editor-top-collapsed .editor-collapsed-title { display: block; }
+#view-editor.editor-top-collapsed .editor-toolbar-wrapper { display: none; }
+#view-editor.editor-top-collapsed #btn-editor-top-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* 底部收起：隐藏状态栏与操作区，仅保留展开按钮 */
+#view-editor.editor-footer-collapsed .editor-status,
+#view-editor.editor-footer-collapsed .editor-actions { display: none; }
+#view-editor.editor-footer-collapsed .editor-footer {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  justify-content: flex-end;
+}
+#view-editor.editor-footer-collapsed #btn-editor-footer-toggle svg {
+  transform: rotate(180deg);
+}
+[data-theme="dark"] .editor-collapse-btn {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* ===== Markdown 渲染样式 ===== */
@@ -4968,6 +5036,47 @@ html, body {
   background: linear-gradient(90deg, var(--accent), var(--accent-bright));
   border-radius: 3px;
   transition: width 0.4s var(--ease);
+}
+.files-upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 8px 14px;
+  background: var(--bg-paper);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--fg-secondary);
+  animation: filesUploadPulse 1.6s ease-in-out infinite;
+}
+@keyframes filesUploadPulse {
+  0%, 100% { border-color: var(--accent-soft); }
+  50% { border-color: var(--accent); }
+}
+.files-upload-progress-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+[data-mode="dark"] .files-upload-progress-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+.files-upload-progress-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+  border-radius: 3px;
+  transition: width 0.25s var(--ease);
+}
+.files-upload-progress-label {
+  flex-shrink: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .files-grid {
   display: grid;
@@ -7669,6 +7778,35 @@ html, body {
     min-width: 120px;
   }
 
+  /* 移动端：编辑器收起控件适配 */
+  .editor-header-side {
+    align-self: stretch;
+    justify-content: flex-end;
+  }
+  .editor-collapsed-title {
+    max-width: 42vw;
+    font-size: 13px;
+  }
+  #view-editor.editor-top-collapsed .editor-header {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  #view-editor.editor-top-collapsed .editor-header-side {
+    flex: 1;
+    justify-content: flex-end;
+  }
+  .editor-collapse-btn {
+    width: 38px;
+    height: 38px;
+  }
+  #view-editor.editor-footer-collapsed .editor-footer {
+    flex-direction: row;
+    justify-content: flex-end;
+    padding: 6px 10px;
+  }
+
   /* 日记卡片 */
   .diary-card { padding: 14px; }
   .diary-card-title { font-size: 15px; }
@@ -9689,6 +9827,7 @@ html, body {
   .mobile-menu-btn,
   .nav-item,
   .icon-btn,
+  .editor-collapse-btn,
   .fab-trigger,
   .editor-toolbar button,
   .brush-toolbar button,

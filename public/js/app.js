@@ -407,6 +407,7 @@ const brushState = {
   annotateTempEl: null,   // 临时元素（预览线段/形状）
   paths: [],              // 已绘制的所有路径 [{ id, type, color, size, points, opacity, text }]
   undoStack: [],          // 撤销栈（用于 redo）
+  redoStack: [],          // 重做栈
   textInput: null,        // 当前文本输入框（HTML element）
   draggingAnno: null,     // 正在拖动的标注 id（文本拖动用）
   dragOffset: null,       // 拖动偏移量
@@ -824,54 +825,54 @@ function setBrushOpacity(op) {
   if (valueEl) valueEl.textContent = pct + '%';
 }
 
-// 撤销上一步（推入 undoStack 以便重做）
+// 记录一次可撤销/可重做的笔刷操作
+function pushBrushAction(action) {
+  brushState.undoStack.push(action);
+  brushState.redoStack = [];
+}
+
+// 撤销上一步（新增/删除/精细擦除）
 function undoAnnotation() {
   if (brushState.undoStack.length === 0) {
     toast('没有可撤销的标记', 'error');
     return;
   }
-  const removed = brushState.undoStack.pop();
-  if (removed && removed._type === 'pixel-erase') {
-    // 精细擦除：把整个 paths 恢复
-    brushState.paths = removed.before;
-  } else if (removed && removed._type === 'multi-delete') {
-    // 套索批量删除：把删除项全部恢复
-    brushState.paths = brushState.paths.concat(removed.items);
-  } else if (removed) {
-    // 单条删除：单条恢复
-    brushState.paths.push(removed);
+  const action = brushState.undoStack.pop();
+  if (action.type === 'add') {
+    // 撤销新增：移除该次新增的标注
+    brushState.paths = brushState.paths.filter(p => !action.items.some(it => it.id === p.id));
+  } else if (action.type === 'remove') {
+    // 撤销删除：恢复被删标注
+    brushState.paths = brushState.paths.concat(action.items);
+  } else if (action.type === 'replace') {
+    // 撤销精细擦除：恢复擦除前的完整 paths
+    brushState.paths = action.before;
   }
+  brushState.redoStack.push(action);
   renderAllAnnotations();
   toast('已撤销，可点重做恢复', 'info');
 }
 
-// 重做（从 undoStack 取回）
+// 重做（撤销的逆操作）
 function redoAnnotation() {
-  if (brushState.undoStack.length === 0) {
+  if (brushState.redoStack.length === 0) {
     toast('没有可重做的标记', 'error');
     return;
   }
-  // 当前 undo/redo 模型为：路径创建时 push 到 undoStack，undo 时弹回
-  // 对于单条 stroke/rect/ellipse/text 删除，undoStack 顶层是单条对象
-  // 弹回即恢复
-  const restored = brushState.undoStack.pop();
-  if (restored && restored._type === 'pixel-erase') {
-    // 精细擦除 redo：重新应用擦除
-    // 保存当前 paths 到栈（作为再 undo 的恢复点）
-    brushState.undoStack.push({ _type: 'pixel-erase', before: brushState.paths });
-    brushState.paths = pixelErasePaths(brushState.paths, brushState.eraserPath, brushState.eraserRadius);
-    toast('已重做精细擦除', 'info');
-  } else if (restored && restored._type === 'multi-delete') {
-    // 套索批量删除 redo：再删除一次
-    brushState.undoStack.push({ _type: 'multi-delete', items: restored.items });
-    brushState.paths = brushState.paths.filter(p => !restored.items.some(it => it.id === p.id));
-    toast('已重做批量删除', 'info');
-  } else if (restored) {
-    // 单条删除/绘制：直接放回 paths
-    brushState.paths.push(restored);
-    toast('已重做', 'info');
+  const action = brushState.redoStack.pop();
+  if (action.type === 'add') {
+    // 重做新增：重新加回标注
+    brushState.paths = brushState.paths.concat(action.items);
+  } else if (action.type === 'remove') {
+    // 重做删除：再次移除
+    brushState.paths = brushState.paths.filter(p => !action.items.some(it => it.id === p.id));
+  } else if (action.type === 'replace') {
+    // 重做精细擦除：基于擦除前快照重新应用
+    brushState.paths = pixelErasePaths(action.before, action.eraserPath, action.eraserRadius);
   }
+  brushState.undoStack.push(action);
   renderAllAnnotations();
+  toast('已重做', 'info');
 }
 
 // 清除所有标记
@@ -883,6 +884,7 @@ function clearAllAnnotations() {
   if (!confirm('确认清除全部标记？此操作不可恢复。')) return;
   brushState.paths = [];
   brushState.undoStack = [];
+  brushState.redoStack = [];
   renderAllAnnotations();
   toast('已清除全部标记', 'success');
 }
@@ -954,6 +956,7 @@ function importAnnotations(file) {
         createdAt: p.createdAt || Date.now()
       }));
       brushState.undoStack = [];
+      brushState.redoStack = [];
       renderAllAnnotations();
       toast(`已导入 ${brushState.paths.length} 条标记`, 'success');
     } catch (err) {
@@ -1229,6 +1232,10 @@ function setupBrushAnnotations() {
       const tool = btn.dataset.brush;
       if (tool === 'undo') {
         undoAnnotation();
+        return;
+      }
+      if (tool === 'redo') {
+        redoAnnotation();
         return;
       }
       if (tool === 'clear') {
@@ -1607,7 +1614,7 @@ function commitTextInput() {
       createdAt: Date.now()
     };
     brushState.paths.push(anno);
-    brushState.undoStack = []; // 新动作清空 redo 栈
+    pushBrushAction({ type: 'add', items: [anno] });
     renderAllAnnotations();
   }
   if (input.parentNode) input.parentNode.removeChild(input);
@@ -1677,7 +1684,7 @@ function onBrushPointerDown(e) {
     // 笔画橡皮擦（整笔擦除）：单点擦除
     const hit = findHitAnnotation(pt.x, pt.y);
     if (hit) {
-      brushState.undoStack.push(hit); // 支持重做
+      pushBrushAction({ type: 'remove', items: [hit] });
       brushState.paths = brushState.paths.filter(p => p.id !== hit.id);
       renderAllAnnotations();
       toast('已删除一条标记', 'success');
@@ -1926,12 +1933,16 @@ function onBrushPointerUp(e) {
     }
     if (brushState.eraserPath.length > 0) {
       const before = brushState.paths.length;
-      const removed = before - brushState.paths.length;
       const newPaths = pixelErasePaths(brushState.paths, brushState.eraserPath, brushState.eraserRadius);
       const actuallyRemoved = before - newPaths.length;
       // 部分被擦除（拆分后变多）也支持重做：保存旧 paths 到 undoStack
       if (actuallyRemoved > 0 || newPaths.length !== before) {
-        brushState.undoStack.push({ _type: 'pixel-erase', before: brushState.paths });
+        pushBrushAction({
+          type: 'replace',
+          before: brushState.paths,
+          eraserPath: brushState.eraserPath.slice(),
+          eraserRadius: brushState.eraserRadius
+        });
         brushState.paths = newPaths;
         renderAllAnnotations();
         toast(`精细擦除完成（影响 ${actuallyRemoved} 条）`, 'success');
@@ -1980,8 +1991,9 @@ function onBrushPointerUp(e) {
   }
   brushState.currentPath = null;
 
-  // 至少需要 2 个点才创建标注
-  if (brushState.points.length < 2) {
+  // 钢笔/荧光笔支持单击点状标注；其余工具至少需要 2 个点
+  const isDotTool = brushState.tool === 'pen' || brushState.tool === 'highlight';
+  if (brushState.points.length < (isDotTool ? 1 : 2)) {
     brushState.points = [];
     brushState.startPoint = null;
     return;
@@ -1998,7 +2010,7 @@ function onBrushPointerUp(e) {
     createdAt: Date.now()
   };
   brushState.paths.push(anno);
-  brushState.undoStack = []; // 新动作清空 redo 栈
+  pushBrushAction({ type: 'add', items: [anno] });
   brushState.points = [];
   brushState.startPoint = null;
   renderAllAnnotations();
@@ -2066,7 +2078,7 @@ function renderSelectionOverlay() {
 function deleteSelectedAnnotations() {
   if (!brushState.selectedIds || brushState.selectedIds.length === 0) return false;
   const removed = brushState.paths.filter(p => brushState.selectedIds.includes(p.id));
-  brushState.undoStack.push({ _type: 'multi-delete', items: removed });
+  pushBrushAction({ type: 'remove', items: removed });
   brushState.paths = brushState.paths.filter(p => !brushState.selectedIds.includes(p.id));
   brushState.selectedIds = [];
   renderAllAnnotations();
@@ -2103,8 +2115,13 @@ function updateBrushToolbarVisibility() {
 
 // 初始化当前日记的标注数据（在打开日记时调用）
 function initAnnotationsForDiary(diaryId) {
+  // 切换日记前自动保存当前日记的标注，避免未点"保存标注"就切换导致丢失
+  if (brushState.diaryId && brushState.diaryId !== diaryId) {
+    saveAnnotationsToStorage(brushState.diaryId, brushState.paths);
+  }
   brushState.diaryId = diaryId;
   brushState.undoStack = []; // 重置 redo 栈
+  brushState.redoStack = [];
   brushState.selectedIds = [];
   setBrushTool('none');
   // PDF 模式：标注按页存储，从 allPagesAnnos 加载当前页
@@ -3644,6 +3661,8 @@ async function openEditor(id) {
     setSaveStatus('草稿', 'draft');
     state.currentDiary = null;
   }
+  // 同步收起状态与紧凑标题（顶部收起时仍能看到当前标题）
+  if (typeof applyEditorCollapseState === 'function') applyEditorCollapseState();
   updatePreview();
   updateWordCount();
   // 初始化当前日记的笔刷标注数据
@@ -5772,11 +5791,62 @@ function bindFileItemEvents(grid) {
   });
 }
 
-// 上传文件（通过 input change 触发）
+// 更新文件页上传进度条
+function setFilesUploadProgress(active, percent, label) {
+  const bar = document.getElementById('files-upload-progress');
+  const fill = document.getElementById('files-upload-progress-fill');
+  const labelEl = document.getElementById('files-upload-progress-label');
+  if (!bar || !fill || !labelEl) return;
+  bar.style.display = active ? 'flex' : 'none';
+  if (active) {
+    fill.style.width = Math.max(2, Math.min(100, percent)) + '%';
+    labelEl.textContent = label || '';
+  }
+}
+
+// 单个文件通过 XHR 上传（支持真实进度事件）
+function uploadOneFile(file, targetFolder) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const url = targetFolder
+      ? `/api/upload/file?folder=${encodeURIComponent(targetFolder)}`
+      : '/api/upload/file';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + state.token);
+    xhr.timeout = 5 * 60 * 1000;
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        setFilesUploadProgress(true, (e.loaded / e.total) * 100, `正在上传：${file.name}（${formatFileSize(e.loaded)} / ${formatFileSize(e.total)}）`);
+      }
+    });
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || `上传失败（HTTP ${xhr.status}）`));
+    };
+    xhr.onerror = () => reject(new Error('网络错误，上传失败'));
+    xhr.ontimeout = () => reject(new Error('上传超时'));
+    xhr.send(fd);
+  });
+}
+
+// 上传文件（input change / 拖拽触发），带进度条与批量汇总
 async function uploadFiles(fileList, folder) {
   if (!fileList || !fileList.length) return;
   const files = Array.from(fileList);
-  const totalSize = files.reduce((s, f) => s + f.size, 0);
+  const maxSize = 50 * 1024 * 1024;
+  const tooBig = files.filter(f => f.size > maxSize);
+  if (tooBig.length) {
+    const names = tooBig.slice(0, 3).map(f => f.name).join('、');
+    toast(`已跳过超过 50MB 的文件：${names}${tooBig.length > 3 ? ' 等' : ''}`, 'error');
+  }
+  const validFiles = files.filter(f => f.size <= maxSize);
+  if (!validFiles.length) return;
+
+  const totalSize = validFiles.reduce((s, f) => s + f.size, 0);
   // 预检：存储配额
   try {
     const storage = await api('/api/upload/storage');
@@ -5785,26 +5855,26 @@ async function uploadFiles(fileList, folder) {
       return;
     }
   } catch (_) {}
+
   const targetFolder = folder || '';
-  for (const f of files) {
+  let okCount = 0;
+  const failed = [];
+  setFilesUploadProgress(true, 0, `准备上传 ${validFiles.length} 个文件...`);
+  for (let i = 0; i < validFiles.length; i++) {
+    const f = validFiles[i];
+    setFilesUploadProgress(true, (i / validFiles.length) * 100, `上传中 ${i + 1}/${validFiles.length}：${f.name}`);
     try {
-      const fd = new FormData();
-      fd.append('file', f);
-      const url = targetFolder
-        ? `/api/upload/file?folder=${encodeURIComponent(targetFolder)}`
-        : '/api/upload/file';
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + state.token },
-        body: fd
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '上传失败');
-      toast(`已上传：${f.name}`, 'success');
+      await uploadOneFile(f, targetFolder);
+      okCount++;
     } catch (e) {
-      toast(`${f.name} 上传失败：${e.message}`, 'error');
+      failed.push({ name: f.name, error: e.message });
     }
   }
+  setFilesUploadProgress(false, 100, '');
+  if (okCount > 0) {
+    toast(`已上传 ${okCount} 个文件${failed.length ? `，失败 ${failed.length} 个` : ''}`, okCount === validFiles.length ? 'success' : 'info');
+  }
+  failed.slice(0, 3).forEach(x => toast(`${x.name} 上传失败：${x.error}`, 'error'));
   refreshFiles();
 }
 
@@ -6718,6 +6788,71 @@ async function loadUserStorage() {
 //  Treeks 增强编辑器功能：双向同步滚动、快捷键与拖拽上传
 // ============================================================
 
+// ===== 编辑器顶部/底部可收起 =====
+const EDITOR_TOP_COLLAPSE_KEY = 'treeks:editor-top-collapsed';
+const EDITOR_FOOTER_COLLAPSE_KEY = 'treeks:editor-footer-collapsed';
+
+// 收起顶部时，在紧凑栏同步显示当前日记标题
+function updateEditorCollapsedTitle() {
+  const titleEl = document.getElementById('editor-collapsed-title');
+  const input = document.getElementById('editor-title');
+  if (!titleEl || !input) return;
+  const text = input.value.trim();
+  titleEl.textContent = text ? text : '无标题';
+  titleEl.title = text || '无标题';
+}
+
+// 应用持久化的收起状态（每次打开编辑器时调用）
+function applyEditorCollapseState() {
+  const view = document.getElementById('view-editor');
+  if (!view) return;
+  let topCollapsed = false;
+  let footerCollapsed = false;
+  try {
+    topCollapsed = localStorage.getItem(EDITOR_TOP_COLLAPSE_KEY) === '1';
+    footerCollapsed = localStorage.getItem(EDITOR_FOOTER_COLLAPSE_KEY) === '1';
+  } catch (_) {}
+  view.classList.toggle('editor-top-collapsed', topCollapsed);
+  view.classList.toggle('editor-footer-collapsed', footerCollapsed);
+  updateEditorCollapsedTitle();
+}
+
+// 初始化编辑器顶部/底部收起控件（仅绑定一次）
+function initEditorCollapse() {
+  const view = document.getElementById('view-editor');
+  if (!view) return;
+  const topBtn = document.getElementById('btn-editor-top-toggle');
+  const footerBtn = document.getElementById('btn-editor-footer-toggle');
+  const titleInput = document.getElementById('editor-title');
+
+  applyEditorCollapseState();
+
+  if (topBtn) {
+    topBtn.addEventListener('click', () => {
+      const collapsed = view.classList.toggle('editor-top-collapsed');
+      topBtn.title = collapsed ? '展开编辑器顶部（标题、属性、工具栏）' : '收起编辑器顶部（标题、属性、工具栏）';
+      topBtn.setAttribute('aria-label', topBtn.title);
+      try { localStorage.setItem(EDITOR_TOP_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (_) {}
+      // 顶部收起/展开会改变预览区尺寸，重算标注层与笔刷画板
+      if (typeof resizeAnnotationLayer === 'function') resizeAnnotationLayer();
+    });
+  }
+
+  if (footerBtn) {
+    footerBtn.addEventListener('click', () => {
+      const collapsed = view.classList.toggle('editor-footer-collapsed');
+      footerBtn.title = collapsed ? '展开编辑器底部（状态栏与操作区）' : '收起编辑器底部（状态栏与操作区）';
+      footerBtn.setAttribute('aria-label', footerBtn.title);
+      try { localStorage.setItem(EDITOR_FOOTER_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (_) {}
+    });
+  }
+
+  if (titleInput) {
+    titleInput.addEventListener('input', updateEditorCollapsedTitle);
+    titleInput.addEventListener('change', updateEditorCollapsedTitle);
+  }
+}
+
 let isSyncScrolling = false;
 function setupEditorSyncScroll() {
   const textarea = document.getElementById('editor-textarea');
@@ -6993,7 +7128,7 @@ function setupFilesDragUpload() {
 
     const files = e.dataTransfer.files;
     if (files && files.length) {
-      const curFolder = (typeof filesState !== 'undefined' && filesState.currentFolder) ? filesState.currentFolder : '';
+      const curFolder = currentFileFolder || '';
       if (typeof uploadFiles === 'function') {
         uploadFiles(files, curFolder);
       }
@@ -7614,6 +7749,7 @@ function bindEvents() {
   setupAutoSave();
   setupEscCloseModals();
   setupEditorSyncScroll();
+  initEditorCollapse();
   setupEditorKeybindings();
   setupEditorDragUpload();
   if (typeof setupTemplateGalleryEvents === 'function') {

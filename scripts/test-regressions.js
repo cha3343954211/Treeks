@@ -58,6 +58,16 @@ async function main() {
   // 禁止残留内联 onclick（易引发存储型 XSS，一律走 data 属性 + addEventListener）
   assert.ok(!/onclick="/.test(appSource), 'inline onclick must be removed (XSS risk)');
 
+  // 编辑器顶部/底部收起控件必须存在
+  const htmlSource = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+  assert.ok(htmlSource.includes('id="btn-editor-top-toggle"'), 'editor top collapse toggle missing');
+  assert.ok(htmlSource.includes('id="btn-editor-footer-toggle"'), 'editor footer collapse toggle missing');
+  assert.ok(htmlSource.includes('id="files-upload-progress"'), 'files upload progress bar missing');
+  // 笔刷撤销/重做必须走双栈模型，且重做按钮绑定 redoAnnotation
+  assert.ok(appSource.includes('redoStack'), 'brush redoStack missing');
+  assert.ok(appSource.includes("pushBrushAction({ type: 'add', items: [anno] })"), 'brush draw undo record missing');
+  assert.ok(appSource.includes("if (tool === 'redo') {\n        redoAnnotation();"), 'brush redo button not wired');
+
   child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: {
