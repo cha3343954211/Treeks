@@ -19,6 +19,7 @@ public/uploads/*
 
 # 测试与临时文件
 test-*
+!scripts/test-regressions.js
 tmp-*
 *.tmp
 *.bak

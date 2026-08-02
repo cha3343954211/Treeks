@@ -81,8 +81,14 @@ function resolveImageUrl(src, baseUrl) {
   // /uploads/<uid>/<filename>
   if (src.startsWith('/uploads/')) {
     const relPath = src.slice('/uploads/'.length);
-    const localPath = path.join(getUploadsDir(), relPath);
-    if (fs.existsSync(localPath)) return localPath;
+    // 首段必须是数字用户 ID，且路径必须位于上传目录内，防止任意文件读取（路径穿越）
+    const firstSeg = relPath.split('/')[0];
+    if (!/^\d+$/.test(firstSeg)) return null;
+    const uploadsDir = getUploadsDir();
+    const localPath = path.normalize(path.join(uploadsDir, relPath));
+    const rel = path.relative(uploadsDir, localPath);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) return localPath;
   }
   // http(s)://...
   if (/^https?:\/\//.test(src)) {
@@ -292,6 +298,11 @@ async function getBrowser() {
         '--disable-gpu',
         '--font-render-hinting=none'
       ]
+    }).catch(err => {
+      // 启动失败时重置单例，允许下次导出重试，避免服务在进程重启前一直不可用
+      console.error('[ExportPDF] 浏览器启动失败，稍后重试:', err.message);
+      browserPromise = null;
+      throw err;
     });
   }
   return browserPromise;

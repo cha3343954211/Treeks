@@ -61,7 +61,9 @@ function extractToken(req) {
   if (req.headers.cookie) {
     // 简单解析 cookie，避免引入 cookie-parser 中间件
     const m = req.headers.cookie.match(/(?:^|;\s*)treeks_token=([^;]+)/);
-    if (m && m[1]) return decodeURIComponent(m[1]);
+    if (m && m[1]) {
+      try { return decodeURIComponent(m[1]); } catch { return null; }
+    }
   }
   return null;
 }

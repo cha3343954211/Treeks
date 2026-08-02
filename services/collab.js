@@ -18,6 +18,7 @@
 const jwt = require('jsonwebtoken');
 const { db } = require('../db');
 const { JWT_SECRET } = require('../middleware/auth');
+const { isFriend } = require('./permissions');
 
 // diaryId -> Set<ws>
 const rooms = new Map();
@@ -91,7 +92,7 @@ function canReadDiary(diaryId, userId) {
   const vis = diary.visibility || 'private';
   if (vis === 'public') return true;
   if (vis === 'friends') {
-    return !!db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(diary.user_id, userId);
+    return isFriend(diary.user_id, userId);
   }
   if (vis === 'specific') {
     return !!db.prepare('SELECT 1 FROM diary_visible_to WHERE diary_id = ? AND user_id = ?').get(diaryId, userId);
@@ -120,6 +121,10 @@ function broadcastPresence(diaryId) {
 function handleJoin(ws, diaryId) {
   const info = clients.get(ws);
   if (!info) return;
+  if (!Number.isInteger(diaryId) || diaryId <= 0) {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: '日记 ID 无效' }));
+    return;
+  }
   if (!canReadDiary(diaryId, info.userId)) {
     if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: '无权访问此日记' }));
     return;
@@ -145,6 +150,15 @@ function handleEdit(ws, data) {
   const info = clients.get(ws);
   if (!info) return;
   const { diaryId, title, content, field } = data;
+  if (!Number.isInteger(diaryId) || diaryId <= 0) return;
+  if (title !== undefined && (typeof title !== 'string' || title.length > 200)) {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: '标题格式无效' }));
+    return;
+  }
+  if (content !== undefined && (typeof content !== 'string' || content.length > 10 * 1024 * 1024)) {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: '内容格式无效或过大' }));
+    return;
+  }
   if (!canEditDiary(diaryId, info.userId)) {
     if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: '无权编辑此日记' }));
     return;
@@ -193,7 +207,7 @@ function handleCursor(ws, data) {
 
 function setupWebSocket(server) {
   const WebSocket = require('ws');
-  const wss = new WebSocket.Server({ server, path: '/collab' });
+  const wss = new WebSocket.Server({ server, path: '/collab', maxPayload: 10 * 1024 * 1024 });
 
   wss.on('connection', (ws, req) => {
     // 从 query 解析 token
@@ -211,7 +225,8 @@ function setupWebSocket(server) {
       return;
     }
     const user = getUserInfo(decoded.id);
-    if (!user) {
+    const account = db.prepare('SELECT status FROM users WHERE id = ?').get(decoded.id);
+    if (!user || !account || account.status !== 'active') {
       ws.close(4003, '用户不存在');
       return;
     }
@@ -227,12 +242,18 @@ function setupWebSocket(server) {
     ws.on('message', raw => {
       let data;
       try { data = JSON.parse(raw.toString()); } catch { return; }
-      switch (data.type) {
-        case 'join': handleJoin(ws, parseInt(data.diaryId, 10)); break;
-        case 'leave': handleLeave(ws, parseInt(data.diaryId, 10)); break;
-        case 'edit': handleEdit(ws, data); break;
-        case 'cursor': handleCursor(ws, data); break;
-        case 'ping': if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pong' })); break;
+      try {
+        switch (data.type) {
+          case 'join': handleJoin(ws, parseInt(data.diaryId, 10)); break;
+          case 'leave': handleLeave(ws, parseInt(data.diaryId, 10)); break;
+          case 'edit': handleEdit(ws, data); break;
+          case 'cursor': handleCursor(ws, data); break;
+          case 'ping': if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pong' })); break;
+        }
+      } catch (err) {
+        // 防止异常消息触发未捕获异常导致进程退出（server.js 会强制重启整个服务）
+        console.error('[Collab] 处理消息异常:', err.message);
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: '消息处理失败' }));
       }
     });
 

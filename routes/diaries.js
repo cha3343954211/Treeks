@@ -1,6 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { authRequired } = require('../middleware/auth');
+const { canReadDiary, canEditDiary } = require('../services/permissions');
 
 const router = express.Router();
 
@@ -44,39 +45,34 @@ function localDateStr(d) {
   return `${y}-${m}-${day}`;
 }
 
-// 判断用户是否可读某篇日记
-function canReadDiary(diary, userId) {
-  if (!diary) return false;
-  if (diary.user_id === userId) return true;
-  // 协作者可读
-  if (db.prepare('SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ?').get(diary.id, userId)) return true;
-  const vis = diary.visibility || 'private';
-  if (vis === 'public') return true;
-  if (vis === 'friends') {
-    return !!db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(diary.user_id, userId);
-  }
-  if (vis === 'specific') {
-    return !!db.prepare('SELECT 1 FROM diary_visible_to WHERE diary_id = ? AND user_id = ?').get(diary.id, userId);
-  }
-  return false;
-}
 
-// 判断用户是否可编辑某篇日记
-function canEditDiary(diaryId, userId) {
-  const diary = db.prepare('SELECT user_id FROM diaries WHERE id = ?').get(diaryId);
-  if (!diary) return false;
-  if (diary.user_id === userId) return true;
-  const c = db.prepare("SELECT 1 FROM diary_collaborators WHERE diary_id = ? AND user_id = ? AND role = 'editor'").get(diaryId, userId);
-  return !!c;
+
+// 校验用户 ID 列表：返回不存在的用户 ID（过滤非法值）
+// 避免向 diary_visible_to / diary_collaborators 写入不存在的 user_id 触发外键异常导致 500
+function invalidUserIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return [];
+  const bad = [];
+  for (const raw of ids) {
+    if (raw == null) continue;
+    const n = parseInt(raw, 10);
+    if (!Number.isInteger(n) || n <= 0 || !db.prepare('SELECT 1 FROM users WHERE id = ?').get(n)) {
+      bad.push(raw);
+    }
+  }
+  return bad;
 }
 
 // 同步日记可见性指定用户列表
 function syncVisibleTo(diaryId, userIds) {
   db.prepare('DELETE FROM diary_visible_to WHERE diary_id = ?').run(diaryId);
   if (Array.isArray(userIds) && userIds.length) {
-    const stmt = db.prepare('INSERT OR IGNORE INTO diary_visible_to (diary_id, user_id) VALUES (?, ?)');
-    const tx = db.transaction(() => userIds.forEach(uid => stmt.run(diaryId, uid)));
-    tx();
+    const existing = [...new Set(userIds.map(Number).filter(n => Number.isInteger(n) && n > 0))]
+      .filter(n => db.prepare('SELECT 1 FROM users WHERE id = ?').get(n));
+    if (existing.length) {
+      const stmt = db.prepare('INSERT OR IGNORE INTO diary_visible_to (diary_id, user_id) VALUES (?, ?)');
+      const tx = db.transaction(() => existing.forEach(uid => stmt.run(diaryId, uid)));
+      tx();
+    }
   }
 }
 
@@ -295,8 +291,14 @@ router.get('/:id', (req, res) => {
     }
   }
 
+  // 非 owner 不返回私密锁字段（is_locked/pin_code），防止明文 PIN 泄露给可读用户
+  const safeRow = { ...row };
+  if (!isOwner) {
+    delete safeRow.pin_code;
+    delete safeRow.is_locked;
+  }
   res.json({
-    ...row,
+    ...safeRow,
     tags: parseTags(row.tags),
     is_pinned: !!row.is_pinned,
     is_public: !!row.is_public,
@@ -314,6 +316,13 @@ router.post('/', (req, res) => {
   if (validationError) return res.status(400).json({ error: validationError });
   const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, collaborators, folder_id, pdf_filename, pdf_pages } = req.body || {};
   const vis = ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : 'private';
+
+  // 校验 visibleTo / collaborators 中用户存在，避免外键约束抛错导致 500
+  const invalidVisibleIds = vis === 'specific' ? invalidUserIds(visibleTo) : [];
+  const invalidCollabIds = invalidUserIds(Array.isArray(collaborators) ? collaborators.map(c => c && c.userId) : []);
+  if (invalidVisibleIds.length || invalidCollabIds.length) {
+    return res.status(400).json({ error: '可见用户或协作者中存在无效的用户 ID' });
+  }
 
   // 校验 folder_id：必须属于当前用户，否则置为 NULL（默认文件夹）
   let folderId = null;
@@ -383,11 +392,16 @@ router.put('/:id', (req, res) => {
   const canEdit = isOwner || canEditDiary(id, req.user.id);
   if (!canEdit) return res.status(403).json({ error: '无权编辑此日记' });
 
-  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, folder_id, pdf_filename, pdf_pages } = req.body || {};
+  const { title, content, mood, weather, tags, is_pinned, is_public, visibility, visibleTo, folder_id, pdf_filename, pdf_pages, is_locked, pin_code } = req.body || {};
 
   // 仅 owner 可改可见性/置顶/公开/移动文件夹
   const canChangeMeta = isOwner;
   const vis = canChangeMeta && ['private', 'public', 'friends', 'specific'].includes(visibility) ? visibility : existing.visibility;
+
+  // 校验可见用户存在（避免外键约束抛错导致 500）
+  if (canChangeMeta && vis === 'specific' && Array.isArray(visibleTo) && invalidUserIds(visibleTo).length) {
+    return res.status(400).json({ error: '可见用户中存在无效的用户 ID' });
+  }
 
   // 处理 folder_id 移动（仅 owner 可移动；folder_id 可为 null 表示移到默认文件夹）
   let folderIdUpdate = null;
@@ -465,6 +479,30 @@ router.put('/:id', (req, res) => {
   // 仅 owner 可同步可见性用户列表
   if (canChangeMeta && vis === 'specific' && Array.isArray(visibleTo)) {
     syncVisibleTo(id, visibleTo);
+  }
+
+  // 私密锁（仅 owner 可设置）：is_locked 控制是否上锁，pin_code 为锁 PIN（null/'' 表示清除）
+  if (isOwner && (is_locked !== undefined || pin_code !== undefined)) {
+    const lockSets = [];
+    const lockArgs = [];
+    if (is_locked !== undefined) {
+      const lockVal = (is_locked === true || is_locked === 1 || is_locked === '1') ? 1 : 0;
+      lockSets.push('is_locked = ?');
+      lockArgs.push(lockVal);
+    }
+    if (pin_code !== undefined) {
+      if (pin_code !== null && typeof pin_code !== 'string') {
+        return res.status(400).json({ error: 'pin_code 格式无效' });
+      }
+      const pin = (pin_code === null || pin_code === '') ? null : String(pin_code);
+      lockSets.push('pin_code = ?');
+      lockArgs.push(pin);
+    }
+    if (lockSets.length) {
+      lockSets.push("updated_at = datetime('now')");
+      lockArgs.push(id);
+      db.prepare(`UPDATE diaries SET ${lockSets.join(', ')} WHERE id = ?`).run(...lockArgs);
+    }
   }
 
   const row = db.prepare('SELECT * FROM diaries WHERE id = ?').get(id);
@@ -631,11 +669,10 @@ router.post('/:id/attachments', (req, res) => {
   if (!fid) return res.status(400).json({ error: '请提供 fileId' });
   const file = db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').get(fid, req.user.id);
   if (!file) return res.status(404).json({ error: '文件不存在或不属于你' });
-  try {
-    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM diary_attachments WHERE diary_id = ?').get(diaryId);
-    db.prepare('INSERT OR IGNORE INTO diary_attachments (diary_id, file_id, sort_order) VALUES (?, ?, ?)')
-      .run(diaryId, fid, maxOrder.m + 1);
-  } catch (e) {
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM diary_attachments WHERE diary_id = ?').get(diaryId);
+  const insResult = db.prepare('INSERT OR IGNORE INTO diary_attachments (diary_id, file_id, sort_order) VALUES (?, ?, ?)')
+    .run(diaryId, fid, maxOrder.m + 1);
+  if (insResult.changes === 0) {
     return res.status(409).json({ error: '该文件已是附件' });
   }
   db.prepare("UPDATE diaries SET updated_at = datetime('now') WHERE id = ?").run(diaryId);
@@ -689,6 +726,7 @@ router.get('/shared/list', (req, res) => {
      JOIN users u ON u.id = d.user_id
      WHERE d.user_id != ?
        AND NOT EXISTS (SELECT 1 FROM user_blocks ub WHERE ub.user_id = ? AND ub.blocked_user_id = d.user_id)
+       AND NOT EXISTS (SELECT 1 FROM user_blocks ub2 WHERE ub2.user_id = d.user_id AND ub2.blocked_user_id = ?)
        AND (
          d.visibility = 'public'
          OR (d.visibility = 'friends' AND EXISTS (
@@ -699,7 +737,7 @@ router.get('/shared/list', (req, res) => {
        )
      ORDER BY d.created_at DESC
      LIMIT 100`
-  ).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
+  ).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
   const items = rows.map(r => ({ ...r, tags: parseTags(r.tags) }));
   res.json({ items, total: items.length });
 });
@@ -942,19 +980,6 @@ router.get('/stats/summary', (req, res) => {
   ).all(req.user.id);
 
   res.json({ total, pinned, moodStats, topTags, recentDays, yearHeatmap });
-});
-
-  // 那年今日 (On This Day / Time Capsule)
-router.get('/on-this-day', (req, res) => {
-  const monthDay = new Date().toISOString().slice(5, 10); // MM-DD
-  const rows = db.prepare(`
-    SELECT id, title, content, mood, weather, tags, created_at
-    FROM diaries
-    WHERE user_id = ? AND strftime('%m-%d', created_at) = ? AND strftime('%Y', created_at) != strftime('%Y', 'now')
-    ORDER BY created_at DESC
-  `).all(req.user.id, monthDay);
-
-  res.json({ items: rows.map(r => ({ ...r, tags: parseTags(r.tags) })) });
 });
 
 // 解锁私密日记

@@ -103,6 +103,8 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_diaries_user_id ON diaries(user_id);
     CREATE INDEX IF NOT EXISTS idx_diaries_created_at ON diaries(created_at);
     CREATE INDEX IF NOT EXISTS idx_diaries_tags ON diaries(tags);
+    -- 复合索引：列表查询 WHERE user_id=? ORDER BY is_pinned DESC, created_at DESC
+    CREATE INDEX IF NOT EXISTS idx_diaries_user_pin_time ON diaries(user_id, is_pinned, created_at);
 
     -- 日记文件夹
     CREATE TABLE IF NOT EXISTS folders (

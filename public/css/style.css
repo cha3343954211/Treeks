@@ -5023,6 +5023,41 @@ html, body {
 }
 .file-item:hover img,
 .image-item:hover img { transform: scale(1.08); }
+/* 文件图片缩略图：异步 fetch + token 加载容器 */
+.file-item .file-img-wrap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.file-item .file-img-wrap img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.file-item .file-img-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--bg-2, #f0f0f0) 0%, var(--bg-3, #e6e6e6) 100%);
+  color: var(--text-2, #888);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+[data-mode="dark"] .file-item .file-img-fallback {
+  background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+  color: #aaa;
+}
+.file-item .file-img-fallback-ext {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  opacity: 0.7;
+}
 /* PDF 缩略图：渐变 + 图标 */
 .file-item.file-pdf {
   background: linear-gradient(135deg, #fce8e0 0%, #f7c8a8 100%);

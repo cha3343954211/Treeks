@@ -40,8 +40,8 @@ router.get('/dashboard', (req, res) => {
       (SELECT COUNT(*) FROM users WHERE status = 'disabled') AS disabledUsers,
       (SELECT COUNT(*) FROM users WHERE is_admin = 1) AS adminCount,
       (SELECT COUNT(*) FROM diaries) AS diaryCount,
-      (SELECT COUNT(*) FROM images) AS imageCount,
-      (SELECT COALESCE(SUM(size),0) FROM images) AS totalImageSize,
+      (SELECT COUNT(*) FROM files WHERE kind = 'image') AS imageCount,
+      (SELECT COALESCE(SUM(size),0) FROM files) AS totalFileSize,
       (SELECT COALESCE(SUM(storage_limit),0) FROM users) AS totalStorageLimit
   `).get();
 
@@ -89,9 +89,9 @@ router.get('/dashboard', (req, res) => {
     content: {
       diaries: stats.diaryCount,
       images: stats.imageCount,
-      totalImageSize: stats.totalImageSize
+      totalImageSize: stats.totalFileSize
     },
-    storage: { used: stats.totalImageSize, totalLimit: stats.totalStorageLimit },
+    storage: { used: stats.totalFileSize, totalLimit: stats.totalStorageLimit },
     trends: { recentUsers, recentDiaries, recentActive },
     topUsers
   });
@@ -138,28 +138,33 @@ router.get('/users', (req, res) => {
   let where = '1=1';
   const params = [];
   if (keyword) {
-    where += ' AND (username LIKE ? OR nickname LIKE ?)';
+    where += ' AND (u.username LIKE ? OR u.nickname LIKE ?)';
     const kw = `%${keyword}%`;
     params.push(kw, kw);
   }
   if (status) {
-    where += ' AND status = ?';
+    where += ' AND u.status = ?';
     params.push(status);
   }
 
-  const total = db.prepare(`SELECT COUNT(*) as c FROM users WHERE ${where}`).get(...params).c;
-  // 优化：使用 LEFT JOIN + GROUP BY 替代相关子查询，将 3N 次查询降为 1 次
-  // 注意：WHERE 条件作用于主表 u，子查询统计不受 WHERE 影响
+  const total = db.prepare(`SELECT COUNT(*) as c FROM users u WHERE ${where}`).get(...params).c;
   const rows = db.prepare(
-    `SELECT u.id, u.username, u.nickname, u.avatar, u.bio, u.is_admin, u.status, u.storage_limit, u.created_at,
-            COUNT(d.id) as diary_count,
-            COUNT(im.id) as image_count,
-            COALESCE(SUM(im.size), 0) as used_storage
+    `WITH diary_stats AS (
+       SELECT user_id, COUNT(*) AS diary_count FROM diaries GROUP BY user_id
+     ), file_stats AS (
+       SELECT user_id,
+              SUM(CASE WHEN kind = 'image' THEN 1 ELSE 0 END) AS image_count,
+              COALESCE(SUM(size), 0) AS used_storage
+       FROM files GROUP BY user_id
+     )
+     SELECT u.id, u.username, u.nickname, u.avatar, u.bio, u.is_admin, u.status, u.storage_limit, u.created_at,
+            COALESCE(ds.diary_count, 0) AS diary_count,
+            COALESCE(fs.image_count, 0) AS image_count,
+            COALESCE(fs.used_storage, 0) AS used_storage
      FROM users u
-     LEFT JOIN diaries d ON d.user_id = u.id
-     LEFT JOIN images im ON im.user_id = u.id
+     LEFT JOIN diary_stats ds ON ds.user_id = u.id
+     LEFT JOIN file_stats fs ON fs.user_id = u.id
      WHERE ${where}
-     GROUP BY u.id
      ORDER BY u.is_admin DESC, u.created_at DESC
      LIMIT ? OFFSET ?`
   ).all(...params, limitNum, offset);
@@ -178,8 +183,8 @@ router.get('/users/:id', (req, res) => {
   const row = db.prepare(
     `SELECT u.id, u.username, u.nickname, u.avatar, u.bio, u.is_admin, u.status, u.storage_limit, u.created_at,
             (SELECT COUNT(*) FROM diaries WHERE user_id = u.id) as diary_count,
-            (SELECT COUNT(*) FROM images WHERE user_id = u.id) as image_count,
-            (SELECT COALESCE(SUM(size),0) FROM images WHERE user_id = u.id) as used_storage
+            (SELECT COUNT(*) FROM files WHERE user_id = u.id AND kind = 'image') as image_count,
+            (SELECT COALESCE(SUM(size),0) FROM files WHERE user_id = u.id) as used_storage
      FROM users u WHERE u.id = ?`
   ).get(req.params.id);
   if (!row) return res.status(404).json({ error: '用户不存在' });
@@ -189,6 +194,7 @@ router.get('/users/:id', (req, res) => {
 // 更新用户（状态、管理员、空间、昵称）
 router.put('/users/:id', (req, res) => {
   const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '用户 ID 无效' });
   if (id === req.user.id) {
     // 不允许管理员停用自己或撤销自己权限
     if (req.body.status === 'disabled' || req.body.is_admin === false) {
@@ -196,6 +202,12 @@ router.put('/users/:id', (req, res) => {
     }
   }
   const { nickname, is_admin, status, storage_limit } = req.body || {};
+  if (nickname != null && (typeof nickname !== 'string' || nickname.length > 50)) return res.status(400).json({ error: '昵称格式无效' });
+  if (is_admin != null && typeof is_admin !== 'boolean') return res.status(400).json({ error: '管理员状态格式无效' });
+  if (status != null && !['active', 'disabled'].includes(status)) return res.status(400).json({ error: '用户状态无效' });
+  if (storage_limit != null && (!Number.isSafeInteger(Number(storage_limit)) || Number(storage_limit) <= 0)) {
+    return res.status(400).json({ error: '存储配额无效' });
+  }
   const current = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
   if (!current) return res.status(404).json({ error: '用户不存在' });
 
@@ -584,7 +596,13 @@ router.get('/backups/download/:filename', (req, res) => {
   logAction(req.user.id, 'backup_download', filename, {});
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  fs.createReadStream(filePath).pipe(res);
+  const stream = fs.createReadStream(filePath);
+  stream.on('error', (e) => {
+    console.error('[Admin] 备份下载失败:', filePath, e.message);
+    if (!res.headersSent) res.status(500).end('下载失败');
+    else res.destroy();
+  });
+  stream.pipe(res);
 });
 
 // 从备份恢复（危险操作：会替换当前数据库）

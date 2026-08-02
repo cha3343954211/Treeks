@@ -26,6 +26,8 @@ function toISOWithTZ(timeStr) {
 function processTimes(obj) {
   if (obj === null || obj === undefined) return obj;
   if (typeof obj === 'string') return obj;
+  // Date 实例没有可枚举自有属性，递归展开会被错误替换为 {}，应原样保留
+  if (typeof obj === 'number' || typeof obj === 'boolean' || obj instanceof Date) return obj;
   if (Array.isArray(obj)) return obj.map(processTimes);
   if (typeof obj === 'object') {
     const result = {};

@@ -2,6 +2,7 @@ const express = require('express');
 const { db } = require('../db');
 const { authRequired } = require('../middleware/auth');
 const { isUserOnline } = require('../services/collab');
+const { isFriend } = require('../services/permissions');
 
 const router = express.Router();
 router.use(authRequired);
@@ -21,8 +22,7 @@ router.post('/requests', (req, res) => {
   if (target.status !== 'active') return res.status(400).json({ error: '目标用户已被停用' });
 
   // 已是好友？
-  const already = db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(req.user.id, toId);
-  if (already) return res.status(400).json({ error: '已经是好友了' });
+  if (isFriend(req.user.id, toId)) return res.status(400).json({ error: '已经是好友了' });
 
   // 已有待处理请求？
   const pending = db.prepare(
@@ -46,10 +46,11 @@ router.post('/requests', (req, res) => {
     return res.json({ message: '已互加为好友', becameFriends: true });
   }
 
-  // 否则创建请求
+  // 否则创建请求（message 必须是字符串，防止类型错误导致 500）
+  const msg = (typeof message === 'string' ? message : '').slice(0, 200);
   db.prepare(
     'INSERT INTO friend_requests (from_user_id, to_user_id, message) VALUES (?, ?, ?)'
-  ).run(req.user.id, toId, (message || '').slice(0, 200));
+  ).run(req.user.id, toId, msg);
 
   res.status(201).json({ message: '好友请求已发送' });
 });
@@ -112,15 +113,18 @@ router.post('/requests/:id/reject', (req, res) => {
 
 // 好友列表
 router.get('/', (req, res) => {
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit, 10) || 200));
   const rows = db.prepare(
     `SELECT u.id, u.username, u.nickname, u.avatar, u.bio, u.created_at, f.created_at AS friend_since
      FROM friends f
      JOIN users u ON u.id = f.friend_id
      WHERE f.user_id = ?
-     ORDER BY u.nickname, u.username`
-  ).all(req.user.id);
+     ORDER BY u.nickname, u.username
+     LIMIT ?`
+  ).all(req.user.id, limit);
+  const total = db.prepare('SELECT COUNT(*) AS c FROM friends WHERE user_id = ?').get(req.user.id).c;
   const items = rows.map(r => ({ ...r, is_online: isUserOnline(r.id) }));
-  res.json({ items, total: items.length });
+  res.json({ items, total });
 });
 
 // 删除好友（双向）

@@ -89,6 +89,14 @@ if (window.marked) {
 
 function renderMarkdown(text) {
   if (!text) return '<p style="color:#999;font-style:italic;">预览区域为空，开始书写吧...</p>';
+  // 依赖缺失时给出明确提示（CDN 被 SRI 拦截 / 网络失败 / 离线场景），
+  // 而不是抛错落入通用"解析错误"
+  if (!window.marked) {
+    return '<p style="color:#c75450;">Markdown 渲染库（marked）未加载，请检查网络或刷新页面。</p>';
+  }
+  if (!window.DOMPurify) {
+    return '<p style="color:#c75450;">安全过滤库（DOMPurify）未加载，已禁用预览以保障安全。</p>';
+  }
   try {
     // 先抽取 LaTeX 公式占位，避免被 marked 当成普通文本处理（反斜杠转义、下划线等会破坏公式）
     const placeholders = [];
@@ -422,18 +430,19 @@ function annotationStorageKey(diaryId) {
 }
 
 // 从 localStorage 加载标注
+// 返回原始结构：数组（Markdown 单层标注）或对象（PDF 按页标注），无数据时返回 null
 function loadAnnotations(diaryId) {
-  if (!diaryId) return [];
+  if (!diaryId) return null;
   const key = annotationStorageKey(diaryId);
-  if (!key) return [];
+  if (!key) return null;
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return [];
+    if (!raw) return null;
     const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
+    return (Array.isArray(data) || (data && typeof data === 'object')) ? data : null;
   } catch (e) {
     console.warn('[Annotation] 加载失败:', e.message);
-    return [];
+    return null;
   }
 }
 
@@ -2109,7 +2118,8 @@ function initAnnotationsForDiary(diaryId) {
       resizeAnnotationLayer();
     }, 80);
   } else {
-    brushState.paths = diaryId ? loadAnnotations(diaryId) : [];
+    const loadedAnnos = diaryId ? loadAnnotations(diaryId) : null;
+    brushState.paths = Array.isArray(loadedAnnos) ? loadedAnnos : [];
     // 兼容旧数据：补齐 opacity 字段
     brushState.paths = brushState.paths.map(p => ({
       opacity: 1,
@@ -2193,7 +2203,8 @@ async function loadPdf(pdfUrl, filename) {
     // 加载首页标注
     if (brushState.diaryId) {
       const all = loadAnnotations(brushState.diaryId);
-      pdfState.allPagesAnnos = all || {};
+      // PDF 模式：标注为按页对象，仅接受对象结构（数组为 Markdown 旧数据，忽略）
+      pdfState.allPagesAnnos = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
       initAnnotationsForDiary(brushState.diaryId);
     }
     return true;
@@ -2434,10 +2445,10 @@ function fixChineseFilenameFront(name) {
 }
 
 // ===== 状态管理 =====
+// 注意：不再将 token 明文写入 document.cookie。
+// 服务端登录时已设置 HttpOnly cookie（见 routes/auth.js setAuthCookie），
+// <img src="/uploads/..."> 等请求会自动携带；JS 写入的明文 cookie 会扩大 token 暴露面。
 const initialToken = localStorage.getItem('treeks_token');
-if (initialToken) {
-  document.cookie = `treeks_token=${encodeURIComponent(initialToken)}; path=/; max-age=604800; SameSite=Lax`;
-}
 
 const state = {
   token: initialToken,
@@ -2656,6 +2667,17 @@ async function logout() {
   localStorage.removeItem('treeks_token');
   localStorage.removeItem('treeks_user');
   stopHeartbeat();
+  // 清理协同 WebSocket、轮询定时器等资源，防止登出后继续请求/保持连接
+  if (typeof collabWs !== 'undefined' && collabWs) {
+    try { collabWs.close(); } catch (_) {}
+    collabWs = null;
+  }
+  if (typeof collabCurrentDiaryId !== 'undefined') collabCurrentDiaryId = null;
+  if (typeof msgState !== 'undefined' && msgState.pollTimer) {
+    clearInterval(msgState.pollTimer);
+    msgState.pollTimer = null;
+  }
+  if (typeof clearFriendsRefreshTimer === 'function') clearFriendsRefreshTimer();
   showAuthView();
 }
 
@@ -3919,6 +3941,7 @@ async function saveDiary() {
       toast('已创建', 'success');
     }
     setSaveStatus('已保存 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), 'saved');
+    state._lastSavedContent = content;
     // 文件夹数量可能变化（新建/移动日记），后台刷新
     if (state.folders.length) loadFolders();
   } catch (e) {
@@ -4472,7 +4495,7 @@ function createBrushOverlay(container, opts = {}) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => save().catch(e => console.warn('笔刷保存失败', e)), 600);
   }
-  // 事件绑定
+  // 事件绑定（保存 window 级 handler 引用，destroy 时移除，防止内存泄漏）
   svg.addEventListener('mousedown', onDown);
   window.addEventListener('mousemove', onMove);
   window.addEventListener('mouseup', onUp);
@@ -4561,6 +4584,11 @@ function createBrushOverlay(container, opts = {}) {
   function destroy() {
     try { ro.disconnect(); } catch (_) {}
     try { svg.remove(); } catch (_) {}
+    // 移除 window 级监听器，防止闭包与已脱离文档的元素持续累积（内存泄漏）
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('touchmove', onMove);
+    window.removeEventListener('touchend', onUp);
   }
   // 初始化
   setTool('none');
@@ -5500,7 +5528,20 @@ function renderFileItem(f) {
   let thumb;
   let badgeLabel = ext.toUpperCase() || (isPdf ? 'PDF' : isImg ? 'IMG' : isText ? 'TXT' : 'FILE');
   if (isImg) {
-    thumb = `<img src="${escapeHtml(f.url)}" alt="${escapeHtml(name)}" loading="lazy">`;
+    // 图片需鉴权访问：<img> 标签本身无法携带 Authorization 头，且浏览器在某些场景下
+    // 不会自动发送 HttpOnly cookie（嵌入、跨域、隐私模式、SameSite 限制等），图片加载
+    // 失败会显示 broken 图标。改为渲染后异步用 fetch + Bearer token 拉一次，成功后
+    // 转 blob URL 赋给 <img>，无论 cookie 是否带都能正确显示。同时保留 onerror fallback。
+    const safeUrl = escapeHtml(f.url);
+    const safeName = escapeHtml(name);
+    const safeExt = escapeHtml(ext || 'IMG');
+    const safeId = String(f.id);
+    thumb = `<div class="file-img-wrap" data-img-wrap="${safeId}" data-img-url="${safeUrl}">`
+      + `<div class="file-img-fallback" data-img-fallback="${safeId}">`
+      + `<div class="file-img-fallback-ext">${safeExt.toUpperCase()}</div>`
+      + `</div>`
+      + `<img data-img="${safeId}" alt="${safeName}" loading="lazy" style="display:none;">`
+      + `</div>`;
   } else if (isPdf) {
     badgeLabel = 'PDF';
     thumb = `<div class="file-pdf-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
@@ -5604,6 +5645,57 @@ function openFileByKind(f) {
   }
 }
 
+// 异步为文件网格中的图片缩略图加载 blob URL
+// 用 fetch + Bearer token 取代 <img src>，解决：
+//   1. <img> 无法携带 Authorization 头（之前仅依赖 HttpOnly cookie，
+//      在嵌入/跨域/隐私模式/cookie 过期等场景下会 broken）
+//   2. 用 IntersectionObserver 懒加载图片，节省带宽
+// 失败时显示 fallback（文件类型大写标签），不让用户看到 broken 图标
+const _imgObserver = (typeof IntersectionObserver !== 'undefined')
+  ? new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const wrap = entry.target;
+      _imgObserver.unobserve(wrap);
+      _loadOneImage(wrap);
+    });
+  }, { rootMargin: '200px' })
+  : null;
+
+async function _loadOneImage(wrap) {
+  const id = wrap.dataset.imgWrap;
+  const url = wrap.dataset.imgUrl;
+  const img = wrap.querySelector(`[data-img="${id}"]`);
+  const fallback = wrap.querySelector(`[data-img-fallback="${id}"]`);
+  if (!img || !url) return;
+  try {
+    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + state.token } });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    // 释放前一次对象 URL 避免泄漏
+    if (img.dataset.blobUrl) URL.revokeObjectURL(img.dataset.blobUrl);
+    img.dataset.blobUrl = blobUrl;
+    img.src = blobUrl;
+    img.style.display = '';
+    if (fallback) fallback.style.display = 'none';
+  } catch (_) {
+    // 加载失败：保持 fallback 显示
+    if (fallback) fallback.style.display = 'flex';
+  }
+}
+
+function loadImageThumbs(grid) {
+  const wraps = grid.querySelectorAll('[data-img-wrap]');
+  wraps.forEach(wrap => {
+    if (_imgObserver) {
+      _imgObserver.observe(wrap);
+    } else {
+      _loadOneImage(wrap);
+    }
+  });
+}
+
 // 绑定文件项事件（点击、按钮）
 function bindFileItemEvents(grid) {
   grid.querySelectorAll('.copy-md-btn').forEach(b => b.addEventListener('click', e => {
@@ -5621,7 +5713,7 @@ function bindFileItemEvents(grid) {
     e.stopPropagation();
     const id = b.dataset.id;
     const name = b.dataset.name || '该文件';
-    showModal('删除文件', `确定要删除「${name}」吗？物理文件将一并删除。`, async () => {
+    showModal('删除文件', `确定要删除「${escapeHtml(name)}」吗？物理文件将一并删除。`, async () => {
       try {
         await api(`/api/upload/files/${id}`, { method: 'DELETE' });
         toast('已删除', 'success');
@@ -5636,6 +5728,8 @@ function bindFileItemEvents(grid) {
     const id = item ? parseInt(item.dataset.id, 10) : null;
     openPdfViewerModal(b.dataset.url, b.closest('.file-item')?.dataset.name || '', id);
   }));
+  // 图片缩略图：异步 fetch + Bearer token 加载，避开 <img> 无法带 Authorization 的问题
+  loadImageThumbs(grid);
   // 统一打开按钮
   grid.querySelectorAll('.open-file-btn').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
@@ -6013,12 +6107,13 @@ function initRenameFileModal() {
           method: 'PATCH',
           body: JSON.stringify({ original_name: newName })
         });
+        const renamedId = renameFileTargetId;
         modal.style.display = 'none';
         renameFileTargetId = null;
         toast('已重命名', 'success');
         refreshFiles();
         // 如果当前正在查看该文件，刷新查看器标题
-        if (fileViewerState.id === renameFileTargetId) {
+        if (fileViewerState.id === renamedId) {
           const fnEl = document.getElementById('file-viewer-modal-filename');
           if (fnEl) {
             fnEl.textContent = newName;
@@ -6466,7 +6561,7 @@ async function cropAndUploadAvatar() {
   confirmBtn.disabled = true;
   confirmBtn.textContent = '上传中...';
   try {
-    const uploadData = await apiUploadFile(new File([blob], 'avatar.png', { type: 'image/png' }));
+    const uploadData = await apiUpload(new File([blob], 'avatar.png', { type: 'image/png' }));
     const data = await api('/api/auth/profile', {
       method: 'PUT',
       body: JSON.stringify({ avatar: uploadData.url })
@@ -6959,7 +7054,7 @@ function setupMsgChatDragUpload() {
       for (const file of files) {
         toast(`正在发送文件: ${file.name}...`, 'info');
         try {
-          const res = await apiUploadFile(file);
+          const res = await apiUpload(file);
           await api('/api/messages', {
             method: 'POST',
             body: JSON.stringify({
@@ -7129,6 +7224,15 @@ function setupAutoSave() {
       }
     }
   });
+
+  // 离开页面前提示未保存内容（配合 2.5s 自动保存兜底，防止误关闭丢失字迹）
+  window.addEventListener('beforeunload', (e) => {
+    const ta = document.getElementById('editor-textarea');
+    if (!ta || !ta.value.trim() || state.currentView !== 'editor') return;
+    if (state.editingId && ta.value === state._lastSavedContent) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
 }
 
 async function saveDiarySilent() {
@@ -7149,8 +7253,13 @@ async function saveDiarySilent() {
   try {
     if (state.editingId) {
       await api(`/api/diaries/${state.editingId}`, { method: 'PUT', body: JSON.stringify(body) });
-      setSaveStatus('已自动保存', 'saved');
+    } else {
+      // 新日记：先创建获得 id，使后续自动保存走 PUT（避免新建内容丢失）
+      const created = await api('/api/diaries', { method: 'POST', body: JSON.stringify(body) });
+      if (created && created.id) state.editingId = created.id;
     }
+    state._lastSavedContent = content;
+    setSaveStatus('已自动保存', 'saved');
   } catch (e) {
     setSaveStatus('修改未保存', 'draft');
   }
@@ -10012,6 +10121,103 @@ function renderDayDetail() {
   });
 }
 
+// 新建日程（dateStr 为可选默认日期）
+function showScheduleModal(dateStr) {
+  const defaultDate = dateStr || calState.selectedDate || '';
+  const body = `
+    <div class="form-group">
+      <label>日程标题</label>
+      <input type="text" id="schedule-input-title" class="form-input" maxlength="200" placeholder="日程标题" />
+    </div>
+    <div class="form-group">
+      <label>日期</label>
+      <input type="date" id="schedule-input-date" class="form-input" value="${escapeHtml(defaultDate)}" />
+    </div>
+    <div class="form-group" style="display:flex;gap:12px;">
+      <div style="flex:1;">
+        <label>开始时间</label>
+        <input type="time" id="schedule-input-start" class="form-input" />
+      </div>
+      <div style="flex:1;">
+        <label>结束时间</label>
+        <input type="time" id="schedule-input-end" class="form-input" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>备注</label>
+      <textarea id="schedule-input-desc" class="form-input" rows="2" maxlength="4000"></textarea>
+    </div>`;
+  showModal('新建日程', body, async () => {
+    const title = document.getElementById('schedule-input-title').value.trim();
+    const date = document.getElementById('schedule-input-date').value;
+    if (!title) { toast('请输入日程标题', 'error'); return false; }
+    if (!date) { toast('请选择日期', 'error'); return false; }
+    const payload = {
+      title,
+      schedule_date: date,
+      start_time: document.getElementById('schedule-input-start').value || null,
+      end_time: document.getElementById('schedule-input-end').value || null,
+      description: document.getElementById('schedule-input-desc').value.trim() || ''
+    };
+    try {
+      await api('/api/schedules', { method: 'POST', body: JSON.stringify(payload) });
+      toast('日程已创建', 'success');
+      await loadCalendarData();
+      renderCalendar();
+      renderDayDetail();
+    } catch (e) { toast(e.message, 'error'); return false; }
+  }, { confirmText: '创建' });
+}
+
+// 编辑日程
+function editSchedule(id) {
+  const s = calState.schedules.find(x => x.id === id);
+  if (!s) return;
+  const body = `
+    <div class="form-group">
+      <label>日程标题</label>
+      <input type="text" id="schedule-input-title" class="form-input" maxlength="200" value="${escapeHtml(s.title || '')}" />
+    </div>
+    <div class="form-group">
+      <label>日期</label>
+      <input type="date" id="schedule-input-date" class="form-input" value="${escapeHtml(s.schedule_date || '')}" />
+    </div>
+    <div class="form-group" style="display:flex;gap:12px;">
+      <div style="flex:1;">
+        <label>开始时间</label>
+        <input type="time" id="schedule-input-start" class="form-input" value="${escapeHtml(s.start_time || '')}" />
+      </div>
+      <div style="flex:1;">
+        <label>结束时间</label>
+        <input type="time" id="schedule-input-end" class="form-input" value="${escapeHtml(s.end_time || '')}" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>备注</label>
+      <textarea id="schedule-input-desc" class="form-input" rows="2" maxlength="4000">${escapeHtml(s.description || '')}</textarea>
+    </div>`;
+  showModal('编辑日程', body, async () => {
+    const title = document.getElementById('schedule-input-title').value.trim();
+    const date = document.getElementById('schedule-input-date').value;
+    if (!title) { toast('请输入日程标题', 'error'); return false; }
+    if (!date) { toast('请选择日期', 'error'); return false; }
+    const payload = {
+      title,
+      schedule_date: date,
+      start_time: document.getElementById('schedule-input-start').value || null,
+      end_time: document.getElementById('schedule-input-end').value || null,
+      description: document.getElementById('schedule-input-desc').value.trim() || ''
+    };
+    try {
+      await api('/api/schedules/' + id, { method: 'PUT', body: JSON.stringify(payload) });
+      toast('日程已更新', 'success');
+      await loadCalendarData();
+      renderCalendar();
+      renderDayDetail();
+    } catch (e) { toast(e.message, 'error'); return false; }
+  }, { confirmText: '保存' });
+}
+
 async function toggleSchedule(id) {
   const s = calState.schedules.find(x => x.id === id);
   if (!s) return;
@@ -10428,6 +10634,11 @@ async function loadThemeSettings() {
       loadThemeSettings();
     });
   });
+}
+
+// 兼容命令面板：切换主题（立即应用并持久化到服务端）
+function changeTheme(theme) {
+  saveThemeSetting(theme);
 }
 
 async function saveThemeSetting(theme) {
@@ -11805,20 +12016,20 @@ function renderMsgMessages() {
       const isImg = fkind === 'image' || /\.(jpe?g|png|gif|webp|svg)$/i.test(furl);
 
       if (isImg && furl !== '#') {
-        fileHtml = `<div class="msg-bubble-media-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击查看高清大图">
+        fileHtml = `<div class="msg-bubble-media-card" data-preview-file data-file-url="${escapeHtml(furl)}" data-file-name="${escapeHtml(fname)}" title="点击查看高清大图">
           <img src="${escapeHtml(furl)}" class="msg-bubble-media-img" alt="${escapeHtml(fname)}" loading="lazy" />
           <div class="msg-bubble-media-glass">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
           </div>
         </div>`;
       } else {
-        fileHtml = `<div class="msg-bubble-file-card" onclick="openUniversalFilePreview({ url: '${escapeHtml(furl)}', original_name: '${escapeHtml(fname)}' })" title="点击在线预览或阅读 PDF">
-          <div class="msg-file-icon-badge" data-kind="${fkind}">${kindInitial(fkind)}</div>
+        fileHtml = `<div class="msg-bubble-file-card" data-preview-file data-file-url="${escapeHtml(furl)}" data-file-name="${escapeHtml(fname)}" title="点击在线预览或阅读 PDF">
+          <div class="msg-file-icon-badge" data-kind="${escapeHtml(fkind)}">${kindInitial(fkind)}</div>
           <div class="msg-file-info">
             <div class="msg-file-name">${escapeHtml(fname)}</div>
-            <div class="msg-file-meta">${fkind.toUpperCase()} 附件 · 点击在线预览/阅读</div>
+            <div class="msg-file-meta">${escapeHtml(fkind.toUpperCase())} 附件 · 点击在线预览/阅读</div>
           </div>
-          <a class="msg-file-dl-btn" href="${escapeHtml(furl)}" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="下载原文件">
+          <a class="msg-file-dl-btn" href="${escapeHtml(furl)}" target="_blank" rel="noopener" data-msg-dl title="下载原文件">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           </a>
         </div>`;
@@ -11846,9 +12057,9 @@ function renderMsgMessages() {
     let reactionsHtml = '';
     const reacts = m.reactions || [];
     reactionsHtml = `<div class="msg-reaction-bar">
-      ${reacts.map(r => `<span class="msg-reaction-pill ${r.mine ? 'mine' : ''}" onclick="toggleMsgReaction(${m.id}, '${r.emoji}')">${r.emoji} ${r.count}</span>`).join('')}
-      <span class="msg-reaction-pill" style="opacity:0.6;" onclick="toggleMsgReaction(${m.id}, '👍')">+👍</span>
-      <span class="msg-reaction-pill" style="opacity:0.6;" onclick="toggleMsgReaction(${m.id}, '❤️')">+❤️</span>
+      ${reacts.map(r => `<span class="msg-reaction-pill ${r.mine ? 'mine' : ''}" data-msg-reaction data-msg-id="${m.id}" data-emoji="${escapeHtml(r.emoji)}">${escapeHtml(r.emoji)} ${r.count}</span>`).join('')}
+      <span class="msg-reaction-pill" style="opacity:0.6;" data-msg-reaction data-msg-id="${m.id}" data-emoji="👍">+👍</span>
+      <span class="msg-reaction-pill" style="opacity:0.6;" data-msg-reaction data-msg-id="${m.id}" data-emoji="❤️">+❤️</span>
     </div>`;
 
     return `
@@ -11867,6 +12078,21 @@ function renderMsgMessages() {
       loadMsgHistory(msgState.peerId, msgState.messages[0].id);
     }
   };
+  // 文件卡片点击预览 / 表情回应：事件委托绑定（避免内联 onclick 的 XSS 风险）
+  box.querySelectorAll('[data-preview-file]').forEach(el => {
+    el.addEventListener('click', () => {
+      openUniversalFilePreview({ url: el.dataset.fileUrl || '', original_name: el.dataset.fileName || '' });
+    });
+  });
+  box.querySelectorAll('[data-msg-reaction]').forEach(el => {
+    el.addEventListener('click', () => {
+      toggleMsgReaction(parseInt(el.dataset.msgId, 10), el.dataset.emoji || '');
+    });
+  });
+  // 下载按钮：点击时不触发父级卡片预览（原为内联 onclick stopPropagation）
+  box.querySelectorAll('[data-msg-dl]').forEach(el => {
+    el.addEventListener('click', (e) => e.stopPropagation());
+  });
 }
 
 function scrollMsgToBottom() {
@@ -12061,7 +12287,7 @@ async function openOnThisDayModal() {
       const year = new Date(d.created_at).getFullYear();
       const yearsAgo = new Date().getFullYear() - year;
       return `
-        <div class="card diary-card" style="margin-bottom: 14px;" onclick="document.getElementById('on-this-day-modal').style.display='none'; openEditor(${d.id});">
+        <div class="card diary-card" style="margin-bottom: 14px;" data-otd-id="${d.id}" data-otd-item>
           <div class="diary-card-header">
             <h4 class="diary-card-title">${escapeHtml(d.title || '无标题')}</h4>
             <span class="badge" style="background:var(--accent-light);color:var(--accent);">${yearsAgo} 年前的今天 (${year})</span>
@@ -12074,6 +12300,14 @@ async function openOnThisDayModal() {
         </div>
       `;
     }).join('');
+    // 卡片点击打开对应日记（替代内联 onclick）
+    body.querySelectorAll('[data-otd-item]').forEach(card => {
+      card.addEventListener('click', () => {
+        const id = parseInt(card.dataset.otdId, 10);
+        modal.style.display = 'none';
+        if (id) openEditor(id);
+      });
+    });
   } catch (e) {
     body.innerHTML = `<div class="att-empty" style="color:var(--error);">加载失败：${escapeHtml(e.message)}</div>`;
   }
@@ -12405,15 +12639,15 @@ function renderTemplatePageGrid(filterCat = currentTemplateCategory, searchQuery
       <div class="template-card-desc">${escapeHtml(t.desc || '暂无描述')}</div>
       <div class="template-card-preview-box">${escapeHtml(t.content || '')}</div>
       <div class="template-card-actions">
-        <button class="btn btn-primary btn-sm btn-use" onclick="useTemplateFromGallery('${t.id}')">
+        <button class="btn btn-primary btn-sm btn-use" data-tpl-use="${t.id}">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><polyline points="20 6 9 17 4 12"/></svg>
           使用此模板
         </button>
         ${t.isCustom ? `
-          <button class="btn btn-ghost btn-sm btn-icon-only" onclick="editCustomTemplate('${t.id}')" title="编辑模板">
+          <button class="btn btn-ghost btn-sm btn-icon-only" data-tpl-edit="${t.id}" title="编辑模板">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
-          <button class="btn btn-danger-ghost btn-sm btn-icon-only" onclick="deleteCustomTemplateItem('${t.id}')" title="删除模板">
+          <button class="btn btn-danger-ghost btn-sm btn-icon-only" data-tpl-del="${t.id}" title="删除模板">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
           </button>
         ` : ''}
@@ -12421,6 +12655,16 @@ function renderTemplatePageGrid(filterCat = currentTemplateCategory, searchQuery
     </div>
   `;
   }).join('');
+  // 模板操作按钮事件（替代内联 onclick）
+  grid.querySelectorAll('[data-tpl-use]').forEach(b => {
+    b.addEventListener('click', () => useTemplateFromGallery(b.dataset.tplUse));
+  });
+  grid.querySelectorAll('[data-tpl-edit]').forEach(b => {
+    b.addEventListener('click', () => editCustomTemplate(b.dataset.tplEdit));
+  });
+  grid.querySelectorAll('[data-tpl-del]').forEach(b => {
+    b.addEventListener('click', () => deleteCustomTemplateItem(b.dataset.tplDel));
+  });
 }
 
 // 打开自定义模板编辑 Modal
@@ -12619,11 +12863,15 @@ function setupTemplateGalleryEvents() {
   if (overlay) overlay.addEventListener('click', closeTemplateEditorModal);
   if (saveBtn) saveBtn.addEventListener('click', saveTemplateFromEditor);
 
-  // 搜索框
+  // 搜索框（防抖 200ms，避免每次击键全量重渲染）
   const searchInput = document.getElementById('template-search-input');
   if (searchInput) {
+    let searchTimer = null;
     searchInput.addEventListener('input', (e) => {
-      renderTemplatePageGrid(currentTemplateCategory, e.target.value);
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        renderTemplatePageGrid(currentTemplateCategory, e.target.value);
+      }, 200);
     });
   }
 

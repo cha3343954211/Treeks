@@ -4,6 +4,20 @@ const { authRequired } = require('../middleware/auth');
 
 const router = express.Router();
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function validDate(value) {
+  if (typeof value !== 'string' || !DATE_RE.test(value)) return false;
+  const d = new Date(value + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+function validTime(value) {
+  return value == null || value === '' || (typeof value === 'string' && TIME_RE.test(value));
+}
+
 router.use(authRequired);
 
 // 列出日程（支持按月份查询）
@@ -30,8 +44,14 @@ router.get('/', (req, res) => {
 // 创建日程
 router.post('/', (req, res) => {
   const { title, description, schedule_date, start_time, end_time, color } = req.body || {};
-  if (!title || !schedule_date) {
+  if (typeof title !== 'string' || !title.trim() || !validDate(schedule_date)) {
     return res.status(400).json({ error: '标题和日期不能为空' });
+  }
+  if (title.trim().length > 200 || (description != null && typeof description !== 'string') || !validTime(start_time) || !validTime(end_time)) {
+    return res.status(400).json({ error: '日程参数格式无效' });
+  }
+  if (start_time && end_time && start_time > end_time) {
+    return res.status(400).json({ error: '结束时间不能早于开始时间' });
   }
   const result = db.prepare(
     `INSERT INTO schedules (user_id, title, description, schedule_date, start_time, end_time, color)
@@ -39,11 +59,11 @@ router.post('/', (req, res) => {
   ).run(
     req.user.id,
     title.trim(),
-    description || null,
+    description ? description.slice(0, 4000) : null,
     schedule_date,
     start_time || null,
     end_time || null,
-    color || '#4c995c'
+    COLOR_RE.test(color || '') ? color : '#4c995c'
   );
   const row = db.prepare('SELECT * FROM schedules WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json(row);
@@ -56,6 +76,16 @@ router.put('/:id', (req, res) => {
   if (!row) return res.status(404).json({ error: '日程不存在' });
 
   const { title, description, schedule_date, start_time, end_time, color, is_done } = req.body || {};
+  if (title != null && (typeof title !== 'string' || !title.trim() || title.trim().length > 200)) {
+    return res.status(400).json({ error: '标题格式无效' });
+  }
+  if (description != null && typeof description !== 'string') return res.status(400).json({ error: '描述格式无效' });
+  if (schedule_date != null && !validDate(schedule_date)) return res.status(400).json({ error: '日期格式无效' });
+  if (!validTime(start_time) || !validTime(end_time)) return res.status(400).json({ error: '时间格式无效' });
+  const nextStart = start_time != null ? start_time : row.start_time;
+  const nextEnd = end_time != null ? end_time : row.end_time;
+  if (nextStart && nextEnd && nextStart > nextEnd) return res.status(400).json({ error: '结束时间不能早于开始时间' });
+  if (color != null && (typeof color !== 'string' || !COLOR_RE.test(color))) return res.status(400).json({ error: '颜色格式无效' });
   db.prepare(
     `UPDATE schedules SET
        title = COALESCE(?, title),
@@ -69,12 +99,12 @@ router.put('/:id', (req, res) => {
      WHERE id = ?`
   ).run(
     title != null ? title.trim() : null,
-    description != null ? description : null,
+    description != null ? description.slice(0, 4000) : null,
     schedule_date || null,
     start_time != null ? start_time : null,
     end_time != null ? end_time : null,
     color || null,
-    is_done != null ? (is_done ? 1 : 0) : null,
+    is_done === true || is_done === 1 ? 1 : (is_done === false || is_done === 0 ? 0 : null),
     id
   );
   const updated = db.prepare('SELECT * FROM schedules WHERE id = ?').get(id);

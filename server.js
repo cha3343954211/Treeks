@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -9,7 +10,7 @@ const http = require('http');
 const { bootstrapStorageConfig, getRuntimeUploadDir, DEFAULT_UPLOAD_DIR } = require('./services/storageLocation');
 const storageBootstrap = bootstrapStorageConfig();
 
-const { initDatabase } = require('./db');
+const { db, initDatabase } = require('./db');
 
 // 初始化数据库（必须在加载 middleware/auth 之前完成，因为 auth 在加载时会读写 settings 表）
 initDatabase();
@@ -97,7 +98,18 @@ function checkDataDirConsistency() {
 checkDataDirConsistency();
 
 // 中间件
-app.use(cors());
+// CORS：默认仅允许同源（浏览器同源请求无需 CORS 头）。
+// 如需跨域部署（如前后端分离），通过 CORS_ORIGINS 环境变量配置白名单（逗号分隔）。
+// 不配置时同源与无 Origin 请求（curl、移动端等）均可正常访问，阻止任意站点跨域读取 API。
+const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: corsOrigins.length ? corsOrigins : false, // false = 不允许任意跨域
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+// gzip/brotli 压缩：对 JSON 响应与静态资源显著减小传输体积（app.js 522KB → ~120KB）
+app.use(compression({ threshold: 1024, level: 6 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // 静态资源缓存：生产环境 7 天，开发环境禁用
@@ -137,20 +149,42 @@ require('./services/collab').setupWebSocket(server);
 const runtimeUploadDir = getRuntimeUploadDir();
 const defaultUploadDir = DEFAULT_UPLOAD_DIR;
 app.use('/uploads', (req, res, next) => {
-  // 鉴权：允许正常图片/媒体静态加载（保障 <img> 标签与 Markdown 预览免受 401 误杀）
+  // Images may contain private diary content. The HttpOnly auth cookie allows
+  // normal <img> loading without exposing files to unauthenticated visitors.
   const user = verifyToken(req);
-  const isPublicMedia = /\.(jpe?g|png|gif|webp|svg|bmp|ico)$/i.test(req.path);
-  if (!user && !isPublicMedia) {
+  if (!user) {
     return res.status(401).end('Unauthorized');
   }
   // 解码 URL 路径
-  const relPath = decodeURIComponent(req.path.replace(/^\/+/, ''));
+  let relPath;
+  try {
+    relPath = decodeURIComponent(req.path.replace(/^\/+/, ''));
+  } catch (_) {
+    return res.status(400).end('Bad path');
+  }
   // 防止路径穿越
-  if (relPath.includes('..')) return res.status(400).end('Bad path');
+  if (!relPath || relPath.includes('..') || path.isAbsolute(relPath)) {
+    return res.status(400).end('Bad path');
+  }
+  // 文件所有权/授权校验：/uploads/<userId>/... 首段必须属于当前登录用户，
+  // 或当前用户与文件所有者互为好友（好友间通过消息/信件/共享日记分享文件）。
+  // 防止任意登录用户仅凭 URL 读取他人私密文件（水平越权 IDOR）。
+  const firstSeg = relPath.split('/')[0];
+  if (!/^\d+$/.test(firstSeg)) {
+    return res.status(400).end('Bad path');
+  }
+  const ownerId = parseInt(firstSeg, 10);
+  if (ownerId !== user.id) {
+    const { isFriend } = require('./services/permissions');
+    if (!isFriend(user.id, ownerId)) {
+      return res.status(403).end('Forbidden');
+    }
+  }
   const tryServe = (base, p = relPath) => {
-    const full = path.join(base, p);
-    // 防止解析到 base 外
-    if (!full.startsWith(path.resolve(base))) return false;
+    const resolvedBase = path.resolve(base);
+    const full = path.resolve(resolvedBase, p);
+    const relative = path.relative(resolvedBase, full);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return false;
     return fs.existsSync(full) && fs.statSync(full).isFile() ? full : null;
   };
   let found = tryServe(runtimeUploadDir);
@@ -199,9 +233,11 @@ app.get('/api/health', (req, res) => {
 
 // 所有其他路由返回 index.html（SPA 支持）
 app.get('*', (req, res) => {
-  if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+    // 未匹配的 API / 上传接口：显式返回 404，避免请求一直挂起直到 60s 超时
+    return res.status(404).json({ error: '接口不存在' });
   }
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // 错误处理中间件
@@ -242,13 +278,19 @@ server.keepAliveTimeout = 5000;  // keep-alive 超时 5s
 server.headersTimeout = 65000;   // 头部超时 65s（需大于 keepAliveTimeout）
 
 // ===== 全局异常兜底：防止未捕获的 Promise rejection 崩溃进程 =====
-process.on('unhandledRejection', (reason, promise) => {
+function shutdownAfterFatal(reason) {
+  console.error('[Fatal]', reason && (reason.stack || reason.message) || reason);
+  const forceExit = setTimeout(() => process.exit(1), 10000);
+  forceExit.unref();
+  server.close(() => process.exit(1));
+}
+
+process.on('unhandledRejection', (reason) => {
   console.error('[UnhandledRejection]', reason);
-  // 不退出进程，仅记录；生产环境应配合 pm2 日志监控
+  shutdownAfterFatal(reason);
 });
 
 process.on('uncaughtException', (err) => {
   console.error('[UncaughtException]', err.stack || err.message);
-  // 记录后允许进程继续运行；若数据库损坏等严重错误，仍需人工重启
-  // 不在此处 process.exit(1)，避免单次请求异常导致整服务中断
+  shutdownAfterFatal(err);
 });

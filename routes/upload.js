@@ -225,20 +225,24 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
   });
 });
 
-// 获取文件列表（支持按 kind / folder 过滤）
+// 获取文件列表（支持按 kind / folder / limit 过滤）
 router.get('/files', (req, res) => {
   const kind = (req.query.kind || '').toString();
   const folder = (req.query.folder || '').toString();
   const VALID_KINDS = ['image', 'pdf', 'text', 'document', 'other'];
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
   const where = ['user_id = ?'];
   const args = [req.user.id];
   if (kind && VALID_KINDS.includes(kind)) { where.push('kind = ?'); args.push(kind); }
   if (folder) { where.push('folder = ?'); args.push(folder); }
   const rows = db.prepare(
     `SELECT id, kind, filename, original_name, mime_type, size, url, folder, created_at
-     FROM files WHERE ${where.join(' AND ')} ORDER BY created_at DESC`
-  ).all(...args);
-  res.json({ items: rows.map(r => ({ ...r, original_name: fixChineseFilename(r.original_name) })) });
+     FROM files WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`
+  ).all(...args, limit);
+  const total = db.prepare(
+    `SELECT COUNT(*) AS c FROM files WHERE ${where.join(' AND ')}`
+  ).get(...args).c;
+  res.json({ items: rows.map(r => ({ ...r, original_name: fixChineseFilename(r.original_name) })), total });
 });
 
 // 重命名文件
@@ -312,6 +316,9 @@ router.post('/folders', (req, res) => {
     return res.status(400).json({ error: '文件夹名称必填' });
   }
   const folderName = name.trim().slice(0, 50);
+  if (/[\\/]/.test(folderName)) {
+    return res.status(400).json({ error: '文件夹名称不能包含 / 或 \\' });
+  }
   const parentPath = (parent || '').toString().trim().slice(0, 200);
   try {
     const result = db.prepare(
@@ -335,6 +342,9 @@ router.patch('/folders/:id', (req, res) => {
     return res.status(400).json({ error: '文件夹名称必填' });
   }
   const folderName = name.trim().slice(0, 50);
+  if (/[\\/]/.test(folderName)) {
+    return res.status(400).json({ error: '文件夹名称不能包含 / 或 \\' });
+  }
   const row = db.prepare('SELECT * FROM file_folders WHERE id = ? AND user_id = ?').get(id, req.user.id);
   if (!row) return res.status(404).json({ error: '文件夹不存在' });
   try {
@@ -543,8 +553,9 @@ router.delete('/images/:id', (req, res) => {
       try { fs.unlinkSync(p); } catch (e) { console.error('删除文件失败', e.message); }
     }
   }
-  db.prepare('DELETE FROM images WHERE id = ?').run(id);
-  db.prepare("DELETE FROM files WHERE id = ? AND kind = 'image'").run(id);
+  // 按 user_id + filename 清理两表，避免两表 ID 不一致导致 files 表残留"幽灵"记录
+  db.prepare('DELETE FROM images WHERE user_id = ? AND filename = ?').run(req.user.id, row.filename);
+  db.prepare("DELETE FROM files WHERE user_id = ? AND filename = ? AND kind = 'image'").run(req.user.id, row.filename);
   res.json({ message: '已删除' });
 });
 

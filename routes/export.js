@@ -91,7 +91,8 @@ router.get('/user-data/export', authRequired, (req, res) => {
     }
   } catch (e) {
     console.error('[User Export Error]', e);
-    res.status(500).json({ error: '导出失败: ' + e.message });
+    // 不向客户端泄露内部错误细节（防信息泄露，与全局错误中间件策略一致）
+    res.status(500).json({ error: '导出失败，请稍后重试' });
   }
 });
 
@@ -112,7 +113,7 @@ router.post('/user-data/import', authRequired, userImportUpload.single('file'), 
     res.json({ message: '导入完成', result });
   } catch (e) {
     console.error('[User Import Error]', e);
-    res.status(500).json({ error: '导入失败: ' + e.message });
+    res.status(500).json({ error: '导入失败，请检查文件格式' });
   }
 });
 
@@ -126,7 +127,8 @@ router.post('/user-data/preview', authRequired, userImportUpload.single('file'),
       sampleDiaries: (data.diaries || []).slice(0, 3).map(d => ({ title: d.title, created_at: d.created_at }))
     });
   } catch (e) {
-    res.status(500).json({ error: '预览失败: ' + e.message });
+    console.error('[Import Preview Error]', e);
+    res.status(500).json({ error: '预览失败，请检查文件格式' });
   }
 });
 
@@ -174,7 +176,7 @@ router.get('/:id/export.pdf', authRequired, async (req, res) => {
     res.send(pdf);
   } catch (e) {
     console.error('[Export PDF Error]', e);
-    res.status(500).json({ error: 'PDF 导出失败: ' + e.message });
+    res.status(500).json({ error: 'PDF 导出失败，请稍后重试' });
   }
 });
 
@@ -190,7 +192,8 @@ router.get('/:id/export.html', authRequired, (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
   } catch (e) {
-    res.status(500).json({ error: '生成 HTML 失败: ' + e.message });
+    console.error('[Export HTML Error]', e);
+    res.status(500).json({ error: '生成 HTML 失败，请稍后重试' });
   }
 });
 
@@ -227,6 +230,8 @@ router.post('/export', authRequired, async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(zipName)}"; filename*=UTF-8''${encodeURIComponent(zipName)}`);
 
       archive.pipe(res);
+      // 客户端中途断开时销毁 archive，防止继续向已关闭的响应写入
+      res.on('close', () => { try { archive.destroy(); } catch (_) {} });
 
       // 去重文件名
       const usedNames = new Set();
@@ -284,6 +289,8 @@ ${d.content || ''}
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(zipName)}"; filename*=UTF-8''${encodeURIComponent(zipName)}`);
 
       archive.pipe(res);
+      // 客户端中途断开时销毁 archive，防止继续向已关闭的响应写入
+      res.on('close', () => { try { archive.destroy(); } catch (_) {} });
 
       const usedNames = new Set();
       const uniqueName = (base) => {
@@ -328,7 +335,7 @@ ${d.content || ''}
     res.status(400).json({ error: '不支持的导出格式: ' + format });
   } catch (e) {
     console.error('[Batch Export Error]', e);
-    if (!res.headersSent) res.status(500).json({ error: '批量导出失败: ' + e.message });
+    if (!res.headersSent) res.status(500).json({ error: '批量导出失败，请稍后重试' });
   }
 });
 

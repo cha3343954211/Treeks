@@ -12,6 +12,34 @@ function getSetting(key, def = null) {
   return row ? row.value : def;
 }
 
+// ---- 登录/注册限流（内存滑动窗口）----
+// 防止暴力破解 / 批量注册攻击。按 IP 限流：
+//   登录：15 分钟内最多 20 次
+//   注册：1 小时内最多 10 次
+const rateBuckets = new Map(); // key -> number[] (timestamps)
+function rateLimit(key, windowMs, max) {
+  const now = Date.now();
+  const arr = (rateBuckets.get(key) || []).filter(t => now - t < windowMs);
+  if (arr.length >= max) {
+    rateBuckets.set(key, arr);
+    return true; // 已超限
+  }
+  arr.push(now);
+  rateBuckets.set(key, arr);
+  return false;
+}
+// 定期清理过期桶，防止内存无限增长
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, arr] of rateBuckets) {
+    if (!arr.length || now - arr[arr.length - 1] > 60 * 60 * 1000) rateBuckets.delete(k);
+  }
+}, 10 * 60 * 1000).unref();
+
+function clientIp(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+}
+
 // 用户公开信息字段
 const USER_PUBLIC_FIELDS = 'id, username, nickname, avatar, bio, is_admin, status, storage_limit, theme, created_at';
 
@@ -30,7 +58,7 @@ function setAuthCookie(res, token) {
   const maxAge = jwtExpiresToSeconds(JWT_EXPIRES) * 1000;
   const isProd = process.env.NODE_ENV === 'production';
   res.cookie('treeks_token', token, {
-    httpOnly: false,   // 前端 JS 可读，便于与 localStorage 一致管理
+    httpOnly: true,
     maxAge,
     sameSite: 'lax',   // 防 CSRF
     secure: isProd,    // 生产环境要求 HTTPS
@@ -45,6 +73,10 @@ function clearAuthCookie(res) {
 
 // 注册
 router.post('/register', (req, res) => {
+  // 防批量注册：同一 IP 1 小时内最多 10 次
+  if (rateLimit('reg:' + clientIp(req), 60 * 60 * 1000, 10)) {
+    return res.status(429).json({ error: '注册过于频繁，请稍后再试' });
+  }
   // 检查是否开放注册
   const allow = getSetting('allow_register', '1');
   if (allow !== '1') {
@@ -52,8 +84,11 @@ router.post('/register', (req, res) => {
   }
 
   const { username, password, nickname } = req.body || {};
-  if (!username || !password) {
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
     return res.status(400).json({ error: '用户名和密码不能为空' });
+  }
+  if (nickname != null && (typeof nickname !== 'string' || nickname.length > 50)) {
+    return res.status(400).json({ error: '昵称格式无效' });
   }
   if (username.length < 2 || username.length > 20) {
     return res.status(400).json({ error: '用户名长度需在 2-20 之间' });
@@ -72,9 +107,18 @@ router.post('/register', (req, res) => {
 
   const storageLimit = parseInt(getSetting('default_storage_limit', '104857600'), 10) || 104857600;
   const hashed = bcrypt.hashSync(password, 10);
-  const result = db.prepare(
-    'INSERT INTO users (username, password, nickname, storage_limit) VALUES (?, ?, ?, ?)'
-  ).run(username, hashed, nickname || username, storageLimit);
+  let result;
+  try {
+    result = db.prepare(
+      'INSERT INTO users (username, password, nickname, storage_limit) VALUES (?, ?, ?, ?)'
+    ).run(username, hashed, nickname || username, storageLimit);
+  } catch (e) {
+    // 并发注册同名用户时触发 UNIQUE 约束，返回 409 而非 500
+    if (String(e.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: '用户名已被注册' });
+    }
+    throw e;
+  }
 
   const user = db.prepare(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = ?`).get(result.lastInsertRowid);
 
@@ -85,8 +129,12 @@ router.post('/register', (req, res) => {
 
 // 登录
 router.post('/login', (req, res) => {
+  // 防暴力破解：同一 IP 15 分钟内最多 20 次尝试
+  if (rateLimit('login:' + clientIp(req), 15 * 60 * 1000, 20)) {
+    return res.status(429).json({ error: '尝试过于频繁，请 15 分钟后再试' });
+  }
   const { username, password } = req.body || {};
-  if (!username || !password) {
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
     return res.status(400).json({ error: '用户名和密码不能为空' });
   }
 
@@ -135,6 +183,9 @@ router.get('/me', authRequired, (req, res) => {
 // 更新个人资料
 router.put('/profile', authRequired, (req, res) => {
   const { nickname, bio, avatar } = req.body || {};
+  if (nickname != null && (typeof nickname !== 'string' || nickname.length > 50)) return res.status(400).json({ error: '昵称格式无效' });
+  if (bio != null && (typeof bio !== 'string' || bio.length > 1000)) return res.status(400).json({ error: '简介格式无效' });
+  if (avatar != null && (typeof avatar !== 'string' || avatar.length > 2000)) return res.status(400).json({ error: '头像地址格式无效' });
   // avatar: undefined=不更新；''=清除；其他字符串=更新
   const avatarParam = (avatar === undefined ? null : avatar);
   db.prepare(
@@ -151,7 +202,7 @@ router.put('/profile', authRequired, (req, res) => {
 // 修改密码
 router.put('/password', authRequired, (req, res) => {
   const { oldPassword, newPassword } = req.body || {};
-  if (!oldPassword || !newPassword) {
+  if (typeof oldPassword !== 'string' || typeof newPassword !== 'string' || !oldPassword || !newPassword) {
     return res.status(400).json({ error: '请填写原密码和新密码' });
   }
   if (newPassword.length < 6) {

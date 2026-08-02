@@ -1,6 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { authRequired } = require('../middleware/auth');
+const { isFriend } = require('../services/permissions');
 
 const router = express.Router();
 router.use(authRequired);
@@ -13,12 +14,14 @@ router.post('/', (req, res) => {
   if (rid === req.user.id) return res.status(400).json({ error: '不能给自己写信' });
 
   // 仅限好友之间
-  const isFriend = db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(req.user.id, rid);
-  if (!isFriend) return res.status(403).json({ error: '只能给好友发送信件' });
+  if (!isFriend(req.user.id, rid)) return res.status(403).json({ error: '只能给好友发送信件' });
 
   const recipient = db.prepare('SELECT id, status FROM users WHERE id = ?').get(rid);
   if (!recipient) return res.status(404).json({ error: '收件人不存在' });
   if (recipient.status !== 'active') return res.status(400).json({ error: '收件人已被停用' });
+  if (typeof subject !== 'undefined' && typeof subject !== 'string') return res.status(400).json({ error: '主题格式无效' });
+  if (typeof content !== 'string' || !content.trim()) return res.status(400).json({ error: '信件内容不能为空' });
+  if (content.length > 100000) return res.status(413).json({ error: '信件内容过长' });
 
   // 可选附带日记：必须是自己的日记，或被授权可见/协作的
   let diaryIdVal = null;
@@ -45,13 +48,14 @@ router.post('/', (req, res) => {
 
   const result = db.prepare(
     'INSERT INTO letters (sender_id, recipient_id, diary_id, file_id, subject, content) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(req.user.id, rid, diaryIdVal, fileIdVal, (subject || '').slice(0, 200), content || '');
+  ).run(req.user.id, rid, diaryIdVal, fileIdVal, (subject || '').slice(0, 200), content);
 
   res.status(201).json({ id: result.lastInsertRowid, message: '信件已发送' });
 });
 
 // 收件箱
 router.get('/inbox', (req, res) => {
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
   const rows = db.prepare(
     `SELECT l.id, l.subject, l.content, l.is_read, l.created_at, l.read_at, l.diary_id, l.file_id,
             u.id AS sender_id, u.username AS sender_username, u.nickname AS sender_nickname, u.avatar AS sender_avatar,
@@ -62,13 +66,16 @@ router.get('/inbox', (req, res) => {
      LEFT JOIN diaries d ON d.id = l.diary_id
      LEFT JOIN files f ON f.id = l.file_id
      WHERE l.recipient_id = ?
-     ORDER BY l.is_read ASC, l.created_at DESC`
-  ).all(req.user.id);
-  res.json({ items: rows, total: rows.length });
+     ORDER BY l.is_read ASC, l.created_at DESC
+     LIMIT ?`
+  ).all(req.user.id, limit);
+  const total = db.prepare('SELECT COUNT(*) AS c FROM letters WHERE recipient_id = ?').get(req.user.id).c;
+  res.json({ items: rows, total });
 });
 
 // 发件箱
 router.get('/sent', (req, res) => {
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
   const rows = db.prepare(
     `SELECT l.id, l.subject, l.content, l.created_at, l.diary_id, l.file_id,
             u.id AS recipient_id, u.username AS recipient_username, u.nickname AS recipient_nickname, u.avatar AS recipient_avatar,
@@ -79,9 +86,11 @@ router.get('/sent', (req, res) => {
      LEFT JOIN diaries d ON d.id = l.diary_id
      LEFT JOIN files f ON f.id = l.file_id
      WHERE l.sender_id = ?
-     ORDER BY l.created_at DESC`
-  ).all(req.user.id);
-  res.json({ items: rows, total: rows.length });
+     ORDER BY l.created_at DESC
+     LIMIT ?`
+  ).all(req.user.id, limit);
+  const total = db.prepare('SELECT COUNT(*) AS c FROM letters WHERE sender_id = ?').get(req.user.id).c;
+  res.json({ items: rows, total });
 });
 
 // 查看信件详情（标记已读）

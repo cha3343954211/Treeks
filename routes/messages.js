@@ -2,6 +2,7 @@ const express = require('express');
 const { db } = require('../db');
 const { authRequired } = require('../middleware/auth');
 const { pushToUser } = require('../services/collab');
+const { isFriend } = require('../services/permissions');
 
 const router = express.Router();
 router.use(authRequired);
@@ -21,12 +22,14 @@ function peerInfo(uid) {
 
 // 会话列表（最近聊过的好友，按最后一条消息时间倒序）
 router.get('/conversations', (req, res) => {
-  // 找出所有和我互相发过消息的用户
+  // 一次查询找出所有会话（peer、最后消息 ID、未读数），避免 N+1 循环查询
+  // id 单调递增，MAX(id) 即最后一条消息，再通过 IN 一次取回消息内容
   const rows = db.prepare(
-    `SELECT peer AS peer_id, latest_at, unread FROM (
+    `SELECT peer AS peer_id, latest_at, unread, last_id FROM (
         SELECT
           CASE WHEN sender_id = ? THEN recipient_id ELSE sender_id END AS peer,
           MAX(created_at) AS latest_at,
+          MAX(id) AS last_id,
           SUM(CASE WHEN recipient_id = ? AND is_read = 0 THEN 1 ELSE 0 END) AS unread
         FROM messages
         WHERE sender_id = ? OR recipient_id = ?
@@ -34,15 +37,21 @@ router.get('/conversations', (req, res) => {
       ) t
      ORDER BY latest_at DESC`
   ).all(req.user.id, req.user.id, req.user.id, req.user.id);
+
+  // 一次性批量取回所有会话的最后一条消息（替代逐会话查询）
+  const lastMap = {};
+  if (rows.length) {
+    const lastRows = db.prepare(
+      `SELECT id, content, file_id, sender_id, created_at FROM messages
+       WHERE id IN (${rows.map(() => '?').join(',')})`
+    ).all(...rows.map(r => r.last_id));
+    for (const l of lastRows) lastMap[l.id] = l;
+  }
+
   const items = rows.map(r => {
     const peer = peerInfo(r.peer_id);
     if (!peer) return null;
-    // 取最后一条消息预览
-    const last = db.prepare(
-      `SELECT id, content, file_id, sender_id, created_at FROM messages
-       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
-       ORDER BY created_at DESC LIMIT 1`
-    ).get(req.user.id, r.peer_id, r.peer_id, req.user.id);
+    const last = lastMap[r.last_id];
     return {
       peer,
       latest_at: r.latest_at,
@@ -65,8 +74,7 @@ router.get('/with/:peerId', (req, res) => {
   if (!peerId) return res.status(400).json({ error: '参数错误' });
   if (peerId === req.user.id) return res.status(400).json({ error: '不能查询自己' });
   // 仅限好友
-  const isFriend = db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(req.user.id, peerId);
-  if (!isFriend) return res.status(403).json({ error: '只能与好友聊天' });
+  if (!isFriend(req.user.id, peerId)) return res.status(403).json({ error: '只能与好友聊天' });
   const limit = Math.min(100, Math.max(20, parseInt(req.query.limit, 10) || 50));
   const before = req.query.before ? parseInt(req.query.before, 10) : null;
   // 注意：m.file_id 与 f.id 在 JOIN 后值相同（或都为 NULL），统一用 m.file_id 即可
@@ -122,8 +130,7 @@ router.post('/', (req, res) => {
   const rid = parseInt(peerId, 10);
   if (!rid) return res.status(400).json({ error: '请指定收件人' });
   if (rid === req.user.id) return res.status(400).json({ error: '不能给自己发消息' });
-  const isFriend = db.prepare('SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?').get(req.user.id, rid);
-  if (!isFriend) return res.status(403).json({ error: '只能给好友发消息' });
+  if (!isFriend(req.user.id, rid)) return res.status(403).json({ error: '只能给好友发消息' });
   const recipient = db.prepare('SELECT status FROM users WHERE id = ?').get(rid);
   if (!recipient) return res.status(404).json({ error: '收件人不存在' });
   if (recipient.status !== 'active') return res.status(400).json({ error: '收件人已被停用' });
@@ -173,7 +180,11 @@ router.post('/read/:peerId', (req, res) => {
 router.post('/:id/reactions', (req, res) => {
   const mid = parseInt(req.params.id, 10);
   const { emoji } = req.body || {};
-  if (!mid || !emoji) return res.status(400).json({ error: '参数错误' });
+  if (!mid) return res.status(400).json({ error: '参数错误' });
+  // emoji 必须为非空短字符串（防止任意内容/巨型内容入库并回显，造成存储型 XSS）
+  if (typeof emoji !== 'string' || !emoji || emoji.length > 16) {
+    return res.status(400).json({ error: 'emoji 格式无效' });
+  }
 
   const msg = db.prepare('SELECT sender_id, recipient_id FROM messages WHERE id = ?').get(mid);
   if (!msg || (msg.sender_id !== req.user.id && msg.recipient_id !== req.user.id)) {
