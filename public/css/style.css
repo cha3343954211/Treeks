@@ -11621,3 +11621,5 @@ textarea,
   max-width: 100%;
   margin: 10px 0;
 }
+.file-viewer-audio-host { padding: 24px 20px; }
+.file-viewer-audio-inner audio { width: 100%; }

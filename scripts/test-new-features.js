@@ -124,6 +124,24 @@ async function main() {
   assert.ok(stats.data.totalWords > 0, '统计缺少 totalWords');
   assert.ok(Array.isArray(stats.data.monthly) && stats.data.monthly.length >= 1, '统计缺少 monthly');
 
+  // ---- 音频上传（语音备忘链路） ----
+  const audioBlob = new Blob([Buffer.from('fake audio bytes for webm')], { type: 'audio/webm' });
+  const fd = new FormData();
+  fd.append('file', audioBlob, 'voice-memo-test.webm');
+  const upRes = await fetch(BASE + '/api/upload/file', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + user.token },
+    body: fd
+  });
+  const upData = await upRes.json();
+  assert.equal(upRes.status, 201, JSON.stringify(upData));
+  assert.equal(upData.kind, 'audio', '音频应归类为 audio');
+  assert.ok(upData.url.includes('/uploads/') && upData.url.includes('audios'), '音频 URL 应指向鉴权静态路径: ' + upData.url);
+  const mediaRes = await fetch(BASE + upData.url, { headers: { Authorization: 'Bearer ' + user.token } });
+  assert.equal(mediaRes.status, 200, '音频文件应可鉴权读取');
+  const audioList = await request('/api/upload/files?kind=audio', { headers });
+  assert.ok(audioList.data.items.some(i => i.id === upData.id), '音频应出现在音频筛选列表');
+
   // ---- 登录限流（同一 IP 超过 20 次触发 429）----
   let last = null;
   for (let i = 0; i < 22; i++) {

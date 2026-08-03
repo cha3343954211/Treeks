@@ -5117,10 +5117,12 @@ async function openFileViewerFromMeta(f) {
   const textHost = document.getElementById('file-viewer-text-host');
   const docHost = document.getElementById('file-viewer-doc-host');
   const sheetHost = document.getElementById('file-viewer-sheet-host');
+  const audioHost = document.getElementById('file-viewer-audio-host');
   if (loading) loading.style.display = '';
   if (textHost) textHost.style.display = 'none';
   if (docHost) docHost.style.display = 'none';
   if (sheetHost) sheetHost.style.display = 'none';
+  if (audioHost) audioHost.style.display = 'none';
   const status = document.getElementById('file-viewer-status');
   if (status) status.textContent = '就绪';
   // 显示模态框
@@ -5148,6 +5150,8 @@ async function openFileViewerFromMeta(f) {
       } else {
         await loadDocumentFile(f);
       }
+    } else if (f.kind === 'audio') {
+      await loadAudioFile(f);
     } else if (f.kind === 'other') {
       // 其他类型不支持预览，仅提供下载
       showDownloadOnly(f);
@@ -5330,6 +5334,7 @@ function closeFileViewerModal() {
 // 文件图标（按 kind）
 function kindIcon(kind) {
   const icons = {
+    audio: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
     text: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>',
     document: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
     pdf: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
@@ -5352,9 +5357,29 @@ function kindLabel(kind, name) {
     document: '文档',
     pdf: 'PDF',
     image: '图片',
+    audio: '音频',
     other: '文件'
   };
   return labels[kind] || '文件';
+}
+
+// 音频预览：Bearer 拉取 blob → 本地对象 URL 播放（兼容鉴权媒体加载）
+async function loadAudioFile(f) {
+  const host = document.getElementById('file-viewer-audio-inner');
+  const loading = document.getElementById('file-viewer-loading');
+  const audioHost = document.getElementById('file-viewer-audio-host');
+  if (!host) return;
+  try {
+    const res = await fetch(f.url, { headers: { Authorization: 'Bearer ' + state.token } });
+    if (!res.ok) throw new Error('加载失败 (' + res.status + ')');
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    host.innerHTML = `<audio controls autoplay preload="metadata" src="${objectUrl}"></audio>`;
+    if (loading) loading.style.display = 'none';
+    if (audioHost) audioHost.style.display = '';
+  } catch (e) {
+    if (loading) loading.textContent = '音频加载失败：' + (e.message || '未知错误');
+  }
 }
 
 // 仅下载模式
@@ -10964,6 +10989,16 @@ function checkScheduleReminders() {
 let voiceRecorder = null;
 let voiceChunks = [];
 let voiceStream = null;
+function insertAtEditorCursor(text) {
+  const ta = document.getElementById('editor-textarea');
+  if (!ta) return false;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  ta.value = ta.value.substring(0, start) + text + ta.value.substring(end);
+  ta.selectionStart = ta.selectionEnd = start + text.length;
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
 async function toggleVoiceMemo() {
   const btn = document.getElementById('btn-voice-memo');
   if (voiceRecorder && voiceRecorder.state === 'recording') {
@@ -10992,7 +11027,7 @@ async function toggleVoiceMemo() {
       toast('正在上传语音...', 'info');
       try {
         const data = await apiUpload(new File([blob], '语音备忘-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + (type.includes('mp4') ? '.m4a' : '.webm'), { type }));
-        insertAtCursor(`\n<audio controls src="${data.url}"></audio>\n`);
+        insertAtEditorCursor(`\n<audio controls src="${data.url}"></audio>\n`);
         updatePreview();
         updateWordCount();
         toast('语音备忘已插入', 'success');
@@ -11938,8 +11973,8 @@ document.addEventListener('visibilitychange', () => {
 // ============================================================
 //  日记附件模块
 // ============================================================
-const ATT_KIND_ICON = { image: 'IMG', pdf: 'PDF', text: 'TXT', document: 'DOC', other: 'FILE' };
-const ATT_KIND_LABEL = { image: '图片', pdf: 'PDF', text: '文本', document: '文档', other: '文件' };
+const ATT_KIND_ICON = { image: 'IMG', pdf: 'PDF', text: 'TXT', document: 'DOC', audio: 'AUD', other: 'FILE' };
+const ATT_KIND_LABEL = { image: '图片', pdf: 'PDF', text: '文本', document: '文档', audio: '音频', other: '文件' };
 
 function kindInitial(kind) {
   return ATT_KIND_ICON[kind] || 'FILE';

@@ -16,6 +16,7 @@ const TEXT_EXTS = /\.(txt|md|markdown|json|ya?ml|csv|tsv|log|ini|conf|xml|html?|
 const DOC_EXTS = /\.(docx?|xlsx?|xlsb?|pptx?|odt|ods|odp|rtf)$/i;
 const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|svg)$/i;
 const PDF_EXTS = /\.pdf$/i;
+const AUDIO_EXTS = /\.(mp3|wav|ogg|oga|m4a|aac|opus|flac|webm|weba)$/i;
 
 function fixChineseFilename(name) {
   if (!name) return 'file';
@@ -32,6 +33,7 @@ function classifyFile(filename) {
   const ext = path.extname(filename).toLowerCase();
   if (IMAGE_EXTS.test(ext)) return { kind: 'image', subdir: 'images' };
   if (PDF_EXTS.test(ext)) return { kind: 'pdf', subdir: 'pdf' };
+  if (AUDIO_EXTS.test(ext)) return { kind: 'audio', subdir: 'audios' };
   if (TEXT_EXTS.test(ext)) return { kind: 'text', subdir: 'texts' };
   if (DOC_EXTS.test(ext)) return { kind: 'document', subdir: 'docs' };
   return { kind: 'other', subdir: 'other' };
@@ -127,7 +129,7 @@ const generalFileUpload = multer({
   fileFilter: (req, file, cb) => {
     const { kind } = classifyFile(file.originalname);
     if (kind === 'other') {
-      cb(new Error('暂不支持该文件类型（支持：图片、PDF、文本/代码、Word/Excel/PPT）'));
+      cb(new Error('暂不支持该文件类型（支持：图片、PDF、音频、文本/代码、Word/Excel/PPT）'));
       return;
     }
     cb(null, true);
@@ -184,7 +186,7 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
   }
   const { kind } = classifyFile(req.file.originalname);
   // 取子目录：图片 → images，PDF → pdf，文本 → texts，文档 → docs，其他 → other
-  const subdir = req._fileSubdir || (kind === 'image' ? 'images' : kind === 'pdf' ? 'pdf' : kind === 'text' ? 'texts' : kind === 'document' ? 'docs' : 'other');
+  const subdir = req._fileSubdir || (kind === 'image' ? 'images' : kind === 'pdf' ? 'pdf' : kind === 'audio' ? 'audios' : kind === 'text' ? 'texts' : kind === 'document' ? 'docs' : 'other');
   // folder 可选：通过请求头/字段指定
   const folder = (req.body.folder || req.query.folder || '').toString().trim().slice(0, 200);
   // URL 策略：
@@ -195,7 +197,7 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
   let url;
   if (kind === 'pdf') {
     url = `/api/upload/pdf/${req.file.filename}`;
-  } else if (kind === 'image') {
+  } else if (kind === 'image' || kind === 'audio') {
     url = `/uploads/${req.user.id}/${subdir}/${req.file.filename}`;
   } else {
     // 文本/文档：占位 URL（创建后用 ID 重写）
@@ -229,7 +231,7 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
 router.get('/files', (req, res) => {
   const kind = (req.query.kind || '').toString();
   const folder = (req.query.folder || '').toString();
-  const VALID_KINDS = ['image', 'pdf', 'text', 'document', 'other'];
+  const VALID_KINDS = ['image', 'pdf', 'audio', 'text', 'document', 'other'];
   const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
   const where = ['user_id = ?'];
   const args = [req.user.id];

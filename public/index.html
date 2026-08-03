@@ -783,13 +783,14 @@
                 <button class="files-filter-btn active" data-filter="all" title="显示所有文件">全部</button>
                 <button class="files-filter-btn" data-filter="image" title="仅显示图片">图片</button>
                 <button class="files-filter-btn" data-filter="pdf" title="仅显示 PDF">PDF</button>
+                <button class="files-filter-btn" data-filter="audio" title="仅显示音频">音频</button>
                 <button class="files-filter-btn" data-filter="document" title="Word/Excel/PPT 文档">文档</button>
                 <button class="files-filter-btn" data-filter="text" title="文本/代码/数据文件">文本</button>
               </div>
               <label class="btn btn-primary" id="btn-upload-files" title="支持图片、PDF、Word/Excel/PPT、文本/代码文件（最大 50MB）">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                 上传文件
-                <input type="file" accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.py,.java,.go,.rs,.sh,.sql,.env,.toml,.yml,.yaml,.ini,.conf" multiple style="display:none;" id="files-upload-input">
+                <input type="file" accept="image/*,application/pdf,.pdf,audio/*,.mp3,.wav,.ogg,.oga,.m4a,.aac,.opus,.flac,.webm,.weba,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.py,.java,.go,.rs,.sh,.sql,.env,.toml,.yml,.yaml,.ini,.conf" multiple style="display:none;" id="files-upload-input">
               </label>
             </div>
           </div>
@@ -1585,6 +1586,10 @@
         <div class="file-viewer-sheet-host" id="file-viewer-sheet-host" style="display:none;">
           <div class="file-viewer-sheet-tabs" id="file-viewer-sheet-tabs"></div>
           <div class="file-viewer-sheet-content" id="file-viewer-sheet-content"></div>
+        </div>
+        <!-- 音频预览 -->
+        <div class="file-viewer-audio-host" id="file-viewer-audio-host" style="display:none;">
+          <div class="file-viewer-audio-inner" id="file-viewer-audio-inner"></div>
         </div>
       </div>
     </div>
