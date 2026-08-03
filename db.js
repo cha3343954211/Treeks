@@ -106,6 +106,24 @@ function initDatabase() {
     -- 复合索引：列表查询 WHERE user_id=? ORDER BY is_pinned DESC, created_at DESC
     CREATE INDEX IF NOT EXISTS idx_diaries_user_pin_time ON diaries(user_id, is_pinned, created_at);
 
+    -- FTS5 全文检索（英文/数字等空格分词场景加速；中文走 LIKE 保持子串匹配语义）
+    CREATE VIRTUAL TABLE IF NOT EXISTS diary_fts USING fts5(
+      title, content,
+      content='diaries',
+      content_rowid='id',
+      tokenize='unicode61'
+    );
+    CREATE TRIGGER IF NOT EXISTS diary_fts_ai AFTER INSERT ON diaries BEGIN
+      INSERT INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS diary_fts_ad AFTER DELETE ON diaries BEGIN
+      INSERT INTO diary_fts(diary_fts, rowid, title, content) VALUES ('delete', old.id, old.title, old.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS diary_fts_au AFTER UPDATE ON diaries BEGIN
+      INSERT INTO diary_fts(diary_fts, rowid, title, content) VALUES ('delete', old.id, old.title, old.content);
+      INSERT INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+    END;
+
     -- 日记文件夹
     CREATE TABLE IF NOT EXISTS folders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -541,6 +559,18 @@ function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id);
   `);
+
+  // FTS5 存量数据一次性回填（新索引表首次建立时，将既有日记同步进虚拟表）
+  try {
+    const ftsCount = db.prepare('SELECT COUNT(*) as c FROM diary_fts').get().c;
+    const diariesCount = db.prepare('SELECT COUNT(*) as c FROM diaries').get().c;
+    if (ftsCount < diariesCount) {
+      db.exec("INSERT INTO diary_fts(diary_fts) VALUES('rebuild')");
+      console.log(`[DB] FTS5 索引已回填（diaries=${diariesCount}, fts=${db.prepare('SELECT COUNT(*) as c FROM diary_fts').get().c}）`);
+    }
+  } catch (e) {
+    console.warn('[DB] FTS5 回填失败:', e.message);
+  }
 
   console.log('[DB] 数据库初始化完成');
 }

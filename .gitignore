@@ -20,10 +20,14 @@ public/uploads/*
 # 测试与临时文件
 test-*
 !scripts/test-regressions.js
+!scripts/test-new-features.js
 tmp-*
 *.tmp
 *.bak
 *.log
+
+# 生产压缩构建产物（npm run build 生成，缺失时自动回退源文件）
+public/dist/
 
 # 系统
 .DS_Store

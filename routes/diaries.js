@@ -198,10 +198,30 @@ router.get('/', (req, res) => {
   }
   // folder_id === 'all' → 不加过滤
 
+  let ftsIds = null;
   if (keyword) {
-    where += ' AND (title LIKE ? OR content LIKE ?)';
-    const kw = `%${keyword}%`;
-    params.push(kw, kw);
+    // 中文等 CJK 场景保持 LIKE 子串匹配直觉；英文/数字长文场景走 FTS5 加速
+    const isCJK = /[\u4e00-\u9fff]/.test(keyword);
+    if (!isCJK) {
+      const terms = keyword.split(/\s+/).filter(Boolean)
+        .map(t => '"' + t.replace(/["*^()]/g, '').trim() + '"')
+        .filter(t => t !== '""');
+      if (terms.length) {
+        try {
+          const ftsRows = db.prepare('SELECT rowid FROM diary_fts WHERE diary_fts MATCH ?').all(terms.join(' AND '));
+          ftsIds = new Set(ftsRows.map(r => r.rowid));
+        } catch (_) { ftsIds = null; }
+      }
+    }
+    if (ftsIds === null) {
+      where += ' AND (title LIKE ? OR content LIKE ?)';
+      const kw = `%${keyword}%`;
+      params.push(kw, kw);
+    } else if (ftsIds.size === 0) {
+      where += ' AND 0';
+    } else {
+      where += ` AND id IN (${[...ftsIds].join(',')})`;
+    }
   }
   if (tag) {
     where += ' AND tags LIKE ?';
@@ -979,7 +999,21 @@ router.get('/stats/summary', (req, res) => {
      GROUP BY date, mood ORDER BY date ASC`
   ).all(req.user.id);
 
-  res.json({ total, pinned, moodStats, topTags, recentDays, yearHeatmap });
+  // 累计写作字数（去除空白字符后按字符计，中英文均适用）
+  const totalWords = db.prepare(
+    `SELECT COALESCE(SUM(LENGTH(REPLACE(REPLACE(REPLACE(content, ' ', ''), char(9), ''), char(10), ''))), 0) AS words
+     FROM diaries WHERE user_id = ?`
+  ).get(req.user.id).words;
+
+  // 最近 12 个月写作数量分布
+  const monthlyRows = db.prepare(
+    `SELECT substr(created_at, 1, 7) AS m, COUNT(*) AS c
+     FROM diaries WHERE user_id = ?
+     GROUP BY m ORDER BY m DESC LIMIT 12`
+  ).all(req.user.id);
+  const monthly = monthlyRows.reverse().map(r => ({ month: r.m, count: r.c }));
+
+  res.json({ total, pinned, totalWords, monthly, moodStats, topTags, recentDays, yearHeatmap });
 });
 
 // 解锁私密日记

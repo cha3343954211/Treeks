@@ -8,6 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Treeks · 日记</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234c995c'/%3E%3Cpath d='M16 8c-1.8 2.3-2.7 4.3-2.7 6.4 0 3.5 2.3 6 5.3 6s5.4-2.5 5.4-6c0-1.4-.5-2.9-1.4-4.3-.3 1.6-1.1 3.2-2.4 4.3.2-2.7-.6-4.7-2.1-6.4z' fill='white'/%3E%3Cpath d='M10.6 14.2c-1.3.8-2.1 2-2.1 3.5 0 2.9 2.3 5 5.2 5 1.5 0 2.9-.5 4-1.5-1.5-.2-2.8-1-3.8-2.2 1.7-.1 3.1-.8 4.2-2.1-2.5.4-4.8-.5-6.4-2.6z' fill='white' opacity='0.85'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/css/style.css">
   <!-- 以下 CDN 资源均带 SRI 完整性校验（sha384），防止 CDN 被篡改/投毒导致供应链攻击 -->
@@ -23,6 +25,8 @@
   <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js" integrity="sha384-/cXAMbzovUIKbBERjPmR3SnPTh8siWr5lsvFYj1Uq4XP0yaJUZJmsh0YXyGv5P0y" crossorigin="anonymous"></script>
   <!-- SheetJS（xlsx 解析）：用于 Excel 表格预览 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous"></script>
+  <!-- Mermaid（流程图 / 时序图 / 甘特图渲染） -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js" integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr" crossorigin="anonymous"></script>
 </head>
 <body>
   <div id="app">
@@ -481,8 +485,11 @@
             <label class="tool-btn upload-btn" title="上传图片">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               <span>上传</span>
-              <input type="file" id="upload-input" accept="image/*" multiple style="display:none;">
+              <input type="file" id="upload-input" accept="image/*" capture="environment" multiple style="display:none;">
             </label>
+            <button class="tool-btn" id="btn-voice-memo" title="语音备忘（录音并插入日记）">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </button>
             <div class="tool-spacer"></div>
             <div class="tool-mode-toggle" id="editor-mode-toggle" title="切换预览/编辑">
               <button class="mode-btn active" data-mode="split">

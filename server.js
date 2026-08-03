@@ -110,8 +110,28 @@ app.use(cors({
 }));
 // gzip/brotli 压缩：对 JSON 响应与静态资源显著减小传输体积（app.js 522KB → ~120KB）
 app.use(compression({ threshold: 1024, level: 6 }));
+// 基础安全响应头（无第三方依赖，避免影响既有 CDN/内联样式）
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-XSS-Protection', '0');
+  next();
+});
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// 生产环境：若已执行 npm run build，则优先服务压缩后的静态资源
+if (process.env.NODE_ENV === 'production') {
+  const distDir = path.join(__dirname, 'public', 'dist');
+  const minJs = path.join(distDir, 'app.min.js');
+  const minCss = path.join(distDir, 'style.min.css');
+  if (fs.existsSync(minJs)) {
+    app.use('/js/app.js', (req, res) => res.sendFile(minJs, { maxAge: '7d', immutable: true }));
+  }
+  if (fs.existsSync(minCss)) {
+    app.use('/css/style.css', (req, res) => res.sendFile(minCss, { maxAge: '7d', immutable: true }));
+  }
+}
 // 静态资源缓存：生产环境 7 天，开发环境禁用
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: process.env.NODE_ENV === 'production' ? '7d' : 0,

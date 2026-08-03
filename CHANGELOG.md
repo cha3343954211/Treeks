@@ -2,6 +2,28 @@
 
 ---
 
+## 🚀 [v1.3.0] - 2026-08-03 (PWA 离线 · 智能搜索 · 效率增强)
+
+### ✨ 新特性 (New Features)
+
+* **📱 PWA 应用化与离线可用**: 新增 `manifest.json` + `Service Worker`，支持安装到桌面/手机、应用外壳离线浏览（页面/样式/脚本/图标缓存），断网时提示"可继续浏览已缓存内容"，联网自动恢复提示。
+* **🔍 FTS5 全文检索**: 英文/数字等空格分词关键词搜索升级为 SQLite FTS5 索引检索（中文自动回退 LIKE 保持子串匹配），数据量大时搜索更快。
+* **📊 统计增强**: 新增累计写作字数与最近 12 个月写作分布条形图。
+* **🎙️ 语音备忘**: 编辑器工具栏新增录音按钮，录制的语音自动上传并插入日记（`<audio>` 播放器），预览直接播放。
+* **📷 相机直拍**: 日记图片上传在移动端支持直接调用相机拍摄（`capture="environment"`）。
+* **📈 Mermaid 图表**: Markdown 代码块支持 ` ```mermaid ` 流程图 / 时序图 / 甘特图渲染（CDN 带 SRI 校验，防抖渲染，暗色主题自动适配）。
+* **⏰ 日程提醒**: 进入日历页自动申请通知权限，日程开始前 15 分钟弹出系统通知（跨月预取，去重防重复提醒）。
+* **🖼️ 图片上传自动压缩**: 超过 1.5MB 或边长超 2560px 的图片上传前自动降采样转 JPEG（约 85% 质量），节省存储与加载流量；压缩失败自动回退原图。
+
+### 🛠️ 工程与安全 (Engineering & Security)
+
+* **GitHub Actions CI**: 新增 `.github/workflows/ci.yml`，每次 push / PR 自动在 Windows runner 上运行全量测试。
+* **基础安全响应头**: 全局添加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: same-origin`。
+* **生产构建压缩**: `npm run build` 使用 terser + clean-css 压缩 `app.js`（494KB → 349KB）与 `style.css`（269KB → 214KB），`NODE_ENV=production` 启动时自动服务压缩版本（无需改 HTML）。
+* **MIT LICENSE 文件**: 仓库补上正式 MIT 许可证，与 README 声明一致；版本号同步至 1.3.0。
+
+---
+
 ## 🚀 [v1.2.1] - 2026-08-03 (画笔与文件强化)
 
 ### ✨ 新特性 (New Features)

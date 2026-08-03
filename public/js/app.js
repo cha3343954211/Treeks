@@ -124,16 +124,28 @@ function renderMarkdown(text) {
       }
     });
 
+    // 抽取 Mermaid 流程图占位（原始文本必须绕过 HTML 过滤，交由 mermaid 安全渲染）
+    const mermaidBlocks = [];
+    text = text.replace(/```mermaid\s*\n?([\s\S]*?)```/g, (_, code) => {
+      const key = '\u0000MERMAID' + mermaidBlocks.length + '\u0000';
+      mermaidBlocks.push(code.replace(/\n+$/, ''));
+      return key;
+    });
+
     let raw = marked.parse(text);
 
     // 还原公式占位
     placeholders.forEach((html, i) => {
       raw = raw.replace('\u0000KATEX' + i + '\u0000', html);
     });
+    if (mermaidBlocks.length) {
+      raw = raw.replace(/\u0000MERMAID(\d+)\u0000/g, (_, i) => `<pre class="mermaid">${escapeHtml(mermaidBlocks[+i])}</pre>`);
+      scheduleMermaidRender();
+    }
 
     return DOMPurify.sanitize(raw, {
-      ADD_ATTR: ['target'],
-      ADD_TAGS: ['span', 'math', 'semantics', 'annotation']
+      ADD_ATTR: ['target', 'controls', 'autoplay', 'loop'],
+      ADD_TAGS: ['span', 'math', 'semantics', 'annotation', 'audio', 'source']
     });
   } catch (e) {
     return '<p style="color:#c75450;">Markdown 解析错误</p>';
@@ -150,6 +162,31 @@ function renderKatex(expr, displayMode) {
     strict: 'warn',
     trust: false
   });
+}
+
+// Mermaid 渲染（防抖，避免连续输入频繁重建图表）
+let mermaidRenderTimer = null;
+function scheduleMermaidRender() {
+  if (!window.mermaid) {
+    // mermaid 以 defer 方式加载，可能晚于首帧渲染；等 load 后重试一次
+    if (!window.__mermaidRetry) {
+      window.__mermaidRetry = true;
+      const tryLater = () => { window.__mermaidRetry = false; scheduleMermaidRender(); };
+      if (document.readyState === 'complete') setTimeout(tryLater, 300);
+      else window.addEventListener('load', tryLater, { once: true });
+    }
+    return;
+  }
+  clearTimeout(mermaidRenderTimer);
+  mermaidRenderTimer = setTimeout(() => {
+    const nodes = document.querySelectorAll('.mermaid');
+    if (!nodes.length) return;
+    try {
+      const isDark = !!(document.documentElement.classList.contains('dark') || document.body.classList.contains('dark'));
+      window.mermaid.initialize({ startOnLoad: false, theme: isDark ? 'dark' : 'default', securityLevel: 'strict' });
+      window.mermaid.run({ nodes, suppressErrors: true });
+    } catch (_) {}
+  }, 150);
 }
 
 // 对已渲染的 HTML 进行代码高亮
@@ -2574,6 +2611,35 @@ async function api(path, options = {}) {
   }
 }
 
+// 图片上传前压缩：超过 1.5MB 或边长超 2560px 的图片，降采样并转 JPEG（约 85% 质量）
+// 显著降低存储占用与加载体积；失败时静默回退原文件，不影响既有流程
+async function compressImageFile(file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return file;
+  if (file.type === 'image/gif' || file.size <= 1.5 * 1024 * 1024) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const maxDim = 2560;
+    let width = bitmap.width;
+    let height = bitmap.height;
+    if (Math.max(width, height) > maxDim) {
+      const scale = maxDim / Math.max(width, height);
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    if (bitmap.close) bitmap.close();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.(png|webp|bmp)$/i, '.jpg'), { type: 'image/jpeg', lastModified: Date.now() });
+  } catch (_) {
+    return file;
+  }
+}
+
 async function apiUpload(file) {
   // 统一走 /api/upload/file 端点（后端会自动判断 kind：image / pdf / other）
   const fd = new FormData();
@@ -4049,7 +4115,7 @@ async function handleImageUpload(files) {
       continue;
     }
     try {
-      const data = await apiUpload(file);
+      const data = await apiUpload(await compressImageFile(file));
       // 新接口返回 url 字段，自行拼 Markdown
       const md = `![${file.name}](${data.url})`;
       insertAtCursor(md);
@@ -4076,6 +4142,10 @@ async function loadTags() {
 }
 
 // ===== 统计 =====
+function fmtWordCount(n) {
+  if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+  return String(n || 0);
+}
 async function loadStats() {
   const container = document.getElementById('stats-content');
   container.innerHTML = '<p style="color:var(--fg-muted);">加载中...</p>';
@@ -4088,6 +4158,7 @@ async function loadStats() {
     const maxMood = Math.max(1, ...summary.moodStats.map(m => m.count));
     const maxTag = Math.max(1, ...summary.topTags.map(t => t.count));
     const maxDay = Math.max(1, ...summary.recentDays.map(d => d.count));
+    const maxMonthly = Math.max(1, ...(summary.monthly || []).map(m => m.count));
 
     container.innerHTML = `
       <div class="stat-card" style="grid-column: 1 / -1;">
@@ -4096,6 +4167,10 @@ async function loadStats() {
       <div class="stat-card">
         <h3>日记总数</h3>
         <div class="stat-value">${summary.total}</div>
+      </div>
+      <div class="stat-card">
+        <h3>累计写作</h3>
+        <div class="stat-value">${fmtWordCount(summary.totalWords)} <span class="stat-suffix">字</span></div>
       </div>
       <div class="stat-card">
         <h3>置顶日记</h3>
@@ -4139,6 +4214,17 @@ async function loadStats() {
               <span>${d.date}</span>
               <span>${d.count} 篇 <span class="stat-bar" style="width:${d.count/maxDay*60}px;"></span></span>
             </div>`).join('') : '<div class="stat-empty">最近 7 天没有写日记</div>'}
+        </div>
+      </div>
+      <div class="stat-card" style="grid-column: 1 / -1;">
+        <h3>最近 12 个月写作分布</h3>
+        <div class="stat-monthly">
+          ${summary.monthly && summary.monthly.length ? summary.monthly.map(m => `
+            <div class="stat-month-item">
+              <span class="stat-month-label">${escapeHtml(m.month)}</span>
+              <div class="stat-month-track"><div class="stat-month-fill" style="width:${Math.round(m.count / maxMonthly * 100)}%;"></div></div>
+              <span class="stat-month-count">${m.count}</span>
+            </div>`).join('') : '<div class="stat-empty">暂无数据</div>'}
         </div>
       </div>
     `;
@@ -5861,7 +5947,7 @@ async function uploadFiles(fileList, folder) {
   const failed = [];
   setFilesUploadProgress(true, 0, `准备上传 ${validFiles.length} 个文件...`);
   for (let i = 0; i < validFiles.length; i++) {
-    const f = validFiles[i];
+    const f = await compressImageFile(validFiles[i]);
     setFilesUploadProgress(true, (i / validFiles.length) * 100, `上传中 ${i + 1}/${validFiles.length}：${f.name}`);
     try {
       await uploadOneFile(f, targetFolder);
@@ -7189,7 +7275,7 @@ function setupMsgChatDragUpload() {
       for (const file of files) {
         toast(`正在发送文件: ${file.name}...`, 'info');
         try {
-          const res = await apiUpload(file);
+          const res = await apiUpload(await compressImageFile(file));
           await api('/api/messages', {
             method: 'POST',
             body: JSON.stringify({
@@ -8380,7 +8466,7 @@ function bindEvents() {
     galleryInput.addEventListener('change', async e => {
       const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
       for (const f of files) {
-        try { await apiUpload(f); } catch (err) { toast(err.message, 'error'); }
+        try { await apiUpload(await compressImageFile(f)); } catch (err) { toast(err.message, 'error'); }
       }
       toast(`已上传 ${files.length} 张图片`, 'success');
       if (typeof refreshFiles === 'function') refreshFiles();
@@ -10056,6 +10142,7 @@ async function loadCalendarData() {
       api(`/api/diaries/stats/heatmap?year=${calState.year}`)
     ]);
     calState.schedules = sched.items || [];
+    requestScheduleNotificationPermission();
     // 后端 weeks 是数组的数组（每个内部数组含 7 个 day 对象），扁平化为按日期映射
     const map = {};
     (diaries.weeks || []).forEach(week => {
@@ -10587,7 +10674,7 @@ function openComposeLetterModal(diaryId, presetRecipientId) {
         if (!file) return;
         toast(`正在上传附件: ${file.name}...`, 'info');
         try {
-          const res = await apiUpload(file);
+          const res = await apiUpload(await compressImageFile(file));
           toast(`附件已上传`, 'success');
           loadUserFilesSelect(res.id);
         } catch (err) {
@@ -10831,9 +10918,104 @@ if (window.matchMedia) {
   });
 }
 
+// ===== PWA / 离线 / 日程提醒 / 语音备忘 =====
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+}
+window.addEventListener('offline', () => toast('网络已断开，可继续浏览已缓存内容', 'warning'));
+window.addEventListener('online', () => toast('网络已恢复', 'success'));
+
+let notifiedScheduleIds = new Set();
+try { notifiedScheduleIds = new Set(JSON.parse(localStorage.getItem('treeks_notified_schedules') || '[]')); } catch (_) {}
+function requestScheduleNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+function checkScheduleReminders() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const now = new Date();
+  const months = [
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+    `${now.getFullYear()}-${String(now.getMonth() + 2).padStart(2, '0')}`
+  ];
+  Promise.all(months.map(m => api(`/api/schedules?month=${m}`).catch(() => null))).then(results => {
+    results.forEach(data => {
+      ((data && data.items) || []).forEach(s => {
+        if (notifiedScheduleIds.has(s.id)) return;
+        const start = s.start_time || '09:00';
+        const when = new Date(`${s.schedule_date}T${start}:00`);
+        const mins = (when - now) / 60000;
+        if (mins >= 0 && mins <= 15) {
+          notifiedScheduleIds.add(s.id);
+          const ids = [...notifiedScheduleIds].slice(-300);
+          try { localStorage.setItem('treeks_notified_schedules', JSON.stringify(ids)); } catch (_) {}
+          try {
+            new Notification('⏰ 日程提醒', { body: s.title + (s.description ? ' — ' + s.description : ''), tag: 'schedule-' + s.id });
+          } catch (_) {}
+        }
+      });
+    });
+  });
+}
+
+let voiceRecorder = null;
+let voiceChunks = [];
+let voiceStream = null;
+async function toggleVoiceMemo() {
+  const btn = document.getElementById('btn-voice-memo');
+  if (voiceRecorder && voiceRecorder.state === 'recording') {
+    voiceRecorder.stop();
+    if (btn) { btn.classList.remove('recording'); btn.title = '语音备忘（录音并插入日记）'; }
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    toast('当前浏览器不支持录音', 'error');
+    return;
+  }
+  try {
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceChunks = [];
+    voiceRecorder = new MediaRecorder(voiceStream);
+    voiceRecorder.ondataavailable = e => { if (e.data && e.data.size) voiceChunks.push(e.data); };
+    voiceRecorder.onstop = async () => {
+      if (voiceStream) voiceStream.getTracks().forEach(t => t.stop());
+      const type = voiceRecorder.mimeType || 'audio/webm';
+      const blob = new Blob(voiceChunks, { type });
+      if (blob.size < 1024) {
+        toast('录音时间太短，未插入', 'warning');
+        voiceRecorder = null;
+        return;
+      }
+      toast('正在上传语音...', 'info');
+      try {
+        const data = await apiUpload(new File([blob], '语音备忘-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + (type.includes('mp4') ? '.m4a' : '.webm'), { type }));
+        insertAtCursor(`\n<audio controls src="${data.url}"></audio>\n`);
+        updatePreview();
+        updateWordCount();
+        toast('语音备忘已插入', 'success');
+      } catch (e) {
+        toast('语音上传失败：' + e.message, 'error');
+      }
+      voiceRecorder = null;
+    };
+    voiceRecorder.start();
+    if (btn) { btn.classList.add('recording'); btn.title = '停止录音'; }
+    toast('录音中… 再次点击停止并插入', 'info');
+  } catch (e) {
+    toast('无法访问麦克风：' + (e.name === 'NotAllowedError' ? '请允许麦克风权限' : e.message), 'error');
+  }
+}
+
 // ===== 初始化 =====
 async function init() {
   bindEvents();
+  registerServiceWorker();
+  setInterval(checkScheduleReminders, 60 * 1000);
+  const voiceBtn = document.getElementById('btn-voice-memo');
+  if (voiceBtn) voiceBtn.addEventListener('click', toggleVoiceMemo);
   // 初始化"我的文件"页面（绑定上传/过滤事件，幂等）
   if (typeof initFilesView === 'function') initFilesView();
   loadSiteInfo();
