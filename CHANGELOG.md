@@ -2,6 +2,33 @@
 
 ---
 
+## [v1.3.2] - 2026-08-03 (fix diary write 500 on server)
+
+### Bug Fixes
+
+* Fixed create/move/edit diary returning "server internal error" (500) in production:
+  * Root cause 1: the old FTS5 external-content table (content='diaries') used
+    'delete' commands that require old values to exactly match the index; once the
+    index was corrupted, every diary write (create/edit/move) failed with
+    "database disk image is malformed". Replaced with a regular fts5 table and
+    rowid-based delete triggers; startup now auto-detects and rebuilds a legacy or
+    corrupted FTS index and backfills existing diaries.
+  * Root cause 2: the production DB defaults diaries.created_at/updated_at to
+    local time, and the legacy trg_diaries_utc_insert trigger runs an UPDATE right
+    after INSERT. That UPDATE fired the FTS after-update trigger (inserting the
+    rowid) and then the after-insert trigger tried to insert the same rowid again,
+    raising SQLITE_CONSTRAINT_PRIMARYKEY. FTS triggers are now idempotent
+    (INSERT OR REPLACE) and are refreshed to the idempotent version on every startup.
+* Added regression test scripts/test-prod-fts-trigger.js that reproduces the
+  production DB shape (localtime defaults + UTC trigger + FTS) and covers
+  create/move/edit/search end to end; wired into `npm test`.
+
+### Deploy
+
+On the server: `git pull`, then restart the service. At startup initDatabase()
+auto-rebuilds a corrupt FTS index and refreshes the triggers, no manual DB work
+is required.
+
 ## 🚀 [v1.3.1] - 2026-08-03 (修复语音备忘)
 
 ### 🐞 修复 (Bug Fixes)

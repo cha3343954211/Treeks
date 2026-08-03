@@ -106,22 +106,23 @@ function initDatabase() {
     -- 复合索引：列表查询 WHERE user_id=? ORDER BY is_pinned DESC, created_at DESC
     CREATE INDEX IF NOT EXISTS idx_diaries_user_pin_time ON diaries(user_id, is_pinned, created_at);
 
-    -- FTS5 全文检索（英文/数字等空格分词场景加速；中文走 LIKE 保持子串匹配语义）
+    -- FTS5 全文检索：使用普通内嵌表（rowid = diaries.id），不依赖外部内容表。
+    -- 注意：切勿改为 content='diaries' 的外部内容表——其 'delete' 命令要求旧值与索引完全匹配，
+    -- 存量数据在迁移期间写入的索引与该语义冲突时会导致 SQLITE_CORRUPT（database disk image is malformed），
+    -- 进而使所有日记写操作（新建/编辑/移动）报 500。普通 fts5 表按 rowid 删除，无此风险。
     CREATE VIRTUAL TABLE IF NOT EXISTS diary_fts USING fts5(
       title, content,
-      content='diaries',
-      content_rowid='id',
       tokenize='unicode61'
     );
     CREATE TRIGGER IF NOT EXISTS diary_fts_ai AFTER INSERT ON diaries BEGIN
-      INSERT INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+      INSERT OR REPLACE INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
     END;
     CREATE TRIGGER IF NOT EXISTS diary_fts_ad AFTER DELETE ON diaries BEGIN
-      INSERT INTO diary_fts(diary_fts, rowid, title, content) VALUES ('delete', old.id, old.title, old.content);
+      DELETE FROM diary_fts WHERE rowid = old.id;
     END;
     CREATE TRIGGER IF NOT EXISTS diary_fts_au AFTER UPDATE ON diaries BEGIN
-      INSERT INTO diary_fts(diary_fts, rowid, title, content) VALUES ('delete', old.id, old.title, old.content);
-      INSERT INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+      DELETE FROM diary_fts WHERE rowid = old.id;
+      INSERT OR REPLACE INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
     END;
 
     -- 日记文件夹
@@ -560,16 +561,56 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id);
   `);
 
-  // FTS5 存量数据一次性回填（新索引表首次建立时，将既有日记同步进虚拟表）
+  // FTS5 索引自检与自愈：
+  //  1) 检测旧版外部内容表（content='diaries'）或写入异常（SQLITE_CORRUPT）→ 重建为普通 fts5
+  //  2) 行数不一致时回填存量数据（INSERT SELECT，避免外部内容表 rebuild 的语义问题）
   try {
+    const ftsDef = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'diary_fts'").get();
+    const isExternalContent = !!ftsDef && /content\s*=\s*'diaries'/.test(ftsDef.sql || '');
+    let ftsUsable = true;
+    try {
+      db.prepare('DELETE FROM diary_fts WHERE rowid = -1').run();
+      db.prepare("INSERT INTO diary_fts(rowid, title, content) VALUES (-1, 'probe', 'probe')").run();
+      db.prepare('DELETE FROM diary_fts WHERE rowid = -1').run();
+    } catch (_) {
+      ftsUsable = false;
+    }
+    if (isExternalContent || !ftsUsable) {
+      console.log('[DB] 检测到 FTS5 索引异常，正在重建为普通全文索引...');
+      db.exec('DROP TRIGGER IF EXISTS diary_fts_ai; DROP TRIGGER IF EXISTS diary_fts_ad; DROP TRIGGER IF EXISTS diary_fts_au;');
+      db.exec('DROP TABLE IF EXISTS diary_fts');
+      db.exec("CREATE VIRTUAL TABLE diary_fts USING fts5(title, content, tokenize='unicode61')");
+      db.exec('CREATE TRIGGER diary_fts_ai AFTER INSERT ON diaries BEGIN INSERT OR REPLACE INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content); END');
+      db.exec('CREATE TRIGGER diary_fts_ad AFTER DELETE ON diaries BEGIN DELETE FROM diary_fts WHERE rowid = old.id; END');
+      db.exec('CREATE TRIGGER diary_fts_au AFTER UPDATE ON diaries BEGIN DELETE FROM diary_fts WHERE rowid = old.id; INSERT OR REPLACE INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content); END');
+      console.log('[DB] FTS5 索引已重建为普通全文索引');
+    }
+    // 每次启动都刷新为幂等触发器（INSERT OR REPLACE）：
+    // 兼容旧版本已创建的普通 fts5 表 + 旧触发器，避免“INSERT 后 UTC 触发器 UPDATE
+    // 触发 AU 先写入 rowid，随后 AI 再写同 rowid”导致的 PRIMARY KEY 冲突。
+    db.exec('DROP TRIGGER IF EXISTS diary_fts_ai; DROP TRIGGER IF EXISTS diary_fts_ad; DROP TRIGGER IF EXISTS diary_fts_au;');
+    db.exec(`
+      CREATE TRIGGER diary_fts_ai AFTER INSERT ON diaries BEGIN
+        INSERT OR REPLACE INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+      END;
+      CREATE TRIGGER diary_fts_ad AFTER DELETE ON diaries BEGIN
+        DELETE FROM diary_fts WHERE rowid = old.id;
+      END;
+      CREATE TRIGGER diary_fts_au AFTER UPDATE ON diaries BEGIN
+        DELETE FROM diary_fts WHERE rowid = old.id;
+        INSERT OR REPLACE INTO diary_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+      END;
+    `);
     const ftsCount = db.prepare('SELECT COUNT(*) as c FROM diary_fts').get().c;
     const diariesCount = db.prepare('SELECT COUNT(*) as c FROM diaries').get().c;
     if (ftsCount < diariesCount) {
-      db.exec("INSERT INTO diary_fts(diary_fts) VALUES('rebuild')");
-      console.log(`[DB] FTS5 索引已回填（diaries=${diariesCount}, fts=${db.prepare('SELECT COUNT(*) as c FROM diary_fts').get().c}）`);
+      const backfilled = db.prepare(
+        "INSERT OR REPLACE INTO diary_fts(rowid, title, content) SELECT id, COALESCE(title, ''), COALESCE(content, '') FROM diaries WHERE id NOT IN (SELECT rowid FROM diary_fts)"
+      ).run();
+      if (backfilled.changes > 0) console.log(`[DB] FTS5 索引已回填 ${backfilled.changes} 条存量日记`);
     }
   } catch (e) {
-    console.warn('[DB] FTS5 回填失败:', e.message);
+    console.warn('[DB] FTS5 自检/回填失败（不影响日记写入）:', e.message);
   }
 
   console.log('[DB] 数据库初始化完成');

@@ -1,13 +1,13 @@
 {
   "name": "treeks-diary",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "多用户 Markdown 日记应用",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "build": "node scripts/build-minify.js",
-    "test": "node scripts/test-regressions.js && node test-brush-logic.js && node scripts/test-new-features.js && node scripts/run-all-e2e.js",
+    "test": "node scripts/test-regressions.js && node test-brush-logic.js && node scripts/test-new-features.js && node scripts/test-prod-fts-trigger.js && node scripts/run-all-e2e.js",
     "test:regressions": "node scripts/test-regressions.js",
     "test:e2e": "node scripts/run-all-e2e.js",
     "test:mobile": "node tests/run-mobile-test.js"

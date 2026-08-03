@@ -21,6 +21,7 @@ public/uploads/*
 test-*
 !scripts/test-regressions.js
 !scripts/test-new-features.js
+!scripts/test-prod-fts-trigger.js
 tmp-*
 *.tmp
 *.bak
