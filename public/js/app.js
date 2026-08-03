@@ -2855,6 +2855,10 @@ function showView(name) {
   if (name !== 'friends' && typeof clearFriendsRefreshTimer === 'function') {
     clearFriendsRefreshTimer();
   }
+  // 离开消息页时停止录音
+  if (name !== 'messages' && typeof stopMsgVoiceIfRecording === 'function') {
+    stopMsgVoiceIfRecording();
+  }
 }
 
 function navigateTo(nav) {
@@ -5646,6 +5650,7 @@ function renderFileItem(f) {
   const isImg = kind === 'image';
   const isText = kind === 'text';
   const isDoc = kind === 'document';
+  const isAudio = kind === 'audio';
   const name = f.original_name || f.filename || '未命名';
   const sizeText = formatFileSize(f.size);
   const dateText = formatDate(f.created_at);
@@ -5675,6 +5680,9 @@ function renderFileItem(f) {
   } else if (isPdf) {
     badgeLabel = 'PDF';
     thumb = `<div class="file-pdf-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
+  } else if (isAudio) {
+    badgeLabel = 'AUD';
+    thumb = `<div class="file-pdf-icon file-audio-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
   } else if (isDoc && isSheet) {
     badgeLabel = 'XLS';
     thumb = `<div class="file-pdf-icon file-doc-icon file-sheet-icon"><span class="file-pdf-ext">${escapeHtml(badgeLabel)}</span><span class="file-pdf-name">${escapeHtml(truncateName(name, 14))}</span></div>`;
@@ -5703,6 +5711,12 @@ function renderFileItem(f) {
       <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
     </button>`);
   }
+  if (isAudio) {
+    const audioMd = '<audio controls src="' + f.url + '"></audio>';
+    actions.push(`<button class="file-action copy-md-btn" data-md="${escapeHtml(audioMd)}" title="复制 Markdown 音频代码">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    </button>`);
+  }
   // 所有类型都有预览按钮（点击 file-item 时也会触发，这里显式提供）
   actions.push(`<button class="file-action open-file-btn" data-id="${f.id}" title="打开/预览">
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -5715,12 +5729,13 @@ function renderFileItem(f) {
   </button>`);
 
   return `
-    <div class="file-item file-${kind}" data-id="${f.id}" data-kind="${kind}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}" data-meta='${escapeHtml(JSON.stringify({id:f.id,kind,url:f.url,filename:f.filename,original_name:f.original_name,size:f.size,mime_type:f.mime_type}))}'>
+    <div class="file-item file-${kind}${isAudio ? ' file-audio-card' : ''}" data-id="${f.id}" data-kind="${kind}" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(name)}" data-meta='${escapeHtml(JSON.stringify({id:f.id,kind,url:f.url,filename:f.filename,original_name:f.original_name,size:f.size,mime_type:f.mime_type}))}'>
       ${thumb}
       <div class="file-info" title="${escapeHtml(name)} · ${sizeText} · ${dateText}">
         <span class="file-name">${escapeHtml(truncateName(name, 22))}</span>
         <span class="file-meta">${sizeText} · ${kindLabel(kind, name)}</span>
       </div>
+      ${isAudio ? `<div class="file-audio-player"><audio controls preload="metadata" src="${escapeHtml(f.url)}"></audio></div>` : ''}
       <div class="file-item-actions">
         ${actions.join('')}
       </div>
@@ -5769,6 +5784,8 @@ function openFileByKind(f) {
   } else if (f.kind === 'pdf') {
     openPdfViewerModal(f.url, f.original_name || f.filename, f.id);
   } else if (f.kind === 'text' || f.kind === 'document' || f.kind === 'other') {
+    openFileViewerFromMeta(f);
+  } else if (f.kind === 'audio') {
     openFileViewerFromMeta(f);
   } else {
     window.open(f.url, '_blank');
@@ -12174,7 +12191,10 @@ function bindMsgEvents() {
     };
   }
   if (attachBtn) attachBtn.onclick = openMsgFilePicker;
+  const voiceBtn = document.getElementById('msg-voice-btn');
+  if (voiceBtn) voiceBtn.onclick = toggleMsgVoice;
   if (backBtn) backBtn.onclick = () => {
+    stopMsgVoiceIfRecording();
     msgState.peerId = null;
     document.getElementById('msg-chat-active').style.display = 'none';
     document.getElementById('msg-chat-empty').style.display = '';
@@ -12275,6 +12295,7 @@ function renderMsgConversations() {
 }
 
 async function openConversation(peerId) {
+  stopMsgVoiceIfRecording();
   msgState.peerId = peerId;
   // 找到 peer 信息
   const conv = msgState.conversations.find(c => c.peer.id === peerId);
@@ -12367,6 +12388,7 @@ function renderMsgMessages() {
       const fkind = m.file_kind || 'other';
       const furl = m.file_url || '#';
       const isImg = fkind === 'image' || /\.(jpe?g|png|gif|webp|svg)$/i.test(furl);
+      const isAudio = fkind === 'audio' || /\.(mp3|wav|ogg|oga|m4a|aac|opus|flac|webm|weba)$/i.test(furl);
 
       if (isImg && furl !== '#') {
         fileHtml = `<div class="msg-bubble-media-card" data-preview-file data-file-url="${escapeHtml(furl)}" data-file-name="${escapeHtml(fname)}" title="点击查看高清大图">
@@ -12374,6 +12396,21 @@ function renderMsgMessages() {
           <div class="msg-bubble-media-glass">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
           </div>
+        </div>`;
+      } else if (isAudio && furl !== '#') {
+        // 音频消息：内联播放器（语音消息 / 音频附件均可直接播放）
+        const audioMd = '<audio controls src="' + furl + '"></audio>';
+        fileHtml = `<div class="msg-bubble-audio-card">
+          <div class="msg-audio-icon" title="音频消息">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          </div>
+          <div class="msg-audio-body">
+            <div class="msg-audio-name">${escapeHtml(fname)}</div>
+            <audio controls preload="metadata" src="${escapeHtml(furl)}"></audio>
+          </div>
+          <button class="msg-audio-copy" data-audio-md="${escapeHtml(audioMd)}" title="复制音频代码" data-msg-dl>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
         </div>`;
       } else {
         fileHtml = `<div class="msg-bubble-file-card" data-preview-file data-file-url="${escapeHtml(furl)}" data-file-name="${escapeHtml(fname)}" title="点击在线预览或阅读 PDF">
@@ -12446,11 +12483,112 @@ function renderMsgMessages() {
   box.querySelectorAll('[data-msg-dl]').forEach(el => {
     el.addEventListener('click', (e) => e.stopPropagation());
   });
+  // 音频消息：复制音频 Markdown 代码
+  box.querySelectorAll('.msg-audio-copy').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const md = el.dataset.audioMd || '';
+      if (!md) return;
+      navigator.clipboard.writeText(md)
+        .then(() => toast('音频代码已复制，可粘贴到日记中', 'success'))
+        .catch(() => toast('复制失败', 'error'));
+    });
+  });
 }
 
 function scrollMsgToBottom() {
   const box = document.getElementById('msg-messages');
   if (box) box.scrollTop = box.scrollHeight;
+}
+
+// ===== 消息语音发送 =====
+const msgVoiceState = { recorder: null, chunks: [], stream: null, timer: null, seconds: 0 };
+
+function updateMsgVoiceUI(recording) {
+  const btn = document.getElementById('msg-voice-btn');
+  const banner = document.getElementById('msg-voice-recording');
+  if (recording) {
+    if (btn) { btn.classList.add('recording'); btn.title = '停止录音并发送'; }
+    if (banner) banner.style.display = 'flex';
+  } else {
+    if (btn) { btn.classList.remove('recording'); btn.title = '发送语音'; }
+    if (banner) banner.style.display = 'none';
+    const timerEl = document.getElementById('msg-voice-timer');
+    if (timerEl) timerEl.textContent = '0s';
+  }
+}
+
+function stopMsgVoiceIfRecording() {
+  if (msgVoiceState.recorder && msgVoiceState.recorder.state === 'recording') {
+    try { msgVoiceState.recorder.stop(); } catch (_) {}
+    return true;
+  }
+  return false;
+}
+
+async function toggleMsgVoice() {
+  if (msgVoiceState.recorder && msgVoiceState.recorder.state === 'recording') {
+    try { msgVoiceState.recorder.stop(); } catch (_) {}
+    return;
+  }
+  if (!msgState.peerId) {
+    toast('请先选择对话对象', 'error');
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    toast('当前浏览器不支持录音', 'error');
+    return;
+  }
+  try {
+    msgVoiceState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    msgVoiceState.chunks = [];
+    msgVoiceState.recorder = new MediaRecorder(msgVoiceState.stream);
+    msgVoiceState.recorder.ondataavailable = e => { if (e.data && e.data.size) msgVoiceState.chunks.push(e.data); };
+    msgVoiceState.recorder.onstop = async () => {
+      if (msgVoiceState.timer) { clearInterval(msgVoiceState.timer); msgVoiceState.timer = null; }
+      if (msgVoiceState.stream) msgVoiceState.stream.getTracks().forEach(t => t.stop());
+      updateMsgVoiceUI(false);
+      const type = msgVoiceState.recorder ? (msgVoiceState.recorder.mimeType || 'audio/webm') : 'audio/webm';
+      const blob = new Blob(msgVoiceState.chunks, { type });
+      msgVoiceState.recorder = null;
+      msgVoiceState.chunks = [];
+      if (blob.size < 1024) {
+        toast('录音时间太短，未发送', 'warning');
+        return;
+      }
+      toast('正在上传语音...', 'info');
+      try {
+        const ext = type.includes('mp4') ? '.m4a' : type.includes('ogg') ? '.ogg' : '.webm';
+        const file = new File([blob], '语音消息-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + ext, { type });
+        const data = await apiUpload(file);
+        await api('/api/messages', {
+          method: 'POST',
+          body: JSON.stringify({ peerId: msgState.peerId, content: '', fileId: data.id })
+        });
+        await loadMsgHistory(msgState.peerId);
+        await loadMsgConversations();
+        toast('语音已发送', 'success');
+      } catch (e) {
+        toast('语音发送失败：' + e.message, 'error');
+      }
+    };
+    msgVoiceState.recorder.start();
+    msgVoiceState.seconds = 0;
+    const timerEl = document.getElementById('msg-voice-timer');
+    if (timerEl) timerEl.textContent = '0s';
+    msgVoiceState.timer = setInterval(() => {
+      msgVoiceState.seconds += 1;
+      if (msgVoiceState.seconds >= 60) {
+        try { msgVoiceState.recorder.stop(); } catch (_) {}
+        return;
+      }
+      if (timerEl) timerEl.textContent = msgVoiceState.seconds + 's';
+    }, 1000);
+    updateMsgVoiceUI(true);
+    toast('录音中… 再点麦克风停止并发送', 'info');
+  } catch (e) {
+    toast('无法访问麦克风：' + (e.name === 'NotAllowedError' ? '请允许麦克风权限' : e.message), 'error');
+  }
 }
 
 async function sendMsg() {

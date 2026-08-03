@@ -11623,3 +11623,205 @@ textarea,
 }
 .file-viewer-audio-host { padding: 24px 20px; }
 .file-viewer-audio-inner audio { width: 100%; }
+
+/* ===== 我的文件：音频卡片（内联预览播放） ===== */
+.file-item.file-audio-card {
+  aspect-ratio: auto;
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  padding: 10px 14px;
+  gap: 14px;
+  display: flex;
+  align-items: center;
+  min-height: 76px;
+}
+.file-item.file-audio-card .file-audio-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-bright, var(--accent)));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.file-item.file-audio-card .file-info {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.file-item.file-audio-card .file-info .file-name {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-item.file-audio-card .file-audio-player {
+  flex: 1;
+  min-width: 120px;
+}
+.file-item.file-audio-card .file-audio-player audio {
+  width: 100%;
+  height: 40px;
+}
+.file-item.file-audio-card .file-item-actions {
+  flex-shrink: 0;
+}
+.file-item.file-audio-card:hover {
+  transform: translateY(-2px);
+}
+
+/* ===== 消息：音频气泡（内联播放） ===== */
+.msg-bubble-audio-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: var(--radius-md, 12px);
+  border: 1px solid var(--border);
+  margin-top: 6px;
+  color: var(--fg);
+  max-width: 320px;
+  min-width: 220px;
+}
+.msg-bubble.mine .msg-bubble-audio-card {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: white;
+}
+.msg-audio-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.msg-audio-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg-audio-name {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-bubble.mine .msg-audio-name { color: rgba(255, 255, 255, 0.75); }
+.msg-audio-body audio {
+  width: 100%;
+  height: 34px;
+  display: block;
+}
+.msg-audio-copy {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.msg-audio-copy:hover { background: rgba(0, 0, 0, 0.06); color: var(--fg); }
+.msg-bubble.mine .msg-audio-copy { color: rgba(255, 255, 255, 0.7); }
+.msg-bubble.mine .msg-audio-copy:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+
+/* ===== 消息：语音录制状态条 ===== */
+.msg-voice-recording {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: linear-gradient(90deg, rgba(217, 104, 92, 0.12), rgba(217, 104, 92, 0.04));
+  border-top: 1px solid rgba(217, 104, 92, 0.25);
+  font-size: 13px;
+  color: var(--fg);
+}
+.msg-voice-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger, #d9685c);
+  animation: voice-pulse 1s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.msg-voice-recording-text { font-weight: 500; }
+.msg-voice-recording-hint { color: var(--fg-muted); font-size: 12px; }
+.msg-voice-btn { transition: all 0.2s var(--ease); }
+.msg-voice-btn.recording {
+  background: var(--danger, #d9685c);
+  color: #fff;
+  border-color: var(--danger, #d9685c);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+/* ===== 移动端：消息输入栏 / 文件网格体验优化 ===== */
+@media (max-width: 768px) {
+  .msg-input-bar {
+    padding: 10px 10px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    gap: 8px;
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+  }
+  .msg-input-bar .btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .msg-input-bar .btn#msg-send-btn {
+    width: auto;
+    padding: 0 14px;
+  }
+  .msg-input {
+    height: 40px;
+    min-width: 0;
+    font-size: 16px; /* 防止 iOS 聚焦自动缩放 */
+  }
+  .files-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .file-item.file-audio-card {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .file-item.file-audio-card .file-audio-player {
+    order: 3;
+    flex-basis: 100%;
+  }
+  .msg-bubble-audio-card {
+    min-width: 0;
+    max-width: 78vw;
+  }
+  .msg-audio-name { max-width: 150px; }
+  .msg-voice-recording-hint { display: none; }
+}
+
+@media (max-width: 480px) {
+  .files-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .file-item.file-audio-card .file-info .file-name {
+    max-width: 110px;
+  }
+  .msg-audio-copy { display: none; }
+}
