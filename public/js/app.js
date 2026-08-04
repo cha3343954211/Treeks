@@ -11129,11 +11129,6 @@ async function updateNavBadges() {
   if (!state.token) return;
   try {
     const fs = await api('/api/friends/summary');
-    const badgeF = document.getElementById('badge-friends');
-    if (fs.pendingRequests > 0) {
-      badgeF.textContent = fs.pendingRequests;
-      badgeF.style.display = '';
-    } else { badgeF.style.display = 'none'; }
     const tabBadgeF = document.getElementById('msg-tab-badge-friends');
     if (tabBadgeF) {
       if (fs.pendingRequests > 0) {
@@ -11143,11 +11138,6 @@ async function updateNavBadges() {
     }
 
     const ls = await api('/api/letters/unread/count');
-    const badgeL = document.getElementById('badge-letters');
-    if (ls.unread > 0) {
-      badgeL.textContent = ls.unread;
-      badgeL.style.display = '';
-    } else { badgeL.style.display = 'none'; }
     const tabBadgeL = document.getElementById('msg-tab-badge-letters');
     if (tabBadgeL) {
       if (ls.unread > 0) {
