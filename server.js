@@ -153,6 +153,7 @@ app.use('/api/schedules', require('./routes/schedules'));
 app.use('/api/friends', require('./routes/friends'));
 app.use('/api/letters', require('./routes/letters'));
 app.use('/api/messages', require('./routes/messages'));
+app.use('/api/stickers', require('./routes/stickers'));
 
 // WebSocket 协同编辑
 require('./services/collab').setupWebSocket(server);
@@ -195,9 +196,13 @@ app.use('/uploads', (req, res, next) => {
   }
   const ownerId = parseInt(firstSeg, 10);
   if (ownerId !== user.id) {
-    const { isFriend } = require('./services/permissions');
-    if (!isFriend(user.id, ownerId)) {
-      return res.status(403).end('Forbidden');
+    // 表情包（stickers 子目录）为站内公开资源：任意登录用户可访问（用于表情选择器与消息展示）
+    const isStickerFile = relPath.split('/')[1] === 'stickers';
+    if (!isStickerFile) {
+      const { isFriend } = require('./services/permissions');
+      if (!isFriend(user.id, ownerId)) {
+        return res.status(403).end('Forbidden');
+      }
     }
   }
   const tryServe = (base, p = relPath) => {

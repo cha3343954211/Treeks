@@ -23,6 +23,7 @@ test-*
 !scripts/test-new-features.js
 !scripts/test-prod-fts-trigger.js
 !scripts/test-audio-message.js
+!scripts/test-sticker-message.js
 tmp-*
 *.tmp
 *.bak

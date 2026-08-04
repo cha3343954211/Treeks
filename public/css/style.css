@@ -11825,3 +11825,225 @@ textarea,
   }
   .msg-audio-copy { display: none; }
 }
+
+/* ===== 消息页合并 Tab（聊天 / 好友 / 信件） ===== */
+.msg-main-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.msg-main-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-paper);
+  color: var(--fg-muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.msg-main-tab:hover { color: var(--accent); border-color: var(--accent); }
+.msg-main-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.msg-main-tab-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger, #d9685c);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.msg-main-tab.active .msg-main-tab-badge { background: #fff; color: var(--danger, #d9685c); }
+.msg-panel-content {
+  height: calc(100vh - 250px);
+  overflow-y: auto;
+  background: var(--bg-paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+}
+.msg-sub-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.msg-sub-header h3 { font-size: 17px; font-weight: 700; color: var(--fg); margin: 0; }
+.msg-letters-tabs { margin-bottom: 12px; }
+#view-friends, #view-letters { display: none !important; }
+.messages-layout { height: calc(100vh - 218px); }
+
+/* 表情包选择器 */
+.msg-sticker-picker {
+  border-top: 1px solid var(--border);
+  background: var(--bg-paper);
+  padding: 10px 14px;
+  max-height: 260px;
+  display: flex;
+  flex-direction: column;
+}
+.msg-sticker-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.msg-sticker-tab {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.msg-sticker-tab.active {
+  background: var(--accent-light);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.msg-sticker-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 80px;
+}
+.msg-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+  gap: 4px;
+  padding-bottom: 6px;
+}
+.msg-emoji-item {
+  height: 38px;
+  font-size: 22px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+.msg-emoji-item:hover { background: var(--accent-light); }
+.msg-sticker-upload-bar { margin-bottom: 8px; }
+.msg-sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.msg-sticker-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.msg-sticker-item:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+.msg-sticker-item img {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  pointer-events: none;
+}
+.msg-sticker-item-name {
+  font-size: 11px;
+  color: var(--fg-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-sticker-item-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.45);
+  color: #fff;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+  display: none;
+}
+.msg-sticker-item:hover .msg-sticker-item-del { display: block; }
+.sticker-upload-preview {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.sticker-upload-preview-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.sticker-upload-preview-inner img {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--bg-paper);
+}
+
+/* 消息气泡中的表情包动图 */
+.msg-bubble-media-card img[src*="/stickers/"] {
+  max-height: 180px;
+  max-width: 200px;
+  object-fit: contain;
+}
+
+@media (max-width: 768px) {
+  .msg-main-tabs {
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .msg-main-tab {
+    flex: 1;
+    justify-content: center;
+    padding: 9px 8px;
+    font-size: 13px;
+  }
+  .messages-layout { height: calc(100vh - 205px); }
+  .msg-panel-content {
+    height: calc(100vh - 235px);
+    padding: 14px;
+  }
+  .msg-sticker-picker { max-height: 230px; }
+  .msg-sticker-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+  .msg-sticker-item img { width: 52px; height: 52px; }
+  .msg-sticker-item-del { display: block; }
+}
+
+@media (max-width: 480px) {
+  .msg-main-tab { font-size: 12px; }
+  .msg-emoji-item { height: 34px; font-size: 20px; }
+  .msg-bubble-media-card img[src*="/stickers/"] { max-width: 150px; max-height: 140px; }
+}

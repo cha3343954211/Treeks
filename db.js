@@ -561,6 +561,24 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id);
   `);
 
+  // 表情包表：用户上传的动图/静态表情（支持 GIF），发送时作为消息文件附件
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS stickers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      file_id INTEGER NOT NULL,
+      name TEXT DEFAULT '',
+      emoji TEXT DEFAULT '',
+      is_public INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_stickers_user ON stickers(user_id);
+    CREATE INDEX IF NOT EXISTS idx_stickers_file ON stickers(file_id);
+    CREATE INDEX IF NOT EXISTS idx_stickers_created ON stickers(created_at);
+  `);
+
   // FTS5 索引自检与自愈：
   //  1) 检测旧版外部内容表（content='diaries'）或写入异常（SQLITE_CORRUPT）→ 重建为普通 fts5
   //  2) 行数不一致时回填存量数据（INSERT SELECT，避免外部内容表 rebuild 的语义问题）

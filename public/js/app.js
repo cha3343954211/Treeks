@@ -2571,7 +2571,8 @@ async function downloadAuthenticatedUrl(url, fallbackFilename) {
 
 // ===== API 工具 =====
 async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers = isFormData ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
   try {
     const res = await fetch(path, { ...options, headers });
@@ -2852,7 +2853,8 @@ function showView(name) {
   });
 
   // 离开好友页面时停止定时刷新
-  if (name !== 'friends' && typeof clearFriendsRefreshTimer === 'function') {
+  const inFriendsPanel = name === 'messages' && typeof msgState !== 'undefined' && msgState.tab === 'friends';
+  if (name !== 'friends' && !inFriendsPanel && typeof clearFriendsRefreshTimer === 'function') {
     clearFriendsRefreshTimer();
   }
   // 离开消息页时停止录音
@@ -2915,12 +2917,19 @@ function navigateTo(nav) {
     showView('calendar');
     loadCalendar();
   } else if (nav === 'friends') {
-    showView('friends');
-    loadFriendsView();
+    // 好友功能已合并进消息页
+    msgState.tab = 'friends';
+    showView('messages');
+    loadMessagesView();
+    switchMsgMainTab('friends');
   } else if (nav === 'letters') {
-    showView('letters');
-    loadLettersView();
+    // 信件功能已合并进消息页
+    msgState.tab = 'letters';
+    showView('messages');
+    loadMessagesView();
+    switchMsgMainTab('letters');
   } else if (nav === 'messages') {
+    msgState.tab = 'chat';
     showView('messages');
     loadMessagesView();
   } else if (nav === 'shared') {
@@ -7683,6 +7692,9 @@ function setupMobileNav() {
         openEditor();
       } else if (view === 'list') {
         navigateTo('list');
+      } else if (view === 'friends' || view === 'letters') {
+        // 好友 / 信件已并入消息页
+        navigateTo(view);
       } else {
         showView(view);
       }
@@ -10511,7 +10523,7 @@ async function deleteSchedule(id) {
 }
 
 function renderLettersList(items, tab) {
-  const c = document.getElementById('letters-content');
+  const c = document.getElementById('msg-letters-content') || document.getElementById('letters-content');
   if (!items.length) {
     c.innerHTML = `<div class="empty-state"><p>${tab === 'inbox' ? '收件箱为空' : '发件箱为空'}</p></div>`;
     return;
@@ -11122,6 +11134,13 @@ async function updateNavBadges() {
       badgeF.textContent = fs.pendingRequests;
       badgeF.style.display = '';
     } else { badgeF.style.display = 'none'; }
+    const tabBadgeF = document.getElementById('msg-tab-badge-friends');
+    if (tabBadgeF) {
+      if (fs.pendingRequests > 0) {
+        tabBadgeF.textContent = fs.pendingRequests;
+        tabBadgeF.style.display = '';
+      } else { tabBadgeF.style.display = 'none'; }
+    }
 
     const ls = await api('/api/letters/unread/count');
     const badgeL = document.getElementById('badge-letters');
@@ -11129,13 +11148,21 @@ async function updateNavBadges() {
       badgeL.textContent = ls.unread;
       badgeL.style.display = '';
     } else { badgeL.style.display = 'none'; }
+    const tabBadgeL = document.getElementById('msg-tab-badge-letters');
+    if (tabBadgeL) {
+      if (ls.unread > 0) {
+        tabBadgeL.textContent = ls.unread;
+        tabBadgeL.style.display = '';
+      } else { tabBadgeL.style.display = 'none'; }
+    }
 
     // 消息未读数
     try {
       const ms = await api('/api/messages/unread/count');
       const badgeM = document.getElementById('badge-messages');
-      if (ms.unread > 0) {
-        badgeM.textContent = ms.unread > 99 ? '99+' : String(ms.unread);
+      const totalUnread = (ms.unread || 0) + (ls.unread || 0);
+      if (totalUnread > 0) {
+        badgeM.textContent = totalUnread > 99 ? '99+' : String(totalUnread);
         badgeM.style.display = '';
       } else { badgeM.style.display = 'none'; }
     } catch {}
@@ -11151,7 +11178,7 @@ function clearFriendsRefreshTimer() {
   }
 }
 async function loadFriendsView() {
-  const c = document.getElementById('friends-content');
+  const c = document.getElementById('msg-friends-content') || document.getElementById('friends-content');
   c.innerHTML = '<div class="loading-state">加载中...</div>';
   try {
     const [friends, requests, sentReqs] = await Promise.all([
@@ -11163,7 +11190,7 @@ async function loadFriendsView() {
     // 定时刷新在线状态（30 秒），仅在好友视图激活时生效
     clearFriendsRefreshTimer();
     friendsRefreshTimer = setInterval(() => {
-      if (state.currentView === 'friends' && document.getElementById('view-friends')?.classList.contains('active')) {
+      if (state.currentNav === 'messages' && msgState.tab === 'friends' && document.getElementById('msg-friends-content')) {
         loadFriendsView();
       } else {
         clearFriendsRefreshTimer();
@@ -11175,7 +11202,7 @@ async function loadFriendsView() {
 }
 
 function renderFriendsView(friends, requests, sentReqs) {
-  const c = document.getElementById('friends-content');
+  const c = document.getElementById('msg-friends-content') || document.getElementById('friends-content');
   let html = '';
 
   // 待处理请求
@@ -11237,6 +11264,7 @@ function renderFriendsView(friends, requests, sentReqs) {
           ${f.bio ? `<div class="friend-bio">${escapeHtml(f.bio)}</div>` : ''}
         </div>
         <div class="friend-actions">
+          <button class="btn btn-primary btn-sm" data-msg-chat="${f.id}" title="开始聊天">聊天</button>
           <button class="btn btn-ghost btn-sm" data-letter-to="${f.id}" title="发信件">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
           </button>
@@ -11291,6 +11319,13 @@ function renderFriendsView(friends, requests, sentReqs) {
   });
   c.querySelectorAll('[data-letter-to]').forEach(b => {
     b.addEventListener('click', () => openComposeLetterModal(null, parseInt(b.dataset.letterTo, 10)));
+  });
+  c.querySelectorAll('[data-msg-chat]').forEach(b => {
+    b.addEventListener('click', () => {
+      const peerId = parseInt(b.dataset.msgChat, 10);
+      switchMsgMainTab('chat');
+      openConversation(peerId);
+    });
   });
 }
 
@@ -11363,7 +11398,7 @@ async function loadLettersView() {
 
 async function loadLettersList(tab) {
   lettersState.tab = tab;
-  const c = document.getElementById('letters-content');
+  const c = document.getElementById('msg-letters-content') || document.getElementById('letters-content');
   c.innerHTML = '<div class="loading-state">加载中...</div>';
   try {
     const data = await api(`/api/letters/${tab}`);
@@ -11972,7 +12007,7 @@ document.addEventListener('visibilitychange', () => {
       if (typeof msgState !== 'undefined') msgState.pollTimer = setInterval(pollNewMessages, 8000);
       _visibilityPaused.msgPoll = false;
     }
-    if (_visibilityPaused.friendsRefresh && state.currentView === 'friends') {
+    if (_visibilityPaused.friendsRefresh && (state.currentView === 'friends' || (state.currentView === 'messages' && msgState.tab === 'friends'))) {
       if (typeof loadFriendsView === 'function') loadFriendsView();
       _visibilityPaused.friendsRefresh = false;
     }
@@ -12157,6 +12192,7 @@ async function loadAttCurrentList(diaryId) {
 //  我的消息模块
 // ============================================================
 const msgState = {
+  tab: 'chat',
   peerId: null,
   peer: null,
   messages: [],
@@ -12164,6 +12200,34 @@ const msgState = {
   pollTimer: null,
   searchKeyword: ''
 };
+
+// 消息页主 Tab 切换（聊天 / 好友 / 信件）
+function switchMsgMainTab(tab) {
+  msgState.tab = tab || 'chat';
+  document.querySelectorAll('.msg-main-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.msgTab === msgState.tab);
+  });
+  document.querySelectorAll('.msg-panel[data-msg-panel]').forEach(p => {
+    p.style.display = p.dataset.msgPanel === msgState.tab ? '' : 'none';
+  });
+  if (msgState.tab === 'friends') {
+    loadMsgFriendsTab();
+  } else if (msgState.tab === 'letters') {
+    loadMsgLettersTab();
+  }
+}
+
+function loadMsgFriendsTab() {
+  const c = document.getElementById('msg-friends-content');
+  if (!c) return;
+  loadFriendsView();
+}
+
+function loadMsgLettersTab() {
+  const c = document.getElementById('msg-letters-content');
+  if (!c) return;
+  loadLettersList(lettersState.tab || 'inbox');
+}
 
 async function loadMessagesView() {
   await loadMsgConversations();
@@ -12206,6 +12270,186 @@ function bindMsgEvents() {
       renderMsgConversations();
     };
   }
+  // 主 Tab 切换
+  document.querySelectorAll('.msg-main-tab').forEach(btn => {
+    btn.onclick = () => switchMsgMainTab(btn.dataset.msgTab);
+  });
+  // 好友/写信按钮（合并进消息页后的入口）
+  const addFriendBtn = document.getElementById('msg-btn-add-friend');
+  if (addFriendBtn) addFriendBtn.onclick = openAddFriendModal;
+  const composeLetterBtn = document.getElementById('msg-btn-compose-letter');
+  if (composeLetterBtn) composeLetterBtn.onclick = () => openComposeLetterModal(null, null);
+  // 信件 Tab（合并面板）
+  document.querySelectorAll('#msg-letters-tabs .letter-tab').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('#msg-letters-tabs .letter-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadLettersList(btn.dataset.tab);
+    };
+  });
+  // 表情包选择器
+  const emojiBtn = document.getElementById('msg-emoji-btn');
+  if (emojiBtn) emojiBtn.onclick = toggleMsgStickerPicker;
+  document.querySelectorAll('.msg-sticker-tab').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.msg-sticker-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.msg-sticker-body[data-sticker-body]').forEach(bd => {
+        bd.style.display = bd.dataset.stickerBody === btn.dataset.stickerTab ? '' : 'none';
+      });
+      if (btn.dataset.stickerTab === 'stickers') loadMsgStickerGrid();
+    };
+  });
+  const stickerUploadBtn = document.getElementById('msg-sticker-upload-btn');
+  if (stickerUploadBtn) stickerUploadBtn.onclick = openStickerUploadModal;
+}
+
+// ===== 消息表情包（Emoji + 自定义动图表情）=====
+const MSG_COMMON_EMOJIS = ['😀','😄','😂','🤣','😊','😍','😘','😜','🤔','😎','🥳','😭','😤','😡','🥺','😱','🤯','😴','👍','👎','👏','🙏','💪','🤝','👌','✌️','🤞','❤️','💔','💯','🔥','✨','🎉','🎂','🌹','🌈','☀️','🍀','🐶','🐱','🦊','🍺','☕','🍜','🏆','🚀','💡','📌','💰'];
+
+function renderMsgEmojiGrid() {
+  const grid = document.getElementById('msg-emoji-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="msg-emoji-grid">' + MSG_COMMON_EMOJIS.map(e =>
+    `<button type="button" class="msg-emoji-item" data-emoji="${escapeHtml(e)}">${e}</button>`
+  ).join('') + '</div>';
+  grid.querySelectorAll('.msg-emoji-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = document.getElementById('msg-input');
+      if (input) {
+        const val = input.value + btn.dataset.emoji;
+        input.value = val;
+        input.focus();
+      }
+    });
+  });
+}
+
+function toggleMsgStickerPicker() {
+  if (!msgState.peerId) {
+    toast('请先选择对话对象', 'error');
+    return;
+  }
+  const panel = document.getElementById('msg-sticker-picker');
+  if (!panel) return;
+  if (panel.style.display === 'none' || !panel.style.display) {
+    panel.style.display = '';
+    renderMsgEmojiGrid();
+    // 默认切到常用表情
+    document.querySelectorAll('.msg-sticker-tab').forEach(b => b.classList.toggle('active', b.dataset.stickerTab === 'emoji'));
+    document.querySelectorAll('.msg-sticker-body[data-sticker-body]').forEach(bd => {
+      bd.style.display = bd.dataset.stickerBody === 'emoji' ? '' : 'none';
+    });
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+async function loadMsgStickerGrid() {
+  const grid = document.getElementById('msg-sticker-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="att-loading">加载中…</div>';
+  try {
+    const data = await api('/api/stickers?limit=500');
+    const items = data.items || [];
+    if (!items.length) {
+      grid.innerHTML = '<div class="att-empty">还没有表情包，点上方按钮上传第一个吧！</div>';
+      return;
+    }
+    grid.innerHTML = items.map(s => `
+      <div class="msg-sticker-item" data-sticker-id="${s.id}" data-file-id="${s.file.id || ''}" data-url="${escapeHtml(s.file.url)}" data-name="${escapeHtml(s.name || s.file.original_name || '表情')}" title="${escapeHtml(s.name || s.file.original_name || '表情')}">
+        <img src="${escapeHtml(s.file.url)}" alt="${escapeHtml(s.name || '表情')}" loading="lazy" />
+        <span class="msg-sticker-item-name">${escapeHtml((s.name || '').slice(0, 8))}</span>
+        ${s.mine ? '<button type="button" class="msg-sticker-item-del" title="删除表情包" data-del-sticker="' + s.id + '">×</button>' : ''}
+      </div>
+    `).join('');
+    grid.querySelectorAll('.msg-sticker-item').forEach(el => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('[data-del-sticker]')) return;
+        sendStickerMessage(parseInt(el.dataset.stickerId, 10), parseInt(el.dataset.fileId, 10), el.dataset.url, el.dataset.name || '表情包');
+      });
+    });
+    grid.querySelectorAll('[data-del-sticker]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = parseInt(btn.dataset.delSticker, 10);
+        showModal('删除表情包', '<p>确定要删除这个表情包吗？</p><p style="color:var(--fg-muted);font-size:13px;margin-top:8px;">已发送的消息中仍会保留该表情。</p>', async () => {
+          try {
+            await api('/api/stickers/' + sid, { method: 'DELETE' });
+            toast('表情包已删除', 'success');
+            loadMsgStickerGrid();
+          } catch (err) { toast(err.message || '删除失败', 'error'); }
+        }, { danger: true, confirmText: '删除' });
+      });
+    });
+  } catch (e) {
+    grid.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function sendStickerMessage(stickerId, fileId, name) {
+  if (!msgState.peerId) {
+    toast('请先选择对话对象', 'error');
+    return;
+  }
+  // 通过文件消息发送：file_id 在渲染网格时已写入 DOM，避免额外请求
+  if (!fileId) { toast('表情包不存在或已删除', 'error'); return; }
+  try {
+    await api('/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({ peerId: msgState.peerId, content: '', fileId })
+    });
+    document.getElementById('msg-sticker-picker').style.display = 'none';
+    toast('表情已发送', 'success');
+    await loadMsgHistory(msgState.peerId);
+    await loadMsgConversations();
+  } catch (e) {
+    toast('发送失败：' + e.message, 'error');
+  }
+}
+
+function openStickerUploadModal() {
+  const modal = document.getElementById('sticker-upload-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  modal.querySelectorAll('[data-close="sticker-upload"]').forEach(el => {
+    el.onclick = () => { modal.style.display = 'none'; };
+  });
+  const fileInput = document.getElementById('sticker-upload-file');
+  const preview = document.getElementById('sticker-upload-preview');
+  fileInput.value = '';
+  document.getElementById('sticker-upload-name').value = '';
+  document.getElementById('sticker-upload-emoji').value = '';
+  preview.style.display = 'none';
+  fileInput.onchange = () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) { preview.style.display = 'none'; return; }
+    preview.innerHTML = `<div class="sticker-upload-preview-inner"><img src="${URL.createObjectURL(f)}" alt="preview" /><span>${escapeHtml(f.name)} · ${formatFileSize(f.size)}</span></div>`;
+    preview.style.display = '';
+  };
+  const confirmBtn = document.getElementById('sticker-upload-confirm');
+  confirmBtn.onclick = async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) { toast('请选择表情包图片', 'error'); return; }
+    const name = document.getElementById('sticker-upload-name').value.trim();
+    const emoji = document.getElementById('sticker-upload-emoji').value.trim();
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('name', name);
+    fd.append('emoji', emoji);
+    confirmBtn.disabled = true;
+    try {
+      await api('/api/stickers', { method: 'POST', body: fd });
+      toast('表情包上传成功', 'success');
+      modal.style.display = 'none';
+      loadMsgStickerGrid();
+    } catch (e) {
+      toast('上传失败：' + e.message, 'error');
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  };
+  setTimeout(() => fileInput.focus(), 100);
 }
 
 async function loadMsgConversations() {
@@ -12704,7 +12948,7 @@ async function refreshMsgUnreadBadge() {
 
 // 轮询：刷新未读数与会话列表（仅在消息页面活动时）
 async function pollNewMessages() {
-  if (state.currentNav !== 'messages') {
+  if (state.currentNav !== 'messages' || (typeof msgState !== 'undefined' && msgState.tab !== 'chat')) {
     return;
   }
   await refreshMsgUnreadBadge();
