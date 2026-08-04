@@ -12200,6 +12200,8 @@ function switchMsgMainTab(tab) {
   document.querySelectorAll('.msg-panel[data-msg-panel]').forEach(p => {
     p.style.display = p.dataset.msgPanel === msgState.tab ? '' : 'none';
   });
+  // 切到好友/信件等其它页签时收起表情选择栏
+  if (msgState.tab !== 'chat') closeMsgStickerPicker();
   if (msgState.tab === 'friends') {
     loadMsgFriendsTab();
   } else if (msgState.tab === 'letters') {
@@ -12249,6 +12251,7 @@ function bindMsgEvents() {
   if (voiceBtn) voiceBtn.onclick = toggleMsgVoice;
   if (backBtn) backBtn.onclick = () => {
     stopMsgVoiceIfRecording();
+    closeMsgStickerPicker();
     msgState.peerId = null;
     document.getElementById('msg-chat-active').style.display = 'none';
     document.getElementById('msg-chat-empty').style.display = '';
@@ -12315,6 +12318,16 @@ function renderMsgEmojiGrid() {
   });
 }
 
+function msgStickerPickerVisible() {
+  const panel = document.getElementById('msg-sticker-picker');
+  return !!(panel && panel.style.display !== 'none');
+}
+
+function closeMsgStickerPicker() {
+  const panel = document.getElementById('msg-sticker-picker');
+  if (panel) panel.style.display = 'none';
+}
+
 function toggleMsgStickerPicker() {
   if (!msgState.peerId) {
     toast('请先选择对话对象', 'error');
@@ -12322,7 +12335,7 @@ function toggleMsgStickerPicker() {
   }
   const panel = document.getElementById('msg-sticker-picker');
   if (!panel) return;
-  if (panel.style.display === 'none' || !panel.style.display) {
+  if (panel.style.display === 'none') {
     panel.style.display = '';
     renderMsgEmojiGrid();
     // 默认切到常用表情
@@ -12389,7 +12402,7 @@ async function sendStickerMessage(stickerId, fileId, name) {
       method: 'POST',
       body: JSON.stringify({ peerId: msgState.peerId, content: '', fileId })
     });
-    document.getElementById('msg-sticker-picker').style.display = 'none';
+    closeMsgStickerPicker();
     toast('表情已发送', 'success');
     await loadMsgHistory(msgState.peerId);
     await loadMsgConversations();
@@ -12590,11 +12603,28 @@ async function loadMsgHistory(peerId, beforeId) {
       renderMsgMessages();
       box.scrollTop = box.scrollHeight - prevHeight;
     }
+    // 打开会话即视为已读（仅首次加载），并更新本地状态让已读标记立即生效
+    if (!beforeId) {
+      const hasUnread = (msgState.messages || []).some(m => m.recipient_id === currentUserId() && !m.is_read);
+      if (hasUnread) {
+        try {
+          await api(`/api/messages/read/${peerId}`, { method: 'POST' });
+          (msgState.messages || []).forEach(m => {
+            if (m.recipient_id === currentUserId()) { m.is_read = 1; m.read_at = m.read_at || new Date().toISOString(); }
+          });
+          renderMsgMessages();
+        } catch (_) {}
+      }
+    }
     await refreshMsgUnreadBadge();
     await loadMsgConversations();
   } catch (e) {
     box.innerHTML = `<div class="att-empty">加载失败：${escapeHtml(e.message)}</div>`;
   }
+}
+
+function currentUserId() {
+  return (typeof state !== 'undefined' && state.user && state.user.id) || null;
 }
 
 function renderMsgMessages() {
@@ -12612,6 +12642,12 @@ function renderMsgMessages() {
   box.innerHTML = moreHtml + msgState.messages.map(m => {
     const mine = m.sender_id === meId;
     const time = formatMsgTime(m.created_at);
+    // 自己发送的消息显示已读/未读状态
+    const readMark = mine
+      ? (m.is_read
+          ? '<span class="msg-read-state msg-read-yes" title="已读">已读</span>'
+          : '<span class="msg-read-state msg-read-no" title="未读">未读</span>')
+      : '';
     let hasFile = false;
     let fileHtml = '';
 
@@ -12669,7 +12705,7 @@ function renderMsgMessages() {
         <div class="msg-bubble-row ${mine ? 'mine' : 'theirs'}">
           <div class="msg-bubble-container">
             ${fileHtml}
-            <div class="msg-bubble-time">${time}</div>
+            <div class="msg-bubble-time">${time}<span class="msg-time-read-wrap">${readMark}</span></div>
           </div>
         </div>
       `;
@@ -12691,7 +12727,7 @@ function renderMsgMessages() {
         <div class="msg-bubble-container">
           <div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${fullInner}</div>
           ${reactionsHtml}
-          <div class="msg-bubble-time">${time}</div>
+          <div class="msg-bubble-time">${time}<span class="msg-time-read-wrap">${readMark}</span></div>
         </div>
       </div>
     `;
@@ -12977,11 +13013,19 @@ function handleIncomingWsMessage(payload) {
   if (!data) return;
   // 如果当前正在和发送者聊天，立即追加
   if (msgState.peerId === data.sender_id) {
+    data.is_read = 0;
+    data.recipient_id = state.user && state.user.id;
     msgState.messages.push(data);
     renderMsgMessages();
     scrollMsgToBottom();
     // 自动标记已读
-    api(`/api/messages/read/${data.sender_id}`, { method: 'POST' }).catch(() => {});
+    api(`/api/messages/read/${data.sender_id}`, { method: 'POST' }).then(() => {
+      const last = msgState.messages[msgState.messages.length - 1];
+      if (last && last.id === data.id && msgState.peerId === data.sender_id) {
+        last.is_read = 1;
+        renderMsgMessages();
+      }
+    }).catch(() => {});
   }
   // 刷新未读与会话
   refreshMsgUnreadBadge();

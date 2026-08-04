@@ -9728,6 +9728,35 @@ html, body {
   letter-spacing: 0.02em;
   font-feature-settings: "tnum";
 }
+.msg-bubble-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.msg-bubble-row.theirs .msg-bubble-time {
+  justify-content: flex-start;
+}
+.msg-time-read-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.msg-read-state {
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+.msg-read-yes {
+  color: #1f9d55;
+  background: rgba(31, 157, 85, 0.12);
+}
+.msg-read-no {
+  color: var(--fg-muted);
+  background: rgba(128, 128, 128, 0.12);
+}
 .msg-bubble-file {
   display: flex;
   align-items: center;
