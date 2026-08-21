@@ -12109,6 +12109,25 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   flex: 1;
   min-height: 0;
 }
+.ai-history-older {
+  align-self: center;
+  min-height: 28px;
+  margin: 0 12px 2px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), opacity 0.15s var(--ease-smooth);
+}
+.ai-history-older:hover:not(:disabled) { border-color: var(--accent-soft); background: var(--accent-light); color: var(--accent-pressed); }
+.ai-history-older:disabled { opacity: 0.62; cursor: default; }
+.ai-history-older:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ai-chat {
   display: flex;
   flex: 1;
@@ -12493,6 +12512,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 [data-theme="dark"] .ai-chat-search, [data-mode="dark"] .ai-chat-search{ background: var(--bg-paper); border-bottom-color: var(--border); }
 [data-theme="dark"] .ai-chat-search input, [data-mode="dark"] .ai-chat-search input{ background: rgba(255,255,255,0.06); color: #e6f0e8; border-color: rgba(255,255,255,0.10); }
 [data-theme="dark"] .ai-empty, [data-mode="dark"] .ai-empty{ background: var(--bg-paper); border-color: var(--border); }
+[data-theme="dark"] .ai-history-older, [data-mode="dark"] .ai-history-older{ background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.08); color:#c8d6cb; }
 [data-theme="dark"] .ai-scroll-bottom, [data-mode="dark"] .ai-scroll-bottom{ background: rgba(255,255,255,0.06); color: #c8d6cb; }
 [data-theme="dark"] .ai-composer-wrap, [data-mode="dark"] .ai-composer-wrap{ background: var(--bg-paper); border-top-color: var(--border); }
 [data-theme="dark"] #ai-prompt, [data-mode="dark"] #ai-prompt{ background: rgba(255,255,255,0.06); color: #e6f0e8; border-color: rgba(255,255,255,0.10); }

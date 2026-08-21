@@ -7836,6 +7836,9 @@ const aiSidebarState = {
   pendingEdit: null,
   currentDiaryId: null,
   historyLoadedFor: null,
+  historyOldestId: null,
+  hasOlderHistory: false,
+  isLoadingOlderHistory: false,
   isGenerating: false,
   abortController: null
 };
@@ -8262,6 +8265,92 @@ function getAiDiaryId(){
   if(id != null && Number.isFinite(Number(id))) return Number(id);
   return -1;
 }
+function createAiHistoryMessage(item){
+  const role = item.role === 'user' ? 'user' : 'assistant';
+  const content = role === 'user' ? (item.content || '') : (item.result || item.content || '');
+  const svg = extractSvgString(content);
+  const isSvg = svg && svg.startsWith('<svg');
+  const msg=document.createElement('div');
+  msg.className='ai-message ai-message-'+role;
+  msg.dataset.conversationId=String(item.id || '');
+  const label=document.createElement('div'); label.className='ai-message-label'; label.textContent = role==='user' ? '你' : 'Treeks AI';
+  const text=document.createElement('div'); text.className='ai-message-content';
+  if(role==='user'){
+    text.textContent = content;
+  } else {
+    text.innerHTML = isSvg ? '<span style="color:var(--fg-muted);font-size:12px">已生成 SVG</span>' : '';
+  }
+  msg.append(label, text);
+  if(role==='assistant'){
+    if(isSvg){
+      const card=renderSvgCard(sanitizeSvgText(svg), {name: 'ai-drawing'});
+      msg.appendChild(card);
+    } else if(content){
+      const md = stripCodeFence(content);
+      const resultEl=document.createElement('div'); resultEl.className='ai-result-md';
+      try{ resultEl.innerHTML = renderAiMarkdown(md); }catch(_){ resultEl.textContent = md; }
+      enhanceAiCodeBlocks(resultEl);
+      msg.appendChild(resultEl);
+      msg.appendChild(createAiResultActions(content));
+    }
+  }
+  if(item.created_at){
+    const ts=document.createElement('div'); ts.className='ai-message-time';
+    try{
+      const iso = String(item.created_at).replace(' ', 'T') + (String(item.created_at).includes('Z')?'':'Z');
+      const d=new Date(iso);
+      const now=new Date();
+      const isToday = d.toDateString()===now.toDateString();
+      ts.textContent = isToday ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+      ts.title = d.toLocaleString();
+    }catch(_){ ts.textContent=String(item.created_at); }
+    msg.appendChild(ts);
+  }
+  return msg;
+}
+function syncAiHistoryWindow(data, items){
+  aiSidebarState.historyOldestId = data.oldest_id || (items[0]?.id ?? null);
+  aiSidebarState.hasOlderHistory = !!data.has_more;
+}
+function ensureAiHistoryOlderButton(){
+  document.getElementById('ai-history-older')?.remove();
+  if(!aiSidebarState.hasOlderHistory || !aiSidebarState.historyOldestId) return;
+  const chat=document.getElementById('ai-chat');
+  if(!chat) return;
+  const btn=document.createElement('button');
+  btn.id='ai-history-older';
+  btn.type='button';
+  btn.className='ai-history-older';
+  btn.textContent='加载更早对话';
+  btn.addEventListener('click', loadOlderAiHistory);
+  chat.prepend(btn);
+}
+async function loadOlderAiHistory(){
+  const chat=document.getElementById('ai-chat');
+  const cursor=aiSidebarState.historyOldestId;
+  if(!chat || !cursor || aiSidebarState.isLoadingOlderHistory) return;
+  aiSidebarState.isLoadingOlderHistory=true;
+  const btn=document.getElementById('ai-history-older');
+  if(btn){ btn.disabled=true; btn.textContent='正在加载…'; }
+  const previousHeight=chat.scrollHeight;
+  const previousTop=chat.scrollTop;
+  try{
+    const diaryId=getAiDiaryId();
+    const data=await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100&before_id='+encodeURIComponent(String(cursor)));
+    const items=data.items||[];
+    const fragment=document.createDocumentFragment();
+    for(const it of items) fragment.appendChild(createAiHistoryMessage(it));
+    document.getElementById('ai-history-older')?.after(fragment);
+    syncAiHistoryWindow(data, items);
+    ensureAiHistoryOlderButton();
+    chat.scrollTop=previousTop+(chat.scrollHeight-previousHeight);
+  }catch(_){
+    if(btn){ btn.disabled=false; btn.textContent='加载更早对话'; }
+  }finally{
+    aiSidebarState.isLoadingOlderHistory=false;
+    chat.dispatchEvent(new Event('scroll'));
+  }
+}
 function renderAiHistory(items){
   const chat=document.getElementById('ai-chat');
   if(!chat) return;
@@ -8282,53 +8371,13 @@ function renderAiHistory(items){
       <div class="ai-message-content">选中一段文字后可针对选区处理；未选中时，我会参考整篇日记。</div>
     </div>`;
     enhanceAiCodeBlocks(chat);
+    ensureAiHistoryOlderButton();
     return;
   }
   for(const it of items){
-    const role = it.role === 'user' ? 'user' : 'assistant';
-    // For user, content is prompt; for assistant, show result (svg handled)
-    const content = role === 'user' ? (it.content || '') : (it.result || it.content || '');
-    // Reuse append but without re-saving
-    const svg = extractSvgString(content);
-    const isSvg = svg && svg.startsWith('<svg');
-    const msg=document.createElement('div');
-    msg.className='ai-message ai-message-'+role;
-    const label=document.createElement('div'); label.className='ai-message-label'; label.textContent = role==='user' ? '你' : 'Treeks AI';
-    const text=document.createElement('div'); text.className='ai-message-content';
-    if(role==='user'){
-      text.textContent = content;
-    } else {
-      text.innerHTML = isSvg ? '<span style="color:var(--fg-muted);font-size:12px">已生成 SVG</span>' : '';
-    }
-    msg.append(label, text);
-    if(role==='assistant'){
-      if(isSvg){
-        const card=renderSvgCard(sanitizeSvgText(svg), {name: 'ai-drawing'});
-        msg.appendChild(card);
-      } else if(content){
-        const md = stripCodeFence(content);
-        const resultEl=document.createElement('div'); resultEl.className='ai-result-md';
-        try{ resultEl.innerHTML = renderAiMarkdown(md); }catch(_){ resultEl.textContent = md; }
-        enhanceAiCodeBlocks(resultEl);
-        msg.appendChild(resultEl);
-        msg.appendChild(createAiResultActions(content));
-      }
-    }
-    // timestamp - subtle
-    if(it.created_at){
-      const ts=document.createElement('div'); ts.className='ai-message-time';
-      try{
-        const iso = String(it.created_at).replace(' ', 'T') + (String(it.created_at).includes('Z')?'':'Z');
-        const d=new Date(iso);
-        const now=new Date();
-        const isToday = d.toDateString()===now.toDateString();
-        ts.textContent = isToday ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
-        ts.title = d.toLocaleString();
-      }catch(_){ ts.textContent=String(it.created_at); }
-      msg.appendChild(ts);
-    }
-    chat.appendChild(msg);
+    chat.appendChild(createAiHistoryMessage(it));
   }
+  ensureAiHistoryOlderButton();
   chat.scrollTop = chat.scrollHeight;
   // trigger shadow update after render
   try{ chat.dispatchEvent(new Event('scroll')); }catch(_){}
@@ -8338,11 +8387,16 @@ async function loadAiHistoryForCurrentDiary(force){
   if(!force && aiSidebarState.historyLoadedFor === String(diaryId)) return;
   aiSidebarState.historyLoadedFor = String(diaryId);
   aiSidebarState.currentDiaryId = diaryId;
+  aiSidebarState.historyOldestId=null;
+  aiSidebarState.hasOlderHistory=false;
+  aiSidebarState.isLoadingOlderHistory=false;
   try{
     const _chat=document.getElementById('ai-chat');
     if(_chat && !_chat.querySelector('.ai-message')){ _chat.innerHTML='<div class="ai-loading-skeleton"><div class="ai-skeleton-line w-80"></div><div class="ai-skeleton-line w-60"></div><div class="ai-skeleton-line w-70"></div></div>'; }
     const data = await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100');
-    renderAiHistory(data.items||[]);
+    const items=data.items||[];
+    syncAiHistoryWindow(data, items);
+    renderAiHistory(items);
     updateAiContextIndicator();
   }catch(e){
     // keep local fallback
@@ -8353,6 +8407,9 @@ async function clearAiHistoryForCurrentDiary(){
   try{
     await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId)), { method:'DELETE' });
   }catch(_){}
+  aiSidebarState.historyOldestId=null;
+  aiSidebarState.hasOlderHistory=false;
+  aiSidebarState.isLoadingOlderHistory=false;
   renderAiHistory([]);
 }
 

@@ -13,6 +13,7 @@ const dbDir = path.join(tempRoot, 'data');
 const uploadDir = path.join(tempRoot, 'uploads');
 fs.mkdirSync(dbDir, { recursive: true });
 fs.mkdirSync(uploadDir, { recursive: true });
+process.env.TREEKS_RUNTIME_DB_DIR = dbDir;
 
 let child;
 let serverOutput = '';
@@ -86,6 +87,29 @@ async function main() {
 
   const alice = await register('alice_test');
   const bob = await register('bob_test');
+
+  // AI conversations must expose the latest window first, then page backwards.
+  const db = require('../db').db;
+  const aiDiaryResponse = await request('/api/diaries', {
+    method: 'POST',
+    headers: auth(alice.token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title: 'AI history', content: 'Conversation archive' })
+  });
+  assert.equal(aiDiaryResponse.res.status, 201, JSON.stringify(aiDiaryResponse.data));
+  const aiDiaryId = aiDiaryResponse.data.id;
+  const insertConversation = db.prepare(`
+    INSERT INTO ai_conversations
+      (user_id, diary_id, role, content, result, action, model_id, mode, created_at)
+    VALUES (?, ?, ?, ?, '', 'ask', '', 'ask', ?)
+  `);
+  const baseTime = new Date('2026-01-01T00:00:00.000Z').getTime();
+  const insertMany = db.transaction(() => {
+    for (let i = 1; i <= 125; i += 1) {
+      const createdAt = new Date(baseTime + i * 1000).toISOString().slice(0, 19).replace('T', ' ');
+      insertConversation.run(alice.user.id, aiDiaryId, 'user', `message-${i}`, createdAt);
+    }
+  });
+  insertMany();
 
   let out = await request('/api/diaries/blocked-users', { headers: auth(alice.token) });
   assert.equal(out.res.status, 200);
@@ -178,6 +202,23 @@ async function main() {
   out = await request('/api/messages/conversations', { headers: auth(alice.token) });
   assert.ok(Array.isArray(out.data.items), 'conversations must return items');
 
+  const latestAiHistory = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&limit=100`, { headers: auth(alice.token) });
+  assert.equal(latestAiHistory.res.status, 200);
+  assert.equal(latestAiHistory.data.items.length, 100);
+  assert.equal(latestAiHistory.data.total, 125);
+  assert.equal(latestAiHistory.data.has_more, true);
+  assert.equal(latestAiHistory.data.items[0].content, 'message-26');
+  assert.equal(latestAiHistory.data.items.at(-1).content, 'message-125');
+  assert.equal(latestAiHistory.data.oldest_id, latestAiHistory.data.items[0].id);
+  const oldestId = latestAiHistory.data.oldest_id;
+
+  const olderAiHistory = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&limit=100&before_id=${oldestId}`, { headers: auth(alice.token) });
+  assert.equal(olderAiHistory.res.status, 200);
+  assert.equal(olderAiHistory.data.items.length, 25);
+  assert.equal(olderAiHistory.data.has_more, false);
+  assert.equal(olderAiHistory.data.items[0].content, 'message-1');
+  assert.equal(olderAiHistory.data.items.at(-1).content, 'message-25');
+
   // ===== 改进项回归：登录限流（15 分钟 20 次 → 第 21 次 429） =====
   // 注意：同一 IP 已登录 2 次（alice/bob register），此处再打 18 次错误密码应触发 429
   let limited = false;
@@ -202,5 +243,9 @@ main().catch(error => {
     child.kill();
     await new Promise(resolve => child.once('exit', resolve));
   }
-  fs.rmSync(tempRoot, { recursive: true, force: true });
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } catch (_) {
+    // Windows can briefly retain SQLite WAL handles; the directory is isolated.
+  }
 });
