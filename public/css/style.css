@@ -12420,6 +12420,8 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-message-actions-row{ opacity: 0.82; transition: opacity 0.16s var(--ease-smooth); }
 .ai-message:hover .ai-message-actions-row{ opacity: 1; }
 .ai-message-copy.ai-message-delete{ color: var(--fg-muted); }
+.ai-message-undo{ display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg-muted); font-size: 11px; }
+.ai-message-undo span{ flex: 1; }
 .ai-message-copy.ai-message-delete:hover{ color: var(--danger); border-color: rgba(217,104,92,0.22); background: rgba(217,104,92,0.08); }
 /* scroll shadows for chat */
 .ai-chat { position: relative; }

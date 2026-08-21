@@ -8843,8 +8843,19 @@ function appendAiMessage(role, content, result = '') {
     cp.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawContent); cp.textContent='已复制'; setTimeout(()=> cp.textContent='复制', 1100);}catch(_){} });
     const retry=document.createElement('button'); retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重试'; retry.title='用本条内容重试'; retry.setAttribute('aria-label','重试');
     retry.addEventListener('click', ()=>{ const ta=document.getElementById('ai-prompt'); if(ta){ ta.value=String(rawContent||'').trim(); ta.focus(); autoResizeAiPrompt(); } });
-    const del=document.createElement('button'); del.type='button'; del.className='ai-message-copy ai-message-delete'; del.textContent='删除'; del.title='移除本条显示（不影响历史记录）';
-    del.addEventListener('click', ()=>{ message.remove(); try{ const empty=document.getElementById('ai-empty'); const chat=document.getElementById('ai-chat'); if(empty && chat && chat.querySelectorAll('.ai-message').length<=1) empty.style.display='flex'; }catch(_){} });
+    const del=document.createElement('button'); del.type='button'; del.className='ai-message-copy ai-message-delete'; del.textContent='撤回'; del.title='撤回本条显示（5s 内可撤销）';
+    del.addEventListener('click', ()=>{
+      message.style.opacity='0.45';
+      const bar=document.createElement('div'); bar.className='ai-message-undo';
+      bar.innerHTML='<span>已撤回</span>';
+      const undo=document.createElement('button'); undo.type='button'; undo.className='ai-message-copy'; undo.textContent='撤销';
+      let timer=null; let dismissed=false;
+      const restore=()=>{ if(dismissed) return; dismissed=true; clearTimeout(timer); bar.remove(); message.style.opacity=''; };
+      undo.addEventListener('click', restore);
+      bar.appendChild(undo);
+      message.appendChild(bar);
+      timer=setTimeout(()=>{ if(dismissed) return; dismissed=true; message.remove(); bar.remove(); try{ const empty=document.getElementById('ai-empty'); const chat=document.getElementById('ai-chat'); if(empty && chat && chat.querySelectorAll('.ai-message').length<=1) empty.style.display='flex'; }catch(_){} }, 5200);
+    });
     row.append(cp, retry, del); text.appendChild(row);
   } else { text.innerHTML = renderAiMarkdown(rawContent); }
   // SVG card handling: if content or result contains <svg>, render selectable card instead of / in addition to markdown
