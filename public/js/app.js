@@ -8344,7 +8344,11 @@ async function loadOlderAiHistory(){
     const data=await api(historyUrl);
     const items=data.items||[];
     const fragment=document.createDocumentFragment();
-    for(const it of items) fragment.appendChild(createAiHistoryMessage(it));
+    for(const it of items) {
+      const message=createAiHistoryMessage(it);
+      if(aiSidebarState.activeSearchQuery) message.dataset.searchContext='true';
+      fragment.appendChild(message);
+    }
     document.getElementById('ai-history-older')?.after(fragment);
     syncAiHistoryWindow(data, items);
     ensureAiHistoryOlderButton();

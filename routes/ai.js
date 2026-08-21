@@ -164,6 +164,7 @@ router.get('/conversations', authRequired, (req, res)=>{
   const beforeId = Number.parseInt(req.query.before_id, 10);
   const hasCursor = Number.isInteger(beforeId) && beforeId > 0;
   const cursorSql = hasCursor ? ' AND id < ?' : '';
+  const searchCursorSql = hasCursor ? ' WHERE c.id < ?' : '';
   let rows;
   let total;
   let hasMore;
@@ -190,7 +191,7 @@ router.get('/conversations', authRequired, (req, res)=>{
     const searchListParams = [...searchBase];
     if(hasCursor) searchListParams.push(beforeId);
     searchListParams.push(limit);
-    rows = db.prepare(`${searchCte} SELECT c.*, CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS search_hit FROM context ctx JOIN ai_conversations c ON c.id=ctx.id LEFT JOIN matched m ON m.id=c.id ${cursorSql} ORDER BY c.created_at DESC, c.id DESC LIMIT ?`).all(...searchListParams);
+    rows = db.prepare(`${searchCte} SELECT c.*, CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS search_hit FROM context ctx JOIN ai_conversations c ON c.id=ctx.id LEFT JOIN matched m ON m.id=c.id ${searchCursorSql} ORDER BY c.created_at DESC, c.id DESC LIMIT ?`).all(...searchListParams);
     total = db.prepare(`${searchCte} SELECT COUNT(*) AS count FROM context ctx JOIN ai_conversations c ON c.id=ctx.id`).get(...searchBase).count;
     matchCount = db.prepare(`${searchCte} SELECT COUNT(*) AS count FROM matched`).get(...searchBase).count;
     rows.reverse();

@@ -242,6 +242,15 @@ async function main() {
   assert.equal(contextualAiSearch.data.items[0].search_hit, 0);
   assert.equal(contextualAiSearch.data.items[1].search_hit, 1);
 
+  const contextualPage1 = await request(`/api/ai/conversations?diary_id=${threadDiary.data.id}&limit=1&search=${encodeURIComponent('unicorns')}`, { headers: auth(alice.token) });
+  assert.equal(contextualPage1.res.status, 200);
+  assert.deepEqual(contextualPage1.data.items.map(item => item.role), ['assistant']);
+  const contextualCursor = contextualPage1.data.oldest_id;
+  const contextualPage2 = await request(`/api/ai/conversations?diary_id=${threadDiary.data.id}&limit=1&before_id=${contextualCursor}&search=${encodeURIComponent('unicorns')}`, { headers: auth(alice.token) });
+  assert.equal(contextualPage2.res.status, 200);
+  assert.deepEqual(contextualPage2.data.items.map(item => item.role), ['user']);
+  assert.equal(contextualPage2.data.has_more, false);
+
   const escapedAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=${encodeURIComponent('needle-100%_')}`, { headers: auth(alice.token) });
   assert.equal(escapedAiSearch.res.status, 200);
   assert.equal(escapedAiSearch.data.total, 1);
