@@ -7835,8 +7835,29 @@ const aiSidebarState = {
   mode: (function(){ try{ return localStorage.getItem('treeks_ai_mode') || 'ask'; }catch(_){ return 'ask'; }})(),
   pendingEdit: null,
   currentDiaryId: null,
-  historyLoadedFor: null
+  historyLoadedFor: null,
+  isGenerating: false,
+  abortController: null
 };
+function setAiComposerBusy(busy){
+  aiSidebarState.isGenerating = !!busy;
+  const sendBtn=document.getElementById('ai-send-btn')||document.querySelector('.ai-send-btn');
+  const stopBtn=document.getElementById('btn-ai-stop');
+  const promptEl=document.getElementById('ai-prompt');
+  const actions=document.querySelectorAll('.ai-quick-action');
+  if(sendBtn){ sendBtn.style.display = busy ? 'none' : ''; sendBtn.disabled=!!busy; }
+  if(stopBtn) stopBtn.style.display = busy ? 'inline-flex' : 'none';
+  if(promptEl){ promptEl.disabled=!!busy; if(!busy) promptEl.focus(); }
+  actions.forEach(b=>{ b.disabled=!!busy; b.style.opacity= busy ? '0.55' : ''; });
+}
+function autoResizeAiPrompt(){
+  const ta=document.getElementById('ai-prompt');
+  if(!ta) return;
+  ta.style.height='auto';
+  const max=112;
+  ta.style.height=Math.min(ta.scrollHeight, max)+'px';
+  ta.style.overflowY = ta.scrollHeight>max ? 'auto' : 'hidden';
+}
 
 async function loadAiModels() {
   const select = document.getElementById('ai-model-select');
@@ -8131,10 +8152,20 @@ function renderAiHistory(items){
   chat.innerHTML='';
   if(!items || !items.length){
     chat.innerHTML = `
-    <div class="ai-message ai-message-assistant">
+    <div class="ai-empty" id="ai-empty">
+      <div class="ai-empty-icon" aria-hidden="true">✦</div>
+      <div class="ai-empty-title">从当前笔记开始</div>
+      <div class="ai-empty-desc">选中一段文字可针对选区处理，未选中时默认参考整篇日记。试试「续写」或「润色」。</div>
+      <div class="ai-empty-actions">
+        <button class="ai-quick-action" data-ai-action="continue">试试续写</button>
+        <button class="ai-quick-action" data-ai-action="polish">试试润色</button>
+      </div>
+    </div>
+    <div class="ai-message ai-message-assistant" id="ai-welcome-msg">
       <div class="ai-message-label">Treeks AI</div>
       <div class="ai-message-content">选中一段文字后可针对选区处理；未选中时，我会参考整篇日记。</div>
     </div>`;
+    enhanceAiCodeBlocks(chat);
     return;
   }
   for(const it of items){
@@ -8208,6 +8239,7 @@ async function clearAiHistoryForCurrentDiary(){
 }
 
 function clearAiChat() {
+  if(!confirm('清空当前日记的 AI 对话？')) return;
   clearAiHistoryForCurrentDiary();
 }
 
@@ -8581,9 +8613,11 @@ function initAiSvgFeature(){
   window.closeAiSvgModal = closeAiSvgModal;
 }
 
+function enhanceAiCodeBlocks(root){ try{ root.querySelectorAll('pre').forEach(pre=>{ if(pre.querySelector('.ai-code-copy')) return; const btn=document.createElement('button'); btn.className='ai-code-copy'; btn.type='button'; btn.textContent='复制'; btn.addEventListener('click', async ()=>{ try{ const code=pre.querySelector('code'); const t= code ? code.innerText : pre.innerText; await navigator.clipboard.writeText(t); btn.textContent='已复制'; setTimeout(()=> btn.textContent='复制', 1100); }catch(_){} }); pre.style.position='relative'; pre.appendChild(btn); }); }catch(_){} }
 function appendAiMessage(role, content, result = '') {
   const chat = document.getElementById('ai-chat');
   if (!chat) return;
+  const emptyEl=document.getElementById('ai-empty'); if(emptyEl) emptyEl.style.display='none';
   const message = document.createElement('div');
   message.className = `ai-message ai-message-${role}`;
   const label = document.createElement('div');
@@ -8591,7 +8625,8 @@ function appendAiMessage(role, content, result = '') {
   label.textContent = role === 'user' ? '你' : 'Treeks AI';
   const text = document.createElement('div');
   text.className = 'ai-message-content';
-  text.innerHTML = renderAiMarkdown(content);
+  const rawContent=String(content||'');
+  if(role==='user'){ text.textContent=rawContent; const row=document.createElement('div'); row.className='ai-message-actions-row'; const cp=document.createElement('button'); cp.type='button'; cp.className='ai-message-copy'; cp.textContent='复制'; cp.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawContent); cp.textContent='已复制'; setTimeout(()=> cp.textContent='复制', 1100);}catch(_){} }); row.appendChild(cp); text.appendChild(row); } else { text.innerHTML = renderAiMarkdown(rawContent); }
   // SVG card handling: if content or result contains <svg>, render selectable card instead of / in addition to markdown
   const svgInContent = extractSvgString(content);
   const svgInResult = extractSvgString(result);
@@ -8614,6 +8649,7 @@ function appendAiMessage(role, content, result = '') {
     const resultEl = document.createElement('div');
     resultEl.className = 'ai-result-md';
     resultEl.innerHTML = renderAiMarkdown(md);
+    enhanceAiCodeBlocks(resultEl);
     message.appendChild(resultEl);
 
     const actions = document.createElement('div');
@@ -8796,13 +8832,14 @@ function makeAiWritingResult(action, context, prompt = '') {
 }
 
 async function runAiAction(action, prompt = '') {
+  if(aiSidebarState.isGenerating){ toast('正在生成中，请稍候',''); return; }
   const context = getAiWritingContext();
-  // 编辑模式下，自定义输入直接走 edit
   if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
   const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
-  const displayAction = action === 'edit' ? ('编辑：' + (prompt || '优化当前笔记')) : action === 'ask' ? prompt : null;
   if (action === 'custom' || action === 'ask' || action === 'edit' || action === 'draw') appendAiMessage('user', prompt || labels[action] || '处理当前内容');
   else appendAiMessage('user', labels[action] || '处理当前内容');
+  setAiComposerBusy(true);
+  aiSidebarState.abortController = (typeof AbortController!=='undefined') ? new AbortController() : null;
 
   // streaming with thinking like Claude Code
   const chatEl = document.getElementById('ai-chat');
@@ -8837,8 +8874,8 @@ async function runAiAction(action, prompt = '') {
   async function fetchStreamSSE(url){
     const headers = { 'Accept': 'text/event-stream' };
     if(state.token) headers['Authorization']='Bearer '+state.token;
-    // also allow token via query; server middleware should accept it
-    const res = await fetch(url, { headers });
+    const signal = aiSidebarState.abortController ? aiSidebarState.abortController.signal : undefined;
+    const res = await fetch(url, { headers, signal });
     if(!res.ok){
       const text = await res.text().catch(()=> '');
       throw new Error(text || ('请求失败 ('+res.status+')'));
@@ -8881,15 +8918,14 @@ async function runAiAction(action, prompt = '') {
   try{
     await fetchStreamSSE(streamUrl);
     if(!output){
-      // fallback local
       const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt);
       output={ note: local.note, result: stripCodeFence(local.result||''), mode: action };
       if(streamHost) streamHost.remove();
     } else {
-      // remove temporary streaming host and render final message via existingUI
       if(streamHost) streamHost.remove();
     }
   } catch(error){
+    if(error && error.name==='AbortError'){ if(streamHost) streamHost.remove(); setAiComposerBusy(false); return; }
     if(streamHost) streamHost.remove();
     if(thinking) try{ thinking.setAllDone(); }catch(_){}
     if(streaming) try{ streaming.destroy(); }catch(_){}
@@ -8899,12 +8935,13 @@ async function runAiAction(action, prompt = '') {
         const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined }) });
         if(response.available) output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action };
         else { const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt); output={ note: local.note, result: stripCodeFence(local.result||''), mode: action }; }
-      } catch(e){ toast(error.message||e.message, 'error'); return; }
+      } catch(e){ setAiComposerBusy(false); toast(error.message||e.message, 'error'); return; }
     } else {
       // we already have partial output from stream, keep it
     }
   }
 
+  setAiComposerBusy(false);
   // diary-bound: after success, the server has persisted; refresh history softly after rendering
   setTimeout(()=>{ try{ loadAiHistoryForCurrentDiary(true); }catch(_){} }, 1200);
   if (output.mode === 'edit' && action !== 'draw') {
@@ -8991,6 +9028,29 @@ function initAiSidebar() {
     if (getAiMode() === 'edit') runAiAction('edit', value);
     else if (getAiMode() === 'ask') runAiAction('ask', value);
     else runAiAction('custom', value);
+  });
+  prompt.addEventListener('input', ()=>{ autoResizeAiPrompt(); try{ const cc=document.getElementById('ai-char-count'); if(cc) cc.textContent=String(prompt.value.length); }catch(_){} });
+  autoResizeAiPrompt();
+  const sendBtnElX = document.querySelector('.ai-send-btn'); if(sendBtnElX && !sendBtnElX.id) sendBtnElX.id='ai-send-btn';
+  if(!document.getElementById('btn-ai-stop')){
+    const stop=document.createElement('button'); stop.id='btn-ai-stop'; stop.type='button'; stop.className='ai-icon-btn'; stop.title='停止生成'; stop.setAttribute('aria-label','停止生成');
+    stop.style.cssText='display:none;width:36px;height:36px;border-radius:12px;background:#fff;border:1px solid rgba(0,0,0,0.08)';
+    stop.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
+    stop.addEventListener('click', ()=>{ try{ if(aiSidebarState.abortController) aiSidebarState.abortController.abort(); }catch(_){} setAiComposerBusy(false); });
+    const composerEl=document.getElementById('ai-composer'); if(composerEl) composerEl.appendChild(stop);
+  }
+  const copyBtn=document.getElementById('btn-ai-copy-context');
+  if(copyBtn && !copyBtn.dataset.bound){
+    copyBtn.dataset.bound='1';
+    copyBtn.addEventListener('click', async ()=>{
+      try{ const t=document.getElementById('ai-context-text')?.textContent||document.getElementById('ai-context-indicator')?.textContent||''; await navigator.clipboard.writeText(t); copyBtn.textContent='已复制'; setTimeout(()=> copyBtn.textContent='复制', 1200); }catch(_){}
+    });
+  }
+  document.addEventListener('keydown', (e)=>{
+    if(e.key==='Escape' && aiSidebarState.isOpen){
+      if(aiSidebarState.isGenerating && aiSidebarState.abortController){ try{ aiSidebarState.abortController.abort(); }catch(_){} setAiComposerBusy(false); }
+      else if(!e.ctrlKey && !e.metaKey) setAiSidebarOpen(false);
+    }
   });
   prompt.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey) {
