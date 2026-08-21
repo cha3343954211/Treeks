@@ -12249,7 +12249,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-result-md .markdown-body pre .ai-code-copy { z-index: 1; position: absolute; top: 8px; right: 8px; min-height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-paper); color: var(--fg-muted); font: inherit; font-size: 11px; font-weight: 600; cursor:pointer; box-shadow: var(--shadow-sm); }
 .ai-result-md .markdown-body pre .ai-code-copy:hover { color: var(--fg); border-color: var(--border-strong); }
 .ai-message-actions-row { display: flex; gap: 6px; margin-top: 6px; opacity: 0; transform: translateY(2px); transition: opacity 0.16s var(--ease-smooth), transform 0.16s var(--ease-smooth); }
-.ai-message-copy { border: 1px solid var(--border); background: var(--bg-paper); color: var(--fg-muted); font: inherit; font-size: 11px; padding:4px 8px; border-radius: 999px; cursor:pointer; }
+.ai-message-copy { border: 1px solid var(--border); background: var(--bg-paper); color: var(--fg-muted); font: inherit; font-size: 11px; padding:4px 8px; border-radius: 999px; cursor:pointer; transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth); }
 .ai-message-copy:hover { color: var(--fg); border-color: var(--border-strong); }
 .editor-pane { position: relative; }
 .ai-diff-layer { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; position: absolute; inset: 0; overflow: auto; padding: 16px 14px; background: var(--bg-paper); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); border-radius: 6px; z-index: 2; box-shadow: none; overflow-x: auto; }
@@ -12420,7 +12420,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-message:hover .ai-message-actions-row{ opacity: 1; transform: translateY(0); }
 .ai-message:focus-within .ai-message-actions-row{ opacity: 1; transform: translateY(0); }
 .ai-message-copy.ai-message-delete{ color: var(--fg-muted); }
-.ai-message-undo{ display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--fg-muted); font-size: 11px; box-shadow: var(--shadow-sm); animation: aiUndoIn .18s var(--ease-smooth); }
+.ai-message-undo{ display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--fg-muted); font-size: 11px; box-shadow: var(--shadow-sm); animation: aiUndoIn .18s var(--ease-smooth); transition: opacity 0.16s var(--ease-smooth), transform 0.16s var(--ease-smooth); }
 .ai-message-undo span{ flex: 1; }
 @keyframes aiUndoIn{ from{ opacity: 0; transform: translateY(4px); } to{ opacity: 1; transform: none; } }
 .ai-message-copy.ai-message-delete:hover{ color: var(--danger); border-color: rgba(217,104,92,0.22); background: rgba(217,104,92,0.08); }
