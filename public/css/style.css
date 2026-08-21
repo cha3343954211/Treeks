@@ -7766,32 +7766,25 @@ html, body {
   gap: 14px;
   padding: 16px;
   background: var(--bg-paper);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  transition: all 0.2s var(--ease);
+  border-radius: 6px;
+  box-shadow: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
   position: relative;
   overflow: hidden;
 }
 .friend-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, var(--accent-soft), transparent 60%);
-  opacity: 0;
-  transition: opacity 0.25s var(--ease);
-  pointer-events: none;
+  display: none;
 }
 .friend-card:hover {
-  border-color: var(--border-focus);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: none;
 }
-.friend-card:hover::before { opacity: 1; }
 .friend-request-card {
-  background: linear-gradient(135deg, rgba(76, 153, 92, 0.08), var(--bg-paper));
-  border-color: var(--border-focus);
+  background: var(--bg-paper);
+  border-color: var(--border-strong);
+  border-left: 3px solid var(--accent);
 }
 .friend-info { flex: 1; min-width: 0; }
 .friend-name {
@@ -7931,32 +7924,24 @@ html, body {
   gap: 14px;
   padding: 16px;
   background: var(--bg-paper);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 6px;
+  box-shadow: none;
   cursor: pointer;
-  transition: all 0.2s var(--ease);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
   position: relative;
 }
 .letter-card:hover {
-  border-color: var(--border-focus);
-  box-shadow: var(--shadow-md);
-  transform: translateX(2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: none;
 }
 .letter-unread {
-  background: linear-gradient(135deg, rgba(76, 153, 92, 0.06), var(--bg-paper));
-  border-color: var(--border-focus);
+  border-color: var(--border-strong);
+  border-left: 3px solid var(--accent);
 }
 .letter-unread::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 16px;
-  bottom: 16px;
-  width: 3px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
+  display: none;
 }
 .letter-body { flex: 1; min-width: 0; }
 .letter-header {
@@ -8114,12 +8099,11 @@ html, body {
 .shared-diary-card {
   padding: 16px;
   background: var(--bg-paper);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 6px;
+  box-shadow: none;
   cursor: pointer;
-  transition: all 0.2s var(--ease);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
   position: relative;
   overflow: hidden;
 }
