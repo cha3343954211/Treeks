@@ -8839,7 +8839,7 @@ function appendAiMessage(role, content, result = '') {
     const cp=document.createElement('button'); cp.type='button'; cp.className='ai-message-copy'; cp.textContent='复制'; cp.title='复制本条'; cp.setAttribute('aria-label','复制本条');
     cp.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawContent); cp.textContent='已复制'; setTimeout(()=> cp.textContent='复制', 1100);}catch(_){} });
     const retry=document.createElement('button'); retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重试'; retry.title='用本条内容重试'; retry.setAttribute('aria-label','重试');
-    retry.addEventListener('click', ()=>{ const ta=document.getElementById('ai-prompt'); if(ta){ ta.value=rawContent; ta.focus(); autoResizeAiPrompt(); } });
+    retry.addEventListener('click', ()=>{ const ta=document.getElementById('ai-prompt'); if(ta){ ta.value=String(rawContent||'').trim(); ta.focus(); autoResizeAiPrompt(); } });
     const del=document.createElement('button'); del.type='button'; del.className='ai-message-copy ai-message-delete'; del.textContent='删除'; del.title='移除本条显示（不影响历史记录）';
     del.addEventListener('click', ()=>{ message.remove(); try{ const empty=document.getElementById('ai-empty'); const chat=document.getElementById('ai-chat'); if(empty && chat && chat.querySelectorAll('.ai-message').length<=1) empty.style.display='flex'; }catch(_){} });
     row.append(cp, retry, del); text.appendChild(row);
@@ -8938,6 +8938,7 @@ function applyAiResult(result, mode) {
   textarea.focus();
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
   toast(replaceSelection ? '已替换选区' : '已插入正文', 'success');
+  try{ document.getElementById('ai-chat')?.scrollTo({top: document.getElementById('ai-chat').scrollHeight, behavior:'smooth'}); }catch(_){}
 }
 
 function applyAiTitle(title) {
@@ -9286,7 +9287,7 @@ function initAiSidebar() {
       bar.style.display = isHidden ? 'flex' : 'none';
       if(isHidden){ input.focus(); input.select(); } else { input.value=''; highlight(''); }
     });
-    closeBtn.addEventListener('click', ()=>{ bar.style.display='none'; input.value=''; highlight(''); });
+    closeBtn.addEventListener('click', ()=>{ bar.style.display='none'; try{ document.querySelectorAll('#ai-chat mark').forEach(m=>{ const t=document.createTextNode(m.textContent); m.replaceWith(t); }); }catch(_){} input.value=''; highlight(''); });
     input.addEventListener('input', ()=>{ lastQuery=input.value; highlight(lastQuery); });
     input.addEventListener('keydown', (e)=>{
       if(e.key==='Escape'){ bar.style.display='none'; input.value=''; highlight(''); btnSearch.focus(); }
