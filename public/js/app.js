@@ -7860,9 +7860,10 @@ function setAiComposerBusy(busy){
   const actions=document.querySelectorAll('.ai-quick-action');
   if(sendBtn){ sendBtn.style.display = busy ? 'none' : ''; sendBtn.disabled=!!busy; }
   if(stopBtn) stopBtn.style.display = busy ? 'inline-flex' : 'none';
-  if(promptEl){ promptEl.disabled=!!busy; if(!busy) promptEl.focus(); }
+  if(promptEl) promptEl.disabled=!!busy;
   if(modelSel) modelSel.disabled = !!busy || aiSidebarState.models.length===0;
   actions.forEach(b=>{ b.disabled=!!busy; b.style.opacity= busy ? '0.55' : ''; });
+  if(!busy && aiSidebarState.isOpen) promptEl?.focus();
 }
 
 function cancelAiGeneration(){
@@ -9365,9 +9366,19 @@ async function runAiAction(action, prompt = '', options = {}) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buf='';
+    let clientTimedOut=false;
+    let idleTimer=null;
+    const overallTimer=setTimeout(()=>{ clientTimedOut=true; aiSidebarState.abortController?.abort(); },190000);
+    const touchStream=()=>{
+      clearTimeout(idleTimer);
+      idleTimer=setTimeout(()=>{ clientTimedOut=true; aiSidebarState.abortController?.abort(); },40000);
+    };
+    touchStream();
+    try{
     while(true){
       const {done, value}=await reader.read();
       if(done) break;
+      touchStream();
       buf += decoder.decode(value, {stream:true});
       let idx;
       while((idx = buf.indexOf('\n\n')) !== -1){
@@ -9399,6 +9410,10 @@ async function runAiAction(action, prompt = '', options = {}) {
       for(const line of lines){ if(line.startsWith('event:')) event=line.slice(6).trim(); else if(line.startsWith('data:')) data+=line.slice(5).trim(); }
       if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, scope:j.scope||(metaInfo&&metaInfo.scope)||'note', threadId:j.thread_id||'' }; }catch(_){} }
     }
+    } finally {
+      clearTimeout(idleTimer); clearTimeout(overallTimer);
+    }
+    if(clientTimedOut) throw new Error('AI 响应超时，请稍后重试');
   }
   try{
     await fetchStreamSSE(streamUrl);
@@ -9701,7 +9716,7 @@ function initAiSidebar() {
   const sendBtnElX = document.querySelector('.ai-send-btn'); if(sendBtnElX && !sendBtnElX.id) sendBtnElX.id='ai-send-btn';
   if(!document.getElementById('btn-ai-stop')){
     const stop=document.createElement('button'); stop.id='btn-ai-stop'; stop.type='button'; stop.className='ai-icon-btn'; stop.title='停止生成'; stop.setAttribute('aria-label','停止生成');
-    stop.style.cssText='display:none;width:36px;height:36px;border-radius:6px;background:var(--bg-paper);border:1px solid var(--border)';
+    stop.style.cssText='display:none;width:36px;height:36px;border-radius:6px;background:var(--bg-paper);border:1px solid var(--border);grid-column:2;grid-row:1';
     stop.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
     stop.addEventListener('click', ()=>cancelAiGeneration());
     const composerEl=document.getElementById('ai-composer'); if(composerEl) composerEl.appendChild(stop);

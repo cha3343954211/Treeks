@@ -310,7 +310,17 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   sseWrite(res,'meta',{model:{id:aiModel.id,name:aiModel.name,model:aiModel.model},mode: a==='draw' ? 'draw' : (isEdit?'edit':(a==='ask'?'ask':'assist')),scope:editScope,note:'已由 '+aiModel.name+' 生成',thinkingSteps, diary_id: diaryCtx.diaryId});
   for(let i=0;i<thinkingSteps.length;i++){ sseWrite(res,'thinking',{index:i,total:thinkingSteps.length,text:thinkingSteps[i],state:'done'}); await new Promise(r=>setTimeout(r,180+Math.random()*220)); }
   sseWrite(res,'thinking_done',{});
-  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),45000); req.on('close',()=>{ try{controller.abort();}catch(_){} });
+  const controller=new AbortController();
+  let timedOut=false;
+  let clientClosed=false;
+  let idleTimer=null;
+  const resetIdleTimer=()=>{
+    clearTimeout(idleTimer);
+    idleTimer=setTimeout(()=>{ timedOut=true; controller.abort(); },30000);
+  };
+  const overallTimer=setTimeout(()=>{ timedOut=true; controller.abort(); },180000);
+  resetIdleTimer();
+  req.on('close',()=>{ clientClosed=true; try{controller.abort();}catch(_){} });
   const persistConversation = (text) => saveConversations(req.user.id, diaryCtx.diaryId, [
     {role:'user', content: (p||labelsForSave(a,p)), result:'', action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))},
     {role:'assistant', content:text, result:text, action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}
@@ -325,7 +335,7 @@ router.post('/assist/stream', authRequired, async (req, res) => {
       const streamingUnsupported = [404,405,501].includes(resp.status) || /stream/i.test(String(errText));
       if(!streamingUnsupported){
         sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'});
-        clearTimeout(timeout);
+        clearTimeout(idleTimer); clearTimeout(overallTimer);
         return res.end();
       }
       console.error('[AI stream] falling back to non-streaming provider:',resp.status,String(errText).slice(0,400));
@@ -345,9 +355,9 @@ router.post('/assist/stream', authRequired, async (req, res) => {
         savedThreadId=persistConversation(fr)||null;
         sseWrite(res,'delta',{text:fr.slice(0,8000)});
         sseWrite(res,'done',{result:fr,scope:editScope,thread_id:savedThreadId});
-        clearTimeout(timeout); return res.end();
+        clearTimeout(idleTimer); clearTimeout(overallTimer); return res.end();
       }
-      sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(timeout); return res.end();
+      sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(idleTimer); clearTimeout(overallTimer); return res.end();
     }
     const providerContentType=(resp.headers.get('content-type')||'').toLowerCase();
     if(!resp.body?.getReader || providerContentType.includes('application/json')){
@@ -360,19 +370,25 @@ router.post('/assist/stream', authRequired, async (req, res) => {
       savedThreadId=persistConversation(text)||null;
       sseWrite(res,'delta',{text});
       sseWrite(res,'done',{result:text,scope:editScope,thread_id:savedThreadId});
-      clearTimeout(timeout); return res.end();
+      clearTimeout(idleTimer); clearTimeout(overallTimer); return res.end();
     }
     const reader=resp.body.getReader();
     const decoder=new TextDecoder('utf-8'); let buffer=''; let full='';
-    while(true){ const {done,value}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const choice=j?.choices?.[0]||{}; const delta=choice?.delta?.content||''; const finalOnly=choice?.message?.content||''; const text=delta || (!full && finalOnly); if(text){ full+=text; sseWrite(res,'delta',{text}); } }catch(_){} } }
+    while(true){ const {done,value}=await reader.read(); if(done) break; resetIdleTimer(); buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const choice=j?.choices?.[0]||{}; const delta=choice?.delta?.content||''; const finalOnly=choice?.message?.content||''; const text=delta || (!full && finalOnly); if(text){ full+=text; sseWrite(res,'delta',{text}); } }catch(_){} } }
     if(buffer.trim().startsWith('data:')){ const payload=buffer.trim().slice(5).trim(); if(payload && payload!=='[DONE]'){ try{ const j=JSON.parse(payload); const d=j?.choices?.[0]?.delta?.content||''; if(d){ full+=d; sseWrite(res,'delta',{text:d}); } }catch(_){} } }
     let finalText=full.trim();
     const fence=finalText.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
     if(fence) finalText=fence[1].trim();
     savedThreadId=persistConversation(finalText||full)||null;
     sseWrite(res,'done',{result:finalText||full, scope:editScope, diary_id: diaryCtx.diaryId, thread_id:savedThreadId});
-    clearTimeout(timeout); res.end();
-  } catch(e){ clearTimeout(timeout); if(e.name==='AbortError') sseWrite(res,'error',{error:'AI 请求超时，请稍后重试'}); else { console.error('[AI stream] failed',e.message); sseWrite(res,'error',{error:'AI 服务连接失败，请稍后重试'}); } res.end(); }
+    clearTimeout(idleTimer); clearTimeout(overallTimer); res.end();
+  } catch(e){
+    clearTimeout(idleTimer); clearTimeout(overallTimer);
+    if(clientClosed){ return res.end(); }
+    if(e.name==='AbortError') sseWrite(res,'error',{error:timedOut?'AI 响应超时，请稍后重试':'AI 连接已中断，请稍后重试'});
+    else { console.error('[AI stream] failed',e.message); sseWrite(res,'error',{error:'AI 服务连接失败，请稍后重试'}); }
+    res.end();
+  }
 });
 
 router.post('/assist', authRequired, async (req, res) => {
