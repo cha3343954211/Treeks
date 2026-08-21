@@ -251,6 +251,16 @@ async function main() {
   assert.deepEqual(contextualPage2.data.items.map(item => item.role), ['user']);
   assert.equal(contextualPage2.data.has_more, false);
 
+  const contextAssistantId = contextualAiSearch.data.items.find(item => item.role === 'assistant').id;
+  const foreignConversationDelete = await request(`/api/ai/conversations/${contextAssistantId}`, { method: 'DELETE', headers: auth(bob.token) });
+  assert.equal(foreignConversationDelete.res.status, 404);
+  const conversationDelete = await request(`/api/ai/conversations/${contextAssistantId}`, { method: 'DELETE', headers: auth(alice.token) });
+  assert.equal(conversationDelete.res.status, 200);
+  assert.equal(conversationDelete.data.deleted_count, 2);
+  const threadAfterDelete = await request(`/api/ai/conversations?diary_id=${threadDiary.data.id}`, { headers: auth(alice.token) });
+  assert.equal(threadAfterDelete.res.status, 200);
+  assert.equal(threadAfterDelete.data.total, 0);
+
   const escapedAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=${encodeURIComponent('needle-100%_')}`, { headers: auth(alice.token) });
   assert.equal(escapedAiSearch.res.status, 200);
   assert.equal(escapedAiSearch.data.total, 1);

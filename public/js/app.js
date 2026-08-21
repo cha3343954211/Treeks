@@ -8276,6 +8276,7 @@ function createAiHistoryMessage(item){
   const msg=document.createElement('div');
   msg.className='ai-message ai-message-'+role;
   msg.dataset.conversationId=String(item.id || '');
+  if(item.thread_id) msg.dataset.threadId=String(item.thread_id);
   const label=document.createElement('div'); label.className='ai-message-label'; label.textContent = role==='user' ? '你' : 'Treeks AI';
   const text=document.createElement('div'); text.className='ai-message-content';
   if(role==='user'){
@@ -8296,6 +8297,36 @@ function createAiHistoryMessage(item){
       msg.appendChild(resultEl);
       msg.appendChild(createAiResultActions(content));
     }
+  }
+  if(item.id){
+    const actions=document.createElement('div'); actions.className='ai-message-actions-row';
+    const rawText=role==='user' ? (item.content||'') : (item.result||item.content||'');
+    const copy=document.createElement('button');
+    copy.type='button'; copy.className='ai-message-copy'; copy.textContent='复制'; copy.title='复制本条'; copy.setAttribute('aria-label','复制本条');
+    copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawText); copy.textContent='已复制'; setTimeout(()=>copy.textContent='复制',1100); }catch(_){} });
+    const remove=document.createElement('button');
+    remove.type='button'; remove.className='ai-message-copy ai-message-delete'; remove.textContent='删除对话'; remove.title='删除这条问答记录'; remove.setAttribute('aria-label','删除这条问答记录');
+    remove.addEventListener('click', async ()=>{
+      if(!confirm('确定删除这条 AI 问答记录？')) return;
+      remove.disabled=true; remove.textContent='删除中…';
+      try{
+        await api('/api/ai/conversations/'+encodeURIComponent(String(item.id)), {method:'DELETE'});
+        const chat=document.getElementById('ai-chat');
+        if(chat && item.thread_id){
+          chat.querySelectorAll('.ai-message[data-thread-id="'+String(item.thread_id).replace(/"/g,'\\"')+'"]').forEach(node=>node.remove());
+        } else {
+          msg.remove();
+        }
+        if(chat && !chat.querySelector('.ai-message')) renderAiHistory([]);
+        if(aiSidebarState.activeSearchQuery) loadAiHistoryForCurrentDiary(true);
+        toast('已删除对话','success');
+      }catch(e){
+        remove.disabled=false; remove.textContent='删除对话';
+        toast(e.message||'删除失败','error');
+      }
+    });
+    actions.append(copy,remove);
+    msg.appendChild(actions);
   }
   if(item.created_at){
     const ts=document.createElement('div'); ts.className='ai-message-time';

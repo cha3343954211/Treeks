@@ -219,6 +219,20 @@ router.delete('/conversations', authRequired, (req, res)=>{
   db.prepare('DELETE FROM ai_conversations WHERE user_id=? AND diary_id=?').run(req.user.id, diaryId);
   res.json({ message: '已清空' });
 });
+router.delete('/conversations/:id', authRequired, (req, res)=>{
+  const messageId = Number.parseInt(req.params.id, 10);
+  if(!Number.isInteger(messageId) || messageId <= 0) return res.status(400).json({ error: '对话 ID 无效' });
+  const target = db.prepare('SELECT id, user_id, diary_id, thread_id FROM ai_conversations WHERE id=?').get(messageId);
+  if(!target || target.user_id !== req.user.id) return res.status(404).json({ error: '对话不存在' });
+
+  let deletedCount;
+  if(target.thread_id) {
+    deletedCount = db.prepare('DELETE FROM ai_conversations WHERE user_id=? AND thread_id=?').run(req.user.id, target.thread_id).changes;
+  } else {
+    deletedCount = db.prepare('DELETE FROM ai_conversations WHERE user_id=? AND id=?').run(req.user.id, target.id).changes;
+  }
+  res.json({ message: '已删除', deleted_count: deletedCount });
+});
 router.get('/status', authRequired, (req, res) => {
   const models = getEnabledModels().map(({ id, name, model, is_default, source }) => ({
     id, name, model, is_default, source
