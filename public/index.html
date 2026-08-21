@@ -784,8 +784,8 @@
                 <button class="ai-quick-action ai-quick-action-draw" data-ai-action="draw" title="让 AI 绘制 SVG 矢量图"><span class="ai-qa-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></span>绘图</button>
               </div>
             </div>
-            <div class="ai-chat-search" id="ai-chat-search" style="display:none"><input id="ai-chat-search-input" type="search" placeholder="搜索当前日记的对话" aria-label="搜索 AI 对话"><span class="ai-chat-search-count" id="ai-chat-search-count"></span><button class="ai-icon-btn" id="ai-chat-search-close" title="关闭搜索" aria-label="关闭搜索"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
-            <div class="ai-chat" id="ai-chat" aria-live="polite">
+            <div class="ai-chat-search" id="ai-chat-search" style="display:none"><input id="ai-chat-search-input" type="search" placeholder="搜索当前日记的对话" aria-label="搜索 AI 对话"><span class="ai-chat-search-count" id="ai-chat-search-count" aria-live="polite" aria-atomic="true"></span><button class="ai-icon-btn" id="ai-chat-search-close" title="关闭搜索" aria-label="关闭搜索"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+            <div class="ai-chat" id="ai-chat" aria-live="polite" aria-label="AI 对话" role="log">
               <div class="ai-empty" id="ai-empty">
                 <div class="ai-empty-icon" aria-hidden="true">✦</div>
                 <div class="ai-empty-title">从当前笔记开始</div>
@@ -802,7 +802,7 @@
               </div>
             </div>
             <div class="ai-composer-wrap">
-              <div class="ai-composer-meta"><span class="ai-composer-hint" id="ai-composer-hint">Enter 发送 · Shift+Enter 换行 · / 触发指令</span><span class="ai-char-count"><span id="ai-char-count">0</span>/500</span></div>
+              <div class="ai-composer-meta"><span class="ai-composer-hint" id="ai-composer-hint" aria-hidden="true">Enter 发送 · Shift+Enter 换行 · / 触发指令</span><span class="ai-char-count" aria-live="polite"><span id="ai-char-count">0</span>/500</span></div>
               <form class="ai-composer" id="ai-composer">
                 <textarea id="ai-prompt" aria-describedby="ai-context-text ai-composer-hint" rows="2" maxlength="500" placeholder="例如：让这段更有画面感，或输入 / 查看指令" aria-label="向 AI 写作助手提问"></textarea>
                 <button class="ai-send-btn" type="submit" title="发送 (Enter)" aria-label="发送">

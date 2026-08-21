@@ -11942,7 +11942,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   width: var(--ai-sidebar-width);
   border-left: 1px solid var(--border);
   background: var(--bg-paper);
-  box-shadow: -6px 0 18px rgba(22,34,25,0.05);
+  box-shadow: -4px 0 16px rgba(22,34,25,0.04);
   transform: translateX(100%);
   visibility: hidden;
   transition: transform .28s var(--ease-smooth), visibility 0s linear .28s;
@@ -11960,7 +11960,6 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   padding: 0 10px 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-paper);
-  
 }
 .ai-sidebar-title, .ai-sidebar-header-actions, .ai-result-actions { display: flex; align-items: center; }
 .ai-sidebar-title { gap: 8px; color: var(--fg); font-size: 13px; font-weight: 700; letter-spacing: -0.015em; }
@@ -11976,7 +11975,6 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.04em;
-  
 }
 .ai-sidebar-header-actions { gap: 4px; }
 .ai-model-row {
@@ -12032,7 +12030,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   height: 28px;
   border-radius: 8px;
   border: 1px solid transparent;
-  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), box-shadow 0.15s var(--ease-smooth);
 }
 .ai-icon-btn:hover { background: var(--bg-hover); border-color: var(--border); color: var(--fg); box-shadow: none; }
 .ai-context-body{ display:flex; flex-direction:column; gap:1px; min-width:0; }
@@ -12066,7 +12064,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   line-height: 1;
   cursor: pointer;
   
-  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), box-shadow 0.15s var(--ease-smooth);
 }
 .ai-quick-action { padding: 7px 6px; text-align: center; font-weight: 600; letter-spacing: -0.01em; display:inline-flex; align-items:center; justify-content:center; gap:5px; }
 .ai-qa-ico{ display:inline-flex; width:14px; height:14px; align-items:center; justify-content:center; border-radius:999px; background: rgba(76,153,92,0.08); flex:0 0 auto; }
@@ -12086,7 +12084,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
-.ai-chat::-webkit-scrollbar { width: 6px; }
+.ai-chat::-webkit-scrollbar { width: 5px; }
 .ai-chat::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 999px; }
 .ai-message { max-width: 100%; animation: aiIn 0.22s var(--ease-smooth); }
 @keyframes aiIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -12135,7 +12133,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   background: var(--accent);
   color: #fff;
   box-shadow: 0 4px 12px rgba(76,153,92,0.24);
-  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+  transition: background 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), box-shadow 0.15s var(--ease-smooth);
 }
 .ai-send-btn:hover { background: var(--accent-hover); transform: none; box-shadow: none; }
 .ai-send-btn:active { transform: none; box-shadow: none; }
