@@ -11837,8 +11837,16 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   -webkit-backdrop-filter: none;
 }
 
-.modal-content { border-radius: 8px; box-shadow: var(--shadow-md); }
-.toast { border-radius: 6px; box-shadow: var(--shadow-md); }
+.modal-content { border-radius: 8px; box-shadow: var(--shadow-md); border: 1px solid var(--border); background: var(--bg-paper); }
+.modal-header { border-bottom: 1px solid var(--border); }
+.modal-footer { border-top: 1px solid var(--border); background: var(--bg); border-radius: 0 0 8px 8px; }
+.toast { border-radius: 6px; box-shadow: var(--shadow-md); border: 1px solid var(--border); background: var(--bg-paper); }
+
+/* paper system: remaining surfaces */
+.content-empty { background: var(--bg-paper); border: 1px dashed var(--border); border-radius: 6px; box-shadow: none; }
+.heatmap-wrap, .calendar-main, .stat-card, .admin-stat, .friends-empty, .letters-empty { border-color: var(--border); box-shadow: none; }
+.heatmap-wrap, .calendar-main, .stat-card, .admin-stat { border-radius: 6px; background: var(--bg-paper); }
+.heatmap-wrap .heatmap-cell, .calendar-main .cal-day { border-radius: 4px; }
 
 [data-theme="dark"] .sidebar, [data-mode="dark"] .sidebar { background: #171c18; }
 [data-theme="dark"] .content, [data-mode="dark"] .content,
