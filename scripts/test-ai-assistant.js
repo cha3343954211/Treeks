@@ -5,6 +5,7 @@ const http = require('http');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const puppeteer = require('puppeteer');
 
 const ROOT = path.join(__dirname, '..');
 let providerRequests = 0;
@@ -156,6 +157,38 @@ async function main() {
       { headers: { Authorization: `Bearer ${register.token}` } }
     );
     assert(conversations.items.some(item => item.role === 'assistant' && item.result === done.result), 'assistant output should appear in diary history');
+
+    const browser = await puppeteer.launch({ headless: 'new' });
+    try {
+      const page = await browser.newPage();
+      const pageErrors = [];
+      page.on('pageerror', error => pageErrors.push(error.message));
+      await page.setViewport({ width: 1280, height: 850 });
+      await page.evaluateOnNewDocument((token, user) => {
+        localStorage.setItem('treeks_token', token);
+        localStorage.setItem('treeks_user', JSON.stringify(user));
+      }, register.token, register.user);
+      await page.goto(base, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.diary-card', { timeout: 15000 });
+      await page.evaluate(id => openEditor(id), diary.id);
+      await page.waitForFunction(() => document.getElementById('editor-textarea')?.value?.length > 0, { timeout: 15000 });
+      await page.click('#btn-toggle-ai-sidebar');
+      await page.waitForSelector('#ai-prompt:not([disabled])', { timeout: 15000 });
+      await page.type('#ai-prompt', 'browser streaming check');
+      await page.click('.ai-send-btn');
+      await page.waitForFunction(() => {
+        return Array.from(document.querySelectorAll('#ai-chat .ai-result-md')).some(node => node.textContent.includes('REPLACED'));
+      }, { timeout: 20000 });
+
+      await page.evaluate(() => loadAiHistoryForCurrentDiary(true));
+      await page.waitForFunction(() => {
+        return Array.from(document.querySelectorAll('#ai-chat .ai-message[data-thread-id] button'))
+          .some(node => node.textContent.trim() === '重新生成');
+      }, { timeout: 15000 });
+      assert(pageErrors.length === 0, `sidebar produced page errors: ${pageErrors.join('; ')}`);
+    } finally {
+      await browser.close();
+    }
 
     console.log('AI assistant streaming/context integration passed');
   } finally {

@@ -7845,6 +7845,8 @@ const aiSidebarState = {
   activeSearchQuery: '',
   activeSearchMatchCount: 0,
   resetSearch: null,
+  modelRequestSequence: 0,
+  historyRequestSequence: 0,
   requestSequence: 0,
   isGenerating: false,
   abortController: null
@@ -7886,8 +7888,10 @@ function autoResizeAiPrompt(){
 async function loadAiModels() {
   const select = document.getElementById('ai-model-select');
   if (!select) return;
+  const requestId = ++aiSidebarState.modelRequestSequence;
   try {
     const data = await api('/api/ai/status');
+    if (requestId !== aiSidebarState.modelRequestSequence) return;
     aiSidebarState.models = data.models || [];
     const storageKey = `treeks_ai_model_${state.user?.id || 'default'}`;
     const savedId = localStorage.getItem(storageKey);
@@ -7900,6 +7904,7 @@ async function loadAiModels() {
     select.disabled = aiSidebarState.models.length === 0;
     try{ select.title = aiSidebarState.models.length ? '' : '\u6682\u65e0\u6a21\u578b\uff0c\u672c\u5730\u8f85\u52a9\u53ef\u7528'; }catch(_){}
   } catch (_) {
+    if (requestId !== aiSidebarState.modelRequestSequence) return;
     aiSidebarState.models = [];
     aiSidebarState.selectedModelId = '';
     select.innerHTML = '<option value="">\u6682\u65e0\u53ef\u7528\u6a21\u578b \u00b7 \u8bf7\u5728\u7ba1\u7406\u540e\u53f0\u914d\u7f6e</option>';
@@ -8356,12 +8361,18 @@ function getAiDiaryId(){
 function createAiHistoryMessage(item, allItems = []){
   const role = item.role === 'user' ? 'user' : 'assistant';
   const content = role === 'user' ? (item.content || '') : (item.result || item.content || '');
+  const threadItems = allItems.filter(part => part.thread_id && part.thread_id === item.thread_id);
+  const promptItem = threadItems.find(part => part.role === 'user') || (role === 'user' ? item : null);
+  const originalPrompt = String(promptItem?.content || '');
+  const originalAction = String(promptItem?.action || item.action || 'custom');
   const svg = extractSvgString(content);
   const isSvg = svg && svg.startsWith('<svg');
   const msg=document.createElement('div');
   msg.className='ai-message ai-message-'+role;
   msg.dataset.conversationId=String(item.id || '');
   if(item.thread_id) msg.dataset.threadId=String(item.thread_id);
+  msg.dataset.aiAction=originalAction;
+  msg.dataset.aiPrompt=originalPrompt;
   const label=document.createElement('div'); label.className='ai-message-label'; label.textContent = role==='user' ? '你' : 'Treeks AI';
   const text=document.createElement('div'); text.className='ai-message-content';
   if(role==='user'){
@@ -8390,7 +8401,7 @@ function createAiHistoryMessage(item, allItems = []){
     const copy=document.createElement('button');
     copy.type='button'; copy.className='ai-message-copy'; copy.textContent='复制'; copy.title='复制本条'; copy.setAttribute('aria-label','复制本条');
     copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawText); copy.textContent='已复制'; setTimeout(()=>copy.textContent='复制',1100); }catch(_){} });
-    if(item.thread_id && originalPrompt){
+    if(role === 'assistant' && item.thread_id && originalPrompt){
       const retry=document.createElement('button');
       retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重新生成'; retry.title='使用当前笔记上下文重新生成本轮回答'; retry.setAttribute('aria-label','重新生成本轮回答');
       retry.addEventListener('click', ()=>runAiAction(msg.dataset.aiAction||'custom', originalPrompt, {retryThreadId:String(item.thread_id)}));
@@ -8456,16 +8467,18 @@ async function loadOlderAiHistory(){
   const chat=document.getElementById('ai-chat');
   const cursor=aiSidebarState.historyOldestId;
   if(!chat || !cursor || aiSidebarState.isLoadingOlderHistory) return;
+  const requestId = ++aiSidebarState.historyRequestSequence;
+  const diaryId = getAiDiaryId();
   aiSidebarState.isLoadingOlderHistory=true;
   const btn=document.getElementById('ai-history-older');
   if(btn){ btn.disabled=true; btn.textContent='正在加载…'; }
   const previousHeight=chat.scrollHeight;
   const previousTop=chat.scrollTop;
   try{
-    const diaryId=getAiDiaryId();
     let historyUrl='/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100&before_id='+encodeURIComponent(String(cursor));
     if(aiSidebarState.activeSearchQuery) historyUrl += '&search='+encodeURIComponent(aiSidebarState.activeSearchQuery);
     const data=await api(historyUrl);
+    if(requestId !== aiSidebarState.historyRequestSequence || diaryId !== getAiDiaryId()) return;
     const items=data.items||[];
     const fragment=document.createDocumentFragment();
     for(const it of items) {
@@ -8534,6 +8547,7 @@ async function loadAiHistoryForCurrentDiary(force){
     aiSidebarState.refreshSearch?.(aiSidebarState.activeSearchQuery);
     return;
   }
+  const requestId = ++aiSidebarState.historyRequestSequence;
   aiSidebarState.historyLoadedFor = String(diaryId);
   aiSidebarState.currentDiaryId = diaryId;
   aiSidebarState.historyOldestId=null;
@@ -8543,12 +8557,16 @@ async function loadAiHistoryForCurrentDiary(force){
     const _chat=document.getElementById('ai-chat');
     if(_chat && !_chat.querySelector('.ai-message')){ _chat.innerHTML='<div class="ai-loading-skeleton"><div class="ai-skeleton-line w-80"></div><div class="ai-skeleton-line w-60"></div><div class="ai-skeleton-line w-70"></div></div>'; }
     const data = await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100');
+    if(requestId !== aiSidebarState.historyRequestSequence || diaryId !== getAiDiaryId()) return;
     const items=data.items||[];
     syncAiHistoryWindow(data, items);
     renderAiHistory(items);
     updateAiContextIndicator();
   }catch(e){
-    // keep local fallback
+    if(requestId === aiSidebarState.historyRequestSequence && diaryId === getAiDiaryId()){
+      aiSidebarState.historyLoadedFor = null;
+      renderAiHistory([]);
+    }
   }
 }
 async function clearAiHistoryForCurrentDiary(){
