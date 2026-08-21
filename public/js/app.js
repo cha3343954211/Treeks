@@ -7960,7 +7960,7 @@ function showAiEditPreview(proposed){
   layer.style.display='block';
   if(splitWrap) splitWrap.classList.remove('active');
   layer.setAttribute('aria-hidden','false');
-  if(summary) summary.textContent='检测到 '+(rendered.del? rendered.del+' 处删除 ':'')+(rendered.ins? rendered.ins+' 处新增':'')+( !rendered.del && !rendered.ins ? '无差异' : '')+' · 绿色为新增，红色为删除';
+  if(summary){ const delPart = rendered.del ? '<b style="color:var(--danger)">'+rendered.del+'</b> 处删除 ' : ''; const insPart = rendered.ins ? '<b style="color:#1a7f37">'+rendered.ins+'</b> 处新增' : ''; const emptyPart = (!rendered.del && !rendered.ins ? '无差异' : ''); summary.innerHTML = '检测到 ' + delPart + insPart + emptyPart + ' <span style="color:var(--fg-tertiary)">· 绿新增 / 红删除</span>'; }
   textarea.setAttribute('aria-hidden','true');
   // prepare split data
   try{
@@ -8148,7 +8148,7 @@ function updateAiContextIndicator() {
   else if (context.content) { msg = prefix + `将参考当前日记的 ${context.content.length} 个字符`; meta = `全文 ${context.content.length} 字${context.title ? ' · 标题：'+context.title.slice(0,18) : ''} · 按日记归档`; }
   else { msg = prefix + '先写下一两句，我会据此协助你展开'; meta = '对话按日记归档 · 支持问答 / 编辑 / 绘图'; }
   target.textContent = msg;
-  if(metaEl) metaEl.textContent = meta;
+  if(metaEl){ metaEl.textContent = meta; metaEl.title = meta; }
   try{
     const empty=document.getElementById('ai-empty');
     const chat=document.getElementById('ai-chat');
@@ -9364,12 +9364,12 @@ function initAiSidebar() {
     else if (getAiMode() === 'ask') runAiAction('ask', value);
     else runAiAction('custom', value);
   });
-  prompt.addEventListener('input', ()=>{ autoResizeAiPrompt(); try{ const cc=document.getElementById('ai-char-count'); if(cc) cc.textContent=String(prompt.value.length); }catch(_){} });
+  prompt.addEventListener('input', ()=>{ autoResizeAiPrompt(); try{ const cc=document.getElementById('ai-char-count'); if(cc){ const n=prompt.value.length; cc.textContent=String(n); cc.style.color = n>490 ? 'var(--danger)' : n>430 ? '#b45309' : 'var(--fg-tertiary)'; const send=document.getElementById('ai-send-btn'); if(send){ const over=n>500|| n===0; send.disabled = over && n>500; send.style.opacity = over && n>500 ? '0.45' : ''; } } }catch(_){} });
   autoResizeAiPrompt();
   const sendBtnElX = document.querySelector('.ai-send-btn'); if(sendBtnElX && !sendBtnElX.id) sendBtnElX.id='ai-send-btn';
   if(!document.getElementById('btn-ai-stop')){
     const stop=document.createElement('button'); stop.id='btn-ai-stop'; stop.type='button'; stop.className='ai-icon-btn'; stop.title='停止生成'; stop.setAttribute('aria-label','停止生成');
-    stop.style.cssText='display:none;width:36px;height:36px;border-radius:12px;background:#fff;border:1px solid rgba(0,0,0,0.08)';
+    stop.style.cssText='display:none;width:36px;height:36px;border-radius:6px;background:var(--bg-paper);border:1px solid var(--border)';
     stop.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
     stop.addEventListener('click', ()=>{ try{ if(aiSidebarState.abortController) aiSidebarState.abortController.abort(); }catch(_){} setAiComposerBusy(false); });
     const composerEl=document.getElementById('ai-composer'); if(composerEl) composerEl.appendChild(stop);
