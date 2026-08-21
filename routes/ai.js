@@ -264,15 +264,14 @@ router.get('/assist/stream', authRequired, async (req, res) => {
   const rawSelection = String(req.query.selection || '');
   const rawPrompt = String(req.query.prompt || '');
   const rawModelId = req.query.model_id != null ? String(req.query.model_id) : undefined;
-  const dec = s=>{ try{ return decodeURIComponent(s);}catch(_){ return s; }};
   const rawRetryId = req.query.retry_thread_id != null ? String(req.query.retry_thread_id) : '';
-  let a = dec(rawAction); let p = dec(rawPrompt);
-  const retryContext = rawRetryId ? loadRetryContext(req.user.id, dec(rawRetryId)) : null;
+  let a = rawAction; let p = rawPrompt;
+  const retryContext = rawRetryId ? loadRetryContext(req.user.id, rawRetryId) : null;
   if(rawRetryId && !retryContext){ res.status(404).json({ error: '要重新生成的对话不存在' }); return res.end(); }
   if(retryContext){ a = retryContext.action; p = retryContext.prompt; }
-  const t = dec(rawTitle); const c = dec(rawContent); const sel = dec(rawSelection); const mid = rawModelId ? dec(rawModelId) : undefined;
+  const t = rawTitle; const c = rawContent; const sel = rawSelection; const mid = rawModelId;
   const rawDiaryId = retryContext ? String(retryContext.diaryId) : (req.query.diary_id != null ? String(req.query.diary_id) : undefined);
-  const diaryCtx = resolveDiaryContext(req.user.id, rawDiaryId != null ? dec(rawDiaryId) : undefined, t, c);
+  const diaryCtx = resolveDiaryContext(req.user.id, rawDiaryId != null ? rawDiaryId : undefined, t, c);
   const effectiveTitle = diaryCtx.title || t;
   const effectiveSource = diaryCtx.source || (sel || c || '');
   const historyRows = loadRecentConversations(req.user.id, diaryCtx.diaryId, 12, retryContext ? rawRetryId : '');
@@ -297,7 +296,7 @@ router.get('/assist/stream', authRequired, async (req, res) => {
   let savedThreadId = null;
   try {
     const chatMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。尊重用户语气，不提供诊断、判断或虚构事实。所有输出必须是纯 Markdown，不要使用 HTML，不要用代码块包裹整篇输出。'}, ...historyMessages, {role:'user',content:userPrompt}];
-    const resp=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,stream:true,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:chatMessages}),signal:controller.signal});
+    const resp=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Accept:'text/event-stream',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,stream:true,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:chatMessages}),signal:controller.signal});
     if(!resp.ok){
       let errText='';
       try{ const j=await resp.json(); errText=j?.error?.message||j?.error||''; }catch(_){ try{ errText=await resp.text(); }catch(_){}}
@@ -322,7 +321,20 @@ router.get('/assist/stream', authRequired, async (req, res) => {
       }
       sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(timeout); return res.end();
     }
-    const reader=resp.body && resp.body.getReader ? resp.body.getReader() : null; if(!reader){ const text=await resp.text(); savedThreadId=persistConversation(text)||null; sseWrite(res,'delta',{text}); sseWrite(res,'done',{result:text,thread_id:savedThreadId}); clearTimeout(timeout); return res.end(); }
+    const providerContentType=(resp.headers.get('content-type')||'').toLowerCase();
+    if(!resp.body?.getReader || providerContentType.includes('application/json')){
+      const payloadText=await resp.text();
+      let text=payloadText;
+      try{
+        const payloadJson=JSON.parse(payloadText);
+        text=payloadJson?.choices?.[0]?.message?.content || payloadText;
+      }catch(_){}
+      savedThreadId=persistConversation(text)||null;
+      sseWrite(res,'delta',{text});
+      sseWrite(res,'done',{result:text,thread_id:savedThreadId});
+      clearTimeout(timeout); return res.end();
+    }
+    const reader=resp.body.getReader();
     const decoder=new TextDecoder('utf-8'); let buffer=''; let full='';
     while(true){ const {done,value}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const delta=j?.choices?.[0]?.delta?.content||''; if(delta){ full+=delta; sseWrite(res,'delta',{text:delta}); } }catch(_){} } }
     if(buffer.trim().startsWith('data:')){ const payload=buffer.trim().slice(5).trim(); if(payload && payload!=='[DONE]'){ try{ const j=JSON.parse(payload); const d=j?.choices?.[0]?.delta?.content||''; if(d){ full+=d; sseWrite(res,'delta',{text:d}); } }catch(_){} } }

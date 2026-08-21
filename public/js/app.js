@@ -7858,6 +7858,18 @@ function setAiComposerBusy(busy){
   if(modelSel) modelSel.disabled = !!busy || aiSidebarState.models.length===0;
   actions.forEach(b=>{ b.disabled=!!busy; b.style.opacity= busy ? '0.55' : ''; });
 }
+
+function cancelAiGeneration(){
+  const hadRequest=Boolean(aiSidebarState.abortController);
+  try{ aiSidebarState.abortController?.abort(); }catch(_){}
+  aiSidebarState.abortController=null;
+  try{
+    document.querySelectorAll('#ai-chat .ai-thinking, #ai-chat .ai-streaming')
+      .forEach(el=>el.closest('.ai-message')?.remove());
+  }catch(_){}
+  setAiComposerBusy(false);
+  if(hadRequest) loadAiHistoryForCurrentDiary(true);
+}
 function autoResizeAiPrompt(){
   const ta=document.getElementById('ai-prompt');
   if(!ta) return;
@@ -9210,10 +9222,8 @@ async function runAiAction(action, prompt = '', options = {}) {
   const context = getAiWritingContext();
   if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
   const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
-  if (!retryThreadId) {
-    if (action === 'custom' || action === 'ask' || action === 'edit' || action === 'draw') appendAiMessage('user', prompt || labels[action] || '处理当前内容', '', {action, prompt});
-    else appendAiMessage('user', labels[action] || '处理当前内容', '', {action, prompt});
-  }
+  const displayPrompt=String(prompt||labels[action]||'处理当前内容');
+  appendAiMessage('user', displayPrompt, '', {action, prompt:displayPrompt});
   setAiComposerBusy(true);
   aiSidebarState.abortController = (typeof AbortController!=='undefined') ? new AbortController() : null;
 
@@ -9305,7 +9315,7 @@ async function runAiAction(action, prompt = '', options = {}) {
       if(streamHost) streamHost.remove();
     }
   } catch(error){
-    if(error && error.name==='AbortError'){ if(streamHost) streamHost.remove(); setAiComposerBusy(false); return; }
+    if(error && error.name==='AbortError'){ if(streamHost) streamHost.remove(); cancelAiGeneration(); return; }
     if(streamHost) streamHost.remove();
     if(thinking) try{ thinking.setAllDone(); }catch(_){}
     if(streaming) try{ streaming.destroy(); }catch(_){}
@@ -9328,11 +9338,11 @@ async function runAiAction(action, prompt = '', options = {}) {
 
   setAiComposerBusy(false);
   // diary-bound: after success, the server has persisted; refresh history softly after rendering
-  setTimeout(()=>{ try{ loadAiHistoryForCurrentDiary(true); }catch(_){} }, 1200);
+  if(output.threadId) setTimeout(()=>{ try{ loadAiHistoryForCurrentDiary(true); }catch(_){} }, 1200);
   if (output.mode === 'edit' && action !== 'draw') {
     const target = output.result;
     // 编辑：直接在编辑区以红绿差异呈现，不再只留在侧栏
-    appendAiMessage('assistant', output.note + '（已在编辑区以红绿差异呈现，可点「应用」写入笔记）', target, {threadId:output.threadId, action, prompt});
+    appendAiMessage('assistant', output.note + '（已在编辑区以红绿差异呈现，可点「应用」写入笔记）', target, {threadId:output.threadId, action, prompt:displayPrompt});
     showAiEditPreview(target);
     // 侧栏结果额外提供直接应用按钮
     const last=document.querySelector('#ai-chat .ai-message:last-child');
@@ -9345,12 +9355,12 @@ async function runAiAction(action, prompt = '', options = {}) {
   } else if (output.mode === 'draw' || action === 'draw') {
     const svg = extractSvgString(output.result);
     if(svg && svg.startsWith('<svg')){
-      appendAiMessage('assistant', output.note, svg, {threadId:output.threadId, action:'draw', prompt});
+      appendAiMessage('assistant', output.note, svg, {threadId:output.threadId, action:'draw', prompt:displayPrompt});
     } else {
-      appendAiMessage('assistant', output.note, output.result, {threadId:output.threadId, action:'draw', prompt});
+      appendAiMessage('assistant', output.note, output.result, {threadId:output.threadId, action:'draw', prompt:displayPrompt});
     }
   } else {
-    appendAiMessage('assistant', output.note, output.result, {threadId:output.threadId, action, prompt});
+    appendAiMessage('assistant', output.note, output.result, {threadId:output.threadId, action, prompt:displayPrompt});
   }
   if (action === 'title' && output.result) {
     const last = document.querySelector('#ai-chat .ai-message:last-child');
@@ -9590,7 +9600,7 @@ function initAiSidebar() {
     const stop=document.createElement('button'); stop.id='btn-ai-stop'; stop.type='button'; stop.className='ai-icon-btn'; stop.title='停止生成'; stop.setAttribute('aria-label','停止生成');
     stop.style.cssText='display:none;width:36px;height:36px;border-radius:6px;background:var(--bg-paper);border:1px solid var(--border)';
     stop.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
-    stop.addEventListener('click', ()=>{ try{ if(aiSidebarState.abortController) aiSidebarState.abortController.abort(); }catch(_){} try{ document.querySelectorAll('#ai-chat .ai-thinking, #ai-chat .ai-streaming').forEach(el=>{ if(el.closest('.ai-message')) el.closest('.ai-message')?.remove(); }); }catch(_){} setAiComposerBusy(false); });
+    stop.addEventListener('click', ()=>cancelAiGeneration());
     const composerEl=document.getElementById('ai-composer'); if(composerEl) composerEl.appendChild(stop);
   }
   const copyBtn=document.getElementById('btn-ai-copy-context');
@@ -9603,7 +9613,7 @@ function initAiSidebar() {
   function aiSidebarHasOpenModal(){ try{ return !!document.querySelector('.modal[style*="display: flex"], .modal[style*="display:flex"], #ai-svg-modal[style*="display: flex"], #ai-svg-modal[style*="display:flex"], #image-lightbox-modal[style*="display: flex"]'); }catch(_){ return false; } }
   document.addEventListener('keydown', (e)=>{
     if(e.key==='Escape' && aiSidebarState.isOpen && !aiSidebarHasOpenModal()){
-      if(aiSidebarState.isGenerating && aiSidebarState.abortController){ try{ aiSidebarState.abortController.abort(); }catch(_){} try{ document.querySelectorAll('#ai-chat .ai-thinking, #ai-chat .ai-streaming').forEach(el=>{ const m=el.closest('.ai-message'); if(m) m.remove(); }); }catch(_){} setAiComposerBusy(false); }
+      if(aiSidebarState.isGenerating && aiSidebarState.abortController){ cancelAiGeneration(); }
       else if(!e.ctrlKey && !e.metaKey) setAiSidebarOpen(false);
     }
   });

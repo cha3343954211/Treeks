@@ -38,10 +38,19 @@ async function startMockAiProvider() {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       requests.push(JSON.parse(body || '{}'));
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        choices: [{ message: { content: `mock answer ${requests.length}` } }]
-      }));
+      const answer = `mock answer ${requests.length}`;
+      if(String(req.headers.accept || '').includes('text/event-stream')) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive'
+        });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\n`);
+        res.end('data: [DONE]\n\n');
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { content: answer } }] }));
+      }
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -331,6 +340,21 @@ async function main() {
   assert.equal(historyAfterRetry.data.total, 2);
   assert.deepEqual(historyAfterRetry.data.items.map(item => item.role), ['user', 'assistant']);
   assert.equal(historyAfterRetry.data.items.at(-1).result, 'mock answer 2');
+
+  const streamQuery = new URLSearchParams({
+    action: 'ask', title: 'AI retry', content: 'Current note body',
+    prompt: 'Keep literal A%20B exactly', diary_id: String(retryDiary.data.id),
+    model_id: mockModelId
+  });
+  const streamResponse = await fetch(`${BASE}/api/ai/assist/stream?${streamQuery}`, {
+    headers: auth(alice.token, { Accept: 'text/event-stream' })
+  });
+  assert.equal(streamResponse.status, 200);
+  const streamBody = await streamResponse.text();
+  assert.ok(streamBody.includes('event: done'), 'AI stream must finish');
+  assert.ok(streamBody.includes('mock answer 3'), 'AI stream must return provider output');
+  const streamProviderRequest = mockProvider.requests.at(-1);
+  assert.equal(streamProviderRequest.messages.at(-1).content.includes('Keep literal A%20B exactly'), true);
 
   const escapedAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=${encodeURIComponent('needle-100%_')}`, { headers: auth(alice.token) });
   assert.equal(escapedAiSearch.res.status, 200);
