@@ -91,6 +91,38 @@ async function main() {
   // 禁止残留内联 onclick（易引发存储型 XSS，一律走 data 属性 + addEventListener）
   assert.ok(!/onclick="/.test(appSource), 'inline onclick must be removed (XSS risk)');
 
+  const diffFunctionMatch = appSource.match(/function computeAiLineDiff[\s\S]*?\n}/);
+  assert.ok(diffFunctionMatch, 'AI line diff function missing');
+  const computeAiLineDiff = new Function(`${diffFunctionMatch[0]}; return computeAiLineDiff;`)();
+  assert.deepEqual(
+    computeAiLineDiff('a\nb\nc', 'a\nX\nc').map(op => `${op.type}:${op.text}`),
+    ['equal:a', 'delete:b', 'insert:X', 'equal:c']
+  );
+  assert.deepEqual(
+    computeAiLineDiff('', '').map(op => `${op.type}:${op.text}`),
+    ['equal:']
+  );
+  const repeatedOld = Array.from({ length: 20000 }, () => 'same');
+  const repeatedNew = Array.from({ length: 21000 }, () => 'different');
+  let startedAt = process.hrtime.bigint();
+  let largeDiff = computeAiLineDiff(repeatedOld.join('\n'), repeatedNew.join('\n'));
+  assert.equal(largeDiff.filter(op => op.type !== 'equal').length, 2);
+  assert.ok(Number(process.hrtime.bigint() - startedAt) / 1e6 < 1000, 'pathological AI diff became too slow');
+  const oldLines = Array.from({ length: 20000 }, (_, index) => `old-${index}`);
+  const newLines = [...oldLines.slice(0, 100), ...Array.from({ length: 20100 }, (_, index) => `new-${index}`)];
+  startedAt = process.hrtime.bigint();
+  largeDiff = computeAiLineDiff(oldLines.join('\n'), newLines.join('\n'));
+  assert.ok(largeDiff.some(op => op.type === 'delete'));
+  assert.ok(largeDiff.some(op => op.type === 'insert'));
+  assert.ok(Number(process.hrtime.bigint() - startedAt) / 1e6 < 1000, 'large AI diff became too slow');
+  const renderFunctionMatch = appSource.match(/function renderAiDiffHtml[\s\S]*?\n}/);
+  assert.ok(renderFunctionMatch, 'AI diff renderer missing');
+  const renderAiDiffHtml = new Function('computeAiLineDiff', `${renderFunctionMatch[0]}; return renderAiDiffHtml;`)(computeAiLineDiff);
+  const renderedLargeDiff = renderAiDiffHtml(repeatedOld.join('\n'), repeatedNew.join('\n'));
+  assert.equal(renderedLargeDiff.del, repeatedOld.length);
+  assert.equal(renderedLargeDiff.ins, repeatedNew.length);
+  assert.equal((renderedLargeDiff.html.match(/class="ai-diff-(?:del|ins)"/g) || []).length, 2);
+
   // 编辑器顶部/底部收起控件必须存在
   const htmlSource = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
   assert.ok(htmlSource.includes('id="btn-editor-top-toggle"'), 'editor top collapse toggle missing');

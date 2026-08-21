@@ -7947,23 +7947,83 @@ function renderAiMarkdown(markdown){
 function computeAiLineDiff(oldText, newText){
   const a=String(oldText||'').split('\n');
   const b=String(newText||'').split('\n');
-  const n=a.length, m=b.length;
-  const dp=Array.from({length:n+1},()=>Array(m+1).fill(0));
-  for(let i=n-1;i>=0;i--) for(let j=m-1;j>=0;j--) dp[i][j]= a[i]===b[j] ? dp[i+1][j+1]+1 : Math.max(dp[i+1][j], dp[i][j+1]);
-  const ops=[]; let i=0,j=0;
-  while(i<n && j<m){ if(a[i]===b[j]){ ops.push({type:'equal', text:a[i]}); i++; j++; } else if(dp[i+1][j] >= dp[i][j+1]){ ops.push({type:'delete', text:a[i]}); i++; } else { ops.push({type:'insert', text:b[j]}); j++; } }
-  while(i<n){ ops.push({type:'delete', text:a[i++]}); }
-  while(j<m){ ops.push({type:'insert', text:b[j++]}); }
-  return ops;
+  const prefix=[];
+  let start=0;
+  while(start<a.length && start<b.length && a[start]===b[start]){
+    prefix.push({type:'equal', text:a[start]});
+    start++;
+  }
+  let endA=a.length, endB=b.length;
+  const suffix=[];
+  while(endA>start && endB>start && a[endA-1]===b[endB-1]){
+    suffix.unshift({type:'equal', text:a[endA-1]});
+    endA--; endB--;
+  }
+
+  // A full LCS matrix is too expensive for long diary entries. Unique lines are
+  // stable anchors; changed regions between them can safely be shown as blocks.
+  const leftA=a.slice(start,endA), rightB=b.slice(start,endB);
+  const aCounts=new Map(), bFirst=new Map(), bCounts=new Map();
+  leftA.forEach((text,index)=>{
+    aCounts.set(text,(aCounts.get(text)||0)+1);
+  });
+  rightB.forEach((text,index)=>{
+    if(!bFirst.has(text)) bFirst.set(text,index);
+    bCounts.set(text,(bCounts.get(text)||0)+1);
+  });
+
+  const candidates=[];
+  leftA.forEach((text,aIndex)=>{
+    if(aCounts.get(text)!==1 || bCounts.get(text)!==1) return;
+    candidates.push({a:aIndex,b:bFirst.get(text)});
+  });
+
+  // Longest increasing subsequence keeps selected anchors in document order.
+  const tails=[], prev=new Array(candidates.length).fill(-1);
+  candidates.forEach((item,index)=>{
+    let low=0, high=tails.length;
+    while(low<high){
+      const mid=(low+high)>>1;
+      if(candidates[tails[mid]].b < item.b) low=mid+1; else high=mid;
+    }
+    if(index>=0) prev[index]= low>0 ? tails[low-1] : -1;
+    tails[low]=index;
+  });
+  const anchors=[];
+  for(let index=tails.length ? tails[tails.length-1] : -1; index>=0; index=prev[index]){
+    anchors.unshift(candidates[index]);
+  }
+
+  const operations=[...prefix];
+  let cursorA=start, cursorB=start;
+  anchors.forEach(anchor=>{
+    for(;cursorA<start+anchor.a;cursorA++) operations.push({type:'delete',text:leftA[cursorA-start]});
+    for(;cursorB<start+anchor.b;cursorB++) operations.push({type:'insert',text:rightB[cursorB-start]});
+    operations.push({type:'equal',text:leftA[anchor.a]});
+    cursorA++; cursorB++;
+  });
+  for(;cursorA<endA;cursorA++) operations.push({type:'delete',text:leftA[cursorA-start]});
+  for(;cursorB<endB;cursorB++) operations.push({type:'insert',text:rightB[cursorB-start]});
+
+  // Collapse runs before rendering so a wholesale rewrite creates two nodes,
+  // not one node per line.
+  const compacted=[];
+  [...operations,...suffix].forEach(op=>{
+    const last=compacted[compacted.length-1];
+    if(last && last.type===op.type) last.text += '\n' + op.text;
+    else compacted.push({...op});
+  });
+  return compacted;
 }
 function renderAiDiffHtml(oldText, newText){
   const ops=computeAiLineDiff(oldText, newText);
   const esc=(s)=> String(s).replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let html=''; let del=0, ins=0;
   ops.forEach(function(op){
+    const lineCount=op.text.split('\n').length;
     if(op.type==='equal') html+='<span class="ai-diff-eq">'+esc(op.text)+'\n</span>';
-    else if(op.type==='delete'){ html+='<span class="ai-diff-del">'+esc(op.text)+'\n</span>'; del++; }
-    else { html+='<span class="ai-diff-ins">'+esc(op.text)+'\n</span>'; ins++; }
+    else if(op.type==='delete'){ html+='<span class="ai-diff-del">'+esc(op.text)+'\n</span>'; del+=lineCount; }
+    else { html+='<span class="ai-diff-ins">'+esc(op.text)+'\n</span>'; ins+=lineCount; }
   });
   return { html: html || '<span class="ai-diff-eq">'+esc(newText)+'</span>', del, ins };
 }
