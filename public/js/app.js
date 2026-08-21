@@ -8485,7 +8485,7 @@ function renderSvgCard(svg, opts={}){
   btnSave.type='button'; btnSave.className='btn';
   btnSave.textContent='保存到文件';
   const btnCopy=document.createElement('button');
-  btnCopy.type='button'; btnSave.className='btn';
+  btnCopy.type='button';
   btnCopy.textContent='复制代码';
   btnCopy.className='btn';
   actions.append(btnSelect, btnInsert, btnSave, btnCopy);
