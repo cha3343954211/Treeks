@@ -313,6 +313,11 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   const controller=new AbortController();
   let timedOut=false;
   let clientClosed=false;
+  let completed=false;
+  let partialSaved=false;
+  let providerFull='';
+  let savedThreadId=null;
+  let persistPartial=()=>{};
   let idleTimer=null;
   const resetIdleTimer=()=>{
     clearTimeout(idleTimer);
@@ -320,12 +325,24 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   };
   const overallTimer=setTimeout(()=>{ timedOut=true; controller.abort(); },180000);
   resetIdleTimer();
-  req.on('close',()=>{ clientClosed=true; try{controller.abort();}catch(_){} });
+  req.on('close',()=>{
+    clientClosed=true;
+    if(!completed) persistPartial();
+    try{controller.abort();}catch(_){}
+  });
   const persistConversation = (text) => saveConversations(req.user.id, diaryCtx.diaryId, [
     {role:'user', content: (p||labelsForSave(a,p)), result:'', action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))},
     {role:'assistant', content:text, result:text, action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}
-  ], retryContext ? {replaceThreadId:rawRetryId} : {});
-  let savedThreadId = null;
+    ], retryContext ? {replaceThreadId:rawRetryId} : {});
+  persistPartial=()=>{
+    if(completed || partialSaved || !providerFull.trim()) return;
+    partialSaved=true;
+    try{
+      const partial=providerFull.trim();
+      const fence=partial.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
+      savedThreadId=persistConversation(fence ? fence[1].trim() : partial)||null;
+    }catch(e){ console.warn('[AI stream] save partial failed:',e.message); }
+  };
   try {
     const chatMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。尊重用户语气，不提供诊断、判断或虚构事实。所有输出必须是纯 Markdown，不要使用 HTML，不要用代码块包裹整篇输出。'}, ...historyMessages, {role:'user',content:userPrompt}];
     const resp=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Accept:'text/event-stream',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,stream:true,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:chatMessages}),signal:controller.signal});
@@ -352,6 +369,8 @@ router.post('/assist/stream', authRequired, async (req, res) => {
         let fr=String(fallbackText).trim();
         const fm=fr.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
         if(fm) fr=fm[1].trim();
+        providerFull=fr;
+        completed=true;
         savedThreadId=persistConversation(fr)||null;
         sseWrite(res,'delta',{text:fr.slice(0,8000)});
         sseWrite(res,'done',{result:fr,scope:editScope,thread_id:savedThreadId});
@@ -367,6 +386,8 @@ router.post('/assist/stream', authRequired, async (req, res) => {
         const payloadJson=JSON.parse(payloadText);
         text=payloadJson?.choices?.[0]?.message?.content || payloadText;
       }catch(_){}
+      providerFull=text;
+      completed=true;
       savedThreadId=persistConversation(text)||null;
       sseWrite(res,'delta',{text});
       sseWrite(res,'done',{result:text,scope:editScope,thread_id:savedThreadId});
@@ -374,16 +395,18 @@ router.post('/assist/stream', authRequired, async (req, res) => {
     }
     const reader=resp.body.getReader();
     const decoder=new TextDecoder('utf-8'); let buffer=''; let full='';
-    while(true){ const {done,value}=await reader.read(); if(done) break; resetIdleTimer(); buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const choice=j?.choices?.[0]||{}; const delta=choice?.delta?.content||''; const finalOnly=choice?.message?.content||''; const text=delta || (!full && finalOnly); if(text){ full+=text; sseWrite(res,'delta',{text}); } }catch(_){} } }
+    while(true){ const {done,value}=await reader.read(); if(done) break; resetIdleTimer(); buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const choice=j?.choices?.[0]||{}; const delta=choice?.delta?.content||''; const finalOnly=choice?.message?.content||''; const text=delta || (!full && finalOnly); if(text){ full+=text; providerFull=full; sseWrite(res,'delta',{text}); } }catch(_){} } }
     if(buffer.trim().startsWith('data:')){ const payload=buffer.trim().slice(5).trim(); if(payload && payload!=='[DONE]'){ try{ const j=JSON.parse(payload); const d=j?.choices?.[0]?.delta?.content||''; if(d){ full+=d; sseWrite(res,'delta',{text:d}); } }catch(_){} } }
     let finalText=full.trim();
     const fence=finalText.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
     if(fence) finalText=fence[1].trim();
+    completed=true;
     savedThreadId=persistConversation(finalText||full)||null;
     sseWrite(res,'done',{result:finalText||full, scope:editScope, diary_id: diaryCtx.diaryId, thread_id:savedThreadId});
     clearTimeout(idleTimer); clearTimeout(overallTimer); res.end();
   } catch(e){
     clearTimeout(idleTimer); clearTimeout(overallTimer);
+    persistPartial();
     if(clientClosed){ return res.end(); }
     if(e.name==='AbortError') sseWrite(res,'error',{error:timedOut?'AI 响应超时，请稍后重试':'AI 连接已中断，请稍后重试'});
     else { console.error('[AI stream] failed',e.message); sseWrite(res,'error',{error:'AI 服务连接失败，请稍后重试'}); }

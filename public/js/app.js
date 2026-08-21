@@ -7849,7 +7849,9 @@ const aiSidebarState = {
   historyRequestSequence: 0,
   requestSequence: 0,
   isGenerating: false,
-  abortController: null
+  abortController: null,
+  activeStreamHost: null,
+  activeStreamBuffer: ''
 };
 function setAiComposerBusy(busy){
   aiSidebarState.isGenerating = !!busy;
@@ -7870,12 +7872,28 @@ function cancelAiGeneration(){
   const hadRequest=Boolean(aiSidebarState.abortController);
   try{ aiSidebarState.abortController?.abort(); }catch(_){}
   aiSidebarState.abortController=null;
-  try{
+  const host=aiSidebarState.activeStreamHost;
+  const partial=String(aiSidebarState.activeStreamBuffer||'').trim();
+  if(host){
+    host.querySelectorAll('.ai-thinking, .ai-streaming').forEach(node=>node.remove());
+    const note=host.querySelector('.ai-message-content');
+    if(note) note.textContent=partial ? '已停止生成，已保留部分输出。' : '已停止生成。';
+    if(partial){
+      const result=document.createElement('div');
+      result.className='ai-result-md';
+      try{ result.innerHTML=renderAiMarkdown(partial); }catch(_){ result.textContent=partial; }
+      enhanceAiCodeBlocks(result);
+      host.appendChild(result);
+      host.appendChild(createAiResultActions(partial));
+    }
+  } else {
     document.querySelectorAll('#ai-chat .ai-thinking, #ai-chat .ai-streaming')
       .forEach(el=>el.closest('.ai-message')?.remove());
-  }catch(_){}
+  }
+  aiSidebarState.activeStreamHost=null;
+  aiSidebarState.activeStreamBuffer='';
   setAiComposerBusy(false);
-  if(hadRequest) loadAiHistoryForCurrentDiary(true);
+  if(hadRequest) setTimeout(()=>{ loadAiHistoryForCurrentDiary(true); },350);
 }
 function autoResizeAiPrompt(){
   const ta=document.getElementById('ai-prompt');
@@ -8685,11 +8703,60 @@ function extractSvgString(text){
   return m2 ? m2[0] : '';
 }
 function sanitizeSvgText(svg){
-  // keep as is but ensure xmlns
-  if(!svg.includes('xmlns=')) svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-  return svg;
+  const raw=String(svg||'').trim();
+  if(!raw.startsWith('<svg') || !raw.includes('</svg>')) return '';
+  if(!raw.includes('xmlns=')) {
+    // DOMParser treats an unprefixed root as non-namespaced XML without this.
+    return sanitizeSvgText(raw.replace(/^<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"'));
+  }
+  try{
+    const doc=new DOMParser().parseFromString(raw,'image/svg+xml');
+    if(doc.querySelector('parsererror')) return '';
+    const root=doc.documentElement;
+    if(!root || root.localName.toLowerCase()!=='svg') return '';
+    const SVG_NS='http://www.w3.org/2000/svg';
+    const blockedTags=new Set([
+      'script','style','foreignObject','iframe','embed','object','link','base',
+      'handler','listener','animate','animateMotion','animateTransform','set'
+    ]);
+    const cleanAttributes=el=>{
+      [...el.attributes].forEach(attr=>{
+        const name=String(attr.name||'').toLowerCase();
+        const value=String(attr.value||'');
+        if(name.startsWith('on') || ['src','data','action','formaction','style'].includes(name)){
+          el.removeAttribute(attr.name);
+          return;
+        }
+        if((name==='href'||name==='xlink:href') && !value.trim().startsWith('#')){
+          el.removeAttribute(attr.name);
+        }
+      });
+    };
+    cleanAttributes(root);
+    const nodes=[];
+    const walker=doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT | NodeFilter.SHOW_PROCESSING_INSTRUCTION);
+    while(walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(node=>{
+      if(node.nodeType===Node.ELEMENT_NODE){
+        const el=node;
+        if(el.namespaceURI!==SVG_NS || blockedTags.has(String(el.localName||'').toLowerCase())){
+          el.remove();
+          return;
+        }
+        cleanAttributes(el);
+      } else {
+        node.remove();
+      }
+    });
+    const serialized=new XMLSerializer().serializeToString(root);
+    return serialized.includes('</svg>') ? serialized : '';
+  }catch(_){
+    return '';
+  }
 }
 function renderSvgCard(svg, opts={}){
+  svg=sanitizeSvgText(svg);
+  if(!svg) return document.createElement('div');
   const card=document.createElement('div');
   card.className='ai-svg-card' + (opts.selected ? ' ai-svg-selected' : '');
   card.tabIndex=0;
@@ -9335,6 +9402,8 @@ async function runAiAction(action, prompt = '', options = {}) {
   const streamNote = document.createElement('div'); streamNote.className='ai-message-content'; streamNote.textContent='正在准备…';
   streamHost.append(streamLabel, streamNote);
   if(chatEl) { chatEl.appendChild(streamHost); chatEl.scrollTop = chatEl.scrollHeight; }
+  aiSidebarState.activeStreamHost=streamHost;
+  aiSidebarState.activeStreamBuffer='';
 
   let output = null;
   let streaming = null;
@@ -9393,8 +9462,8 @@ async function runAiAction(action, prompt = '', options = {}) {
         if(event==='meta'){ try{ const j=JSON.parse(data); metaInfo=j; streamNote.textContent=j.note||'正在生成…'; const steps=j.thinkingSteps||[]; if(!thinking && steps.length){ thinking=createAiThinkingBlock(streamHost, steps); } }catch(_){} }
         else if(event==='thinking'){ try{ const j=JSON.parse(data); if(thinking) thinking.markDone(j.index); else if(metaInfo && metaInfo.thinkingSteps){ thinking=createAiThinkingBlock(streamHost, metaInfo.thinkingSteps); thinking.markDone(j.index);} }catch(_){} }
         else if(event==='thinking_done'){ if(thinking) thinking.setAllDone(); if(!streaming){ streaming=createAiStreamingBlock(streamHost); } }
-        else if(event==='delta'){ try{ const j=JSON.parse(data); const t=j.text||''; fullBuffer+=t; if(!streaming) streaming=createAiStreamingBlock(streamHost); streaming.appendDelta(t); }catch(_){} }
-        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, scope:j.scope||(metaInfo&&metaInfo.scope)||'note', threadId:j.thread_id||'' }; }catch(_){ }
+        else if(event==='delta'){ try{ const j=JSON.parse(data); const t=j.text||''; fullBuffer+=t; aiSidebarState.activeStreamBuffer=fullBuffer; if(!streaming) streaming=createAiStreamingBlock(streamHost); streaming.appendDelta(t); }catch(_){} }
+        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; aiSidebarState.activeStreamBuffer=fullBuffer; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, scope:j.scope||(metaInfo&&metaInfo.scope)||'note', threadId:j.thread_id||'' }; }catch(_){ }
         }
         else if(event==='unavailable'){
           if(retryThreadId) throw new Error('AI 服务暂不可用，已保留原对话');
@@ -9417,7 +9486,10 @@ async function runAiAction(action, prompt = '', options = {}) {
   }
   try{
     await fetchStreamSSE(streamUrl);
-    if(!output){
+    if(streamHost){ streamHost.remove(); }
+    aiSidebarState.activeStreamHost=null;
+    aiSidebarState.activeStreamBuffer=fullBuffer;
+    if(!output && !fullBuffer.trim()){
       const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt);
       output={ note: local.note, result: stripCodeFence(local.result||''), mode: action };
       if(streamHost) streamHost.remove();
@@ -9425,7 +9497,7 @@ async function runAiAction(action, prompt = '', options = {}) {
       if(streamHost) streamHost.remove();
     }
   } catch(error){
-    if(error && error.name==='AbortError'){ if(streamHost) streamHost.remove(); cancelAiGeneration(); return; }
+    if(error && error.name==='AbortError'){ cancelAiGeneration(); return; }
     if(streamHost) streamHost.remove();
     if(thinking) try{ thinking.setAllDone(); }catch(_){}
     if(streaming) try{ streaming.destroy(); }catch(_){}
@@ -9440,12 +9512,22 @@ async function runAiAction(action, prompt = '', options = {}) {
           const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt);
           output={ note: local.note, result: stripCodeFence(local.result||''), mode: action };
         }
-      } catch(e){ setAiComposerBusy(false); loadAiHistoryForCurrentDiary(true); toast(error.message||e.message, 'error'); return; }
+      } catch(e){
+        aiSidebarState.activeStreamHost=null;
+        aiSidebarState.activeStreamBuffer='';
+        setAiComposerBusy(false);
+        setTimeout(()=>loadAiHistoryForCurrentDiary(true),350);
+        toast(error.message||e.message, 'error');
+        return;
+      }
     } else {
       // we already have partial output from stream, keep it
+      setTimeout(()=>loadAiHistoryForCurrentDiary(true),350);
     }
   }
 
+  aiSidebarState.activeStreamHost=null;
+  aiSidebarState.activeStreamBuffer='';
   setAiComposerBusy(false);
   // diary-bound: after success, the server has persisted; refresh history softly after rendering
   if(output.threadId) setTimeout(()=>{

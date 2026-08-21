@@ -234,8 +234,26 @@ router.post('/svg', (req, res) => {
   const trimmed = svg.trim();
   if (!trimmed.startsWith('<svg') || !trimmed.includes('</svg>')) return res.status(400).json({ error: '无效的 SVG 内容（需包含 <svg>...</svg>）' });
   if (trimmed.length > 500 * 1024) return res.status(413).json({ error: 'SVG 过大（>500KB）' });
-  // basic sanitize: block script/event handlers
-  if (/<script/i.test(trimmed) || /on\w+\s*=/i.test(trimmed)) return res.status(400).json({ error: 'SVG 包含不被允许的内容' });
+  const unsafeSvgPatterns = [
+    /<script/i,
+    /<style/i,
+    /<foreignObject/i,
+    /<iframe/i,
+    /<(?:object|embed|link|base|image)\b/i,
+    /<animate\b/i,
+    /\son[\w:-]+\s*=/i,
+    /(?:javascript|vbscript|data)\s*:/i,
+    /<!\[CDATA\[/i,
+    /<!DOCTYPE/i,
+    /<!ENTITY/i
+  ];
+  if (unsafeSvgPatterns.some(pattern => pattern.test(trimmed))) {
+    return res.status(400).json({ error: 'SVG 包含不被允许的内容' });
+  }
+  const externalHrefPattern = /(?:^|\s)(?:xlink:)?href\s*=\s*(["'])\s*(?!#)[^"']+/i;
+  if (externalHrefPattern.test(trimmed)) {
+    return res.status(400).json({ error: 'SVG 不允许引用外部资源' });
+  }
   const safeName = (typeof name === 'string' && name.trim() ? name.trim() : 'ai-drawing').replace(/[^\w\-\u4e00-\u9fa5]+/g, '-').slice(0, 80) || 'ai-drawing';
   const folderVal = (typeof folder === 'string' ? folder.trim().slice(0,200) : '');
   const subdir = 'images';

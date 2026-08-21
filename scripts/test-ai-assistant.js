@@ -70,6 +70,10 @@ async function main() {
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive'
       });
+      if (provider.lastPrompt.includes('CANCEL_PARTIAL_TEST')) {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'CANCELLED_PARTIAL' } }] })}\n\n`);
+        return;
+      }
       ['REPLACED ', 'SELECTION'].forEach(text => {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
       });
@@ -158,17 +162,88 @@ async function main() {
     );
     assert(conversations.items.some(item => item.role === 'assistant' && item.result === done.result), 'assistant output should appear in diary history');
 
-    const browser = await puppeteer.launch({ headless: 'new' });
+    const validSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><circle cx="10" cy="5" r="4" fill="green"/></svg>';
+    const svgSaveResponse = await fetch(`${base}/api/upload/svg`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ svg: validSvg, name: 'integration circle' })
+    });
+    assert(svgSaveResponse.ok, `valid SVG upload failed (${svgSaveResponse.status})`);
+    const savedSvg = await svgSaveResponse.json();
+    assert(/^\/uploads\/.+\.svg$/.test(savedSvg.url), 'valid SVG should be stored in user files');
+    const maliciousSvgUpload = await fetch(`${base}/api/upload/svg`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ svg: '<svg xmlns="http://www.w3.org/2000/svg"><circle onmouseover="alert(1)"/></svg>', name: 'unsafe' })
+    });
+    assert(maliciousSvgUpload.status === 400, 'malicious SVG upload should be rejected');
+
+    const cancelController = new AbortController();
+    const cancelResponse = await fetch(`${base}/api/ai/assist/stream`, {
+      method: 'POST',
+      headers: auth,
+      signal: cancelController.signal,
+      body: JSON.stringify({
+        action: 'ask',
+        title: 'AI context test',
+        content: 'Cancel partial context',
+        prompt: 'CANCEL_PARTIAL_TEST',
+        diary_id: diary.id
+      })
+    });
+    const cancelReader = cancelResponse.body.getReader();
+    const cancelDecoder = new TextDecoder();
+    let cancelText = '';
+    while (!cancelText.includes('event: delta')) {
+      const { value, done } = await cancelReader.read();
+      if (done) break;
+      cancelText += cancelDecoder.decode(value, { stream: true });
+    }
+    cancelController.abort();
+    try { await cancelReader.read(); } catch (_) {}
+    let cancelledSaved = false;
+    for (let attempt = 0; attempt < 30 && !cancelledSaved; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const history = await api(
+        base,
+        `/api/ai/conversations?diary_id=${diary.id}&limit=20`,
+        { headers: { Authorization: `Bearer ${register.token}` } }
+      );
+      cancelledSaved = history.items.some(item => item.role === 'assistant' && item.result === 'CANCELLED_PARTIAL');
+    }
+    assert(cancelledSaved, 'partial assistant output should be preserved after cancellation');
+
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-proxy-server', '--disable-dev-shm-usage']
+    });
     try {
       const page = await browser.newPage();
       const pageErrors = [];
       page.on('pageerror', error => pageErrors.push(error.message));
+      await page.setRequestInterception(true);
+      page.on('request', request => {
+        if (request.url().startsWith(base)) {
+          request.continue();
+        } else {
+          request.abort();
+        }
+      });
       await page.setViewport({ width: 1280, height: 850 });
       await page.evaluateOnNewDocument((token, user) => {
         localStorage.setItem('treeks_token', token);
         localStorage.setItem('treeks_user', JSON.stringify(user));
+        window.marked = window.marked || { setOptions: () => {}, parse: value => '<pre>' + String(value) + '</pre>' };
+        window.DOMPurify = window.DOMPurify || { sanitize: value => value };
+        window.hljs = window.hljs || { highlightElement: () => {} };
+        window.katex = window.katex || { renderToString: value => String(value) };
+        window.mermaid = window.mermaid || { initialize: () => {}, run: async () => {} };
+        window.pdfjsLib = window.pdfjsLib || { GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => { throw new Error('offline test'); } };
+        window.mammoth = window.mammoth || { convertToHtml: async () => ({ value: '' }) };
+        window.XLSX = window.XLSX || { read: () => ({ SheetNames: [], Sheets: {} }), utils: { sheet_to_html: () => '' } };
       }, register.token, register.user);
-      await page.goto(base, { waitUntil: 'networkidle0' });
+      page.setDefaultTimeout(60000);
+      await page.goto(base, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('.diary-card', { timeout: 15000 });
       await page.evaluate(id => openEditor(id), diary.id);
       await page.waitForFunction(() => document.getElementById('editor-textarea')?.value?.length > 0, { timeout: 15000 });
@@ -185,6 +260,22 @@ async function main() {
         return Array.from(document.querySelectorAll('#ai-chat .ai-message[data-thread-id] button'))
           .some(node => node.textContent.trim() === '重新生成');
       }, { timeout: 15000 });
+      const svgSafety = await page.evaluate(() => {
+        window.__svgXss = false;
+        const unsafe = '<svg xmlns="http://www.w3.org/2000/svg" onload="window.__svgXss=true"><script>window.__svgXss=true</script><a href="https://example.com"><circle r="8"/></a></svg>';
+        const safe = sanitizeSvgText(unsafe);
+        const host = document.createElement('div');
+        host.innerHTML = safe;
+        return {
+          safe,
+          executed: window.__svgXss,
+          hasCircle: !!host.querySelector('circle'),
+          hasScript: !!host.querySelector('script'),
+          hasOnload: !!host.querySelector('[onload]'),
+          hasExternalHref: !!host.querySelector('[href^="https://"]')
+        };
+      });
+      assert(svgSafety.executed === false && svgSafety.hasCircle && !svgSafety.hasScript && !svgSafety.hasOnload && !svgSafety.hasExternalHref, `SVG sanitizer output invalid: ${svgSafety.safe}`);
       assert(pageErrors.length === 0, `sidebar produced page errors: ${pageErrors.join('; ')}`);
     } finally {
       await browser.close();
