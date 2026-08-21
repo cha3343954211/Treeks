@@ -11793,7 +11793,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.tool-group, .tool-mode-toggle { background: #f5f7f5; border-color: var(--border); border-radius: 6px; }
+.tool-group, .tool-mode-toggle { background: var(--bg); border-color: var(--border); border-radius: 6px; }
 .tool-mode-toggle { padding: 2px; }
 .tool-btn { min-width: 30px; height: 30px; border-radius: 4px; transition: background 0.15s ease, color 0.15s ease; }
 .tool-btn svg { transition: none; }
@@ -11805,7 +11805,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .tool-divider { background: var(--border); }
 .editor-body { background: var(--bg); }
 .editor-pane, .preview-pane { padding: 24px 28px; }
-.editor-pane { background: #fbfcfa; }
+.editor-pane { background: var(--bg-paper); }
 .preview-pane { background: var(--bg); }
 .editor-pane::before, .preview-pane::before {
   top: -24px;
