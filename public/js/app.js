@@ -8074,18 +8074,29 @@ function sseConnect(path, handlers){
   });
 }
 function updateAiContextIndicator() {
+  const textEl = document.getElementById('ai-context-text');
   const indicator = document.getElementById('ai-context-indicator');
-  if (!indicator) return;
+  const target = textEl || indicator;
+  if (!target) return;
   const context = getAiWritingContext();
   const did = getAiDiaryId();
   const prefix = did===-1 ? '未绑定日记 · ' : ('日记 #'+did+' · ');
-  if (context.hasSelection) {
-    indicator.textContent = prefix + `将处理已选中的 ${context.selection.length} 个字符（对话按此日记保留）`;
-  } else if (context.content) {
-    indicator.textContent = prefix + `将参考当前日记的 ${context.content.length} 个字符（对话按此日记保留）`;
-  } else {
-    indicator.textContent = prefix + '先写下一两句，我会据此协助你展开（对话按日记归档）';
-  }
+  let msg='';
+  if (context.hasSelection) msg = prefix + `将处理已选中的 ${context.selection.length} 个字符（对话按此日记保留）`;
+  else if (context.content) msg = prefix + `将参考当前日记的 ${context.content.length} 个字符（对话按此日记保留）`;
+  else msg = prefix + '先写下一两句，我会据此协助你展开（对话按日记归档）';
+  target.textContent = msg;
+  try{
+    const empty=document.getElementById('ai-empty');
+    const chat=document.getElementById('ai-chat');
+    if(empty && chat){
+      const hasMessages = chat.querySelectorAll('.ai-message').length > 1;
+      empty.style.display = hasMessages ? 'none' : 'flex';
+    }
+    const cc=document.getElementById('ai-char-count');
+    const ta=document.getElementById('editor-textarea');
+    if(cc && ta) cc.textContent = String((ta.value||'').length);
+  }catch(_){}
 }
 
 function setAiSidebarOpen(open, options = {}) {

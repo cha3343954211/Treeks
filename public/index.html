@@ -766,7 +766,9 @@
                 <option value="">本地写作辅助</option>
               </select>
             </div>
-            <div class="ai-mode-tabs" role="tablist" aria-label="AI 模式"><button class="ai-mode-tab active" data-ai-mode="ask" role="tab" aria-selected="true">问答</button><button class="ai-mode-tab" data-ai-mode="edit" role="tab" aria-selected="false">编辑</button></div><div class="ai-edit-hint" id="ai-edit-hint">编辑模式：AI 会直接改写当前笔记，并在编辑区以红绿差异呈现。选区优先。</div><div class="ai-context-indicator" id="ai-context-indicator">将使用当前日记作为上下文</div>
+            <div class="ai-mode-tabs" role="tablist" aria-label="AI 模式"><button class="ai-mode-tab active" data-ai-mode="ask" role="tab" aria-selected="true">问答</button><button class="ai-mode-tab" data-ai-mode="edit" role="tab" aria-selected="false">编辑</button></div>
+            <div class="ai-edit-hint" id="ai-edit-hint">编辑模式：AI 会直接改写当前笔记，并在编辑区以红绿差异呈现。选区优先，可随时应用或放弃。</div>
+            <div class="ai-context-indicator" id="ai-context-indicator"><span class="ai-context-dot" aria-hidden="true"></span><span id="ai-context-text">将使用当前日记作为上下文</span><button class="ai-context-copy" id="btn-ai-copy-context" type="button" title="复制上下文摘要">复制</button></div>
             <div class="ai-quick-actions" aria-label="AI 快捷操作">
               <button class="ai-quick-action" data-ai-action="continue">续写</button>
               <button class="ai-quick-action" data-ai-action="polish">润色</button>
@@ -777,18 +779,31 @@
               <button class="ai-quick-action ai-quick-action-draw" data-ai-action="draw" title="让 AI 绘制 SVG 矢量图">绘图</button>
             </div>
             <div class="ai-chat" id="ai-chat" aria-live="polite">
-              <div class="ai-message ai-message-assistant">
+              <div class="ai-empty" id="ai-empty">
+                <div class="ai-empty-icon" aria-hidden="true">✦</div>
+                <div class="ai-empty-title">从当前笔记开始</div>
+                <div class="ai-empty-desc">选中一段文字可针对选区处理，未选中时默认参考整篇日记。试试「续写」或「润色」。</div>
+                <div class="ai-empty-actions">
+                  <button class="ai-quick-action" data-ai-action="continue">试试续写</button>
+                  <button class="ai-quick-action" data-ai-action="polish">试试润色</button>
+                </div>
+              </div>
+              <div class="ai-message ai-message-assistant" id="ai-welcome-msg">
                 <div class="ai-message-label">Treeks AI</div>
                 <div class="ai-message-content">选中一段文字后可针对选区处理；未选中时，我会参考整篇日记。</div>
               </div>
             </div>
-            <form class="ai-composer" id="ai-composer">
-              <textarea id="ai-prompt" rows="2" maxlength="500" placeholder="例如：让这段更有画面感" aria-label="向 AI 写作助手提问"></textarea>
-              <button class="ai-send-btn" type="submit" title="发送" aria-label="发送">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></svg>
-              </button>
-            </form>
+            <div class="ai-composer-wrap">
+              <div class="ai-composer-meta"><span class="ai-composer-hint" id="ai-composer-hint">Enter 发送 · Shift+Enter 换行</span><span class="ai-char-count"><span id="ai-char-count">0</span>/500</span></div>
+              <form class="ai-composer" id="ai-composer">
+                <textarea id="ai-prompt" rows="2" maxlength="500" placeholder="例如：让这段更有画面感" aria-label="向 AI 写作助手提问"></textarea>
+                <button class="ai-send-btn" type="submit" title="发送 (Enter)" aria-label="发送">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></svg>
+                </button>
+              </form>
+            </div>
           </aside>
+
         </div>
 
         <!-- 统计视图 -->
