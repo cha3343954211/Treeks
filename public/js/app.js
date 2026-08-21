@@ -7840,6 +7840,7 @@ const aiSidebarState = {
   hasOlderHistory: false,
   isLoadingOlderHistory: false,
   activeSearchQuery: '',
+  activeSearchMatchCount: 0,
   resetSearch: null,
   isGenerating: false,
   abortController: null
@@ -8347,7 +8348,7 @@ async function loadOlderAiHistory(){
     document.getElementById('ai-history-older')?.after(fragment);
     syncAiHistoryWindow(data, items);
     ensureAiHistoryOlderButton();
-    if(aiSidebarState.activeSearchQuery) aiSidebarState.applySearchHighlight?.(aiSidebarState.activeSearchQuery);
+    if(aiSidebarState.activeSearchQuery) aiSidebarState.applySearchHighlight?.(aiSidebarState.activeSearchQuery, aiSidebarState.activeSearchMatchCount);
     chat.scrollTop=previousTop+(chat.scrollHeight-previousHeight);
   }catch(_){
     if(btn){ btn.disabled=false; btn.textContent='加载更早对话'; }
@@ -8386,7 +8387,9 @@ function renderAiHistory(items, options = {}){
     return;
   }
   for(const it of items){
-    chat.appendChild(createAiHistoryMessage(it));
+    const message=createAiHistoryMessage(it);
+    if(options.searchContext) message.dataset.searchContext='true';
+    chat.appendChild(message);
   }
   ensureAiHistoryOlderButton();
   chat.scrollTop = chat.scrollHeight;
@@ -8425,6 +8428,7 @@ async function clearAiHistoryForCurrentDiary(){
   try{
     await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId)), { method:'DELETE' });
   }catch(_){}
+  aiSidebarState.resetSearch?.({ restore:false });
   aiSidebarState.historyOldestId=null;
   aiSidebarState.hasOlderHistory=false;
   aiSidebarState.isLoadingOlderHistory=false;
@@ -9148,6 +9152,7 @@ function makeAiWritingResult(action, context, prompt = '') {
 
 async function runAiAction(action, prompt = '') {
   if(aiSidebarState.isGenerating){ toast('正在生成中，请稍候',''); return; }
+  aiSidebarState.resetSearch?.({ restore:false });
   const context = getAiWritingContext();
   if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
   const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
@@ -9322,7 +9327,7 @@ function initAiSidebar() {
     if(!btnSearch||!bar||!input||!closeBtn||!chatEl) return;
     let searchRequestId=0;
     let searchTimer=null;
-    function highlight(query){
+    function highlight(query, preferredCount){
       const q=String(query||'').trim();
       // restore
       chatEl.querySelectorAll('mark').forEach(m=>{
@@ -9363,13 +9368,18 @@ function initAiSidebar() {
           frag.appendChild(document.createTextNode(val.slice(last)));
           tn.replaceWith(frag);
         });
-        msg.style.display = msgHits? '' : 'none';
+        const keepContext = msg.dataset.searchContext === 'true';
+        msg.style.display = msgHits || keepContext ? '' : 'none';
         // but keep empty placeholder visible logic
         if(msg.id==='ai-empty' || msg.id==='ai-welcome-msg'){
           msg.style.display = hits? 'none' : '';
         }
       });
-      if(countEl) countEl.textContent = q? (hits? hits+' 命中' : '无结果') : '';
+      if(countEl) {
+        if(!q) countEl.textContent='';
+        else if(typeof preferredCount === 'number') countEl.textContent = preferredCount ? preferredCount+' 条对话' : '无结果';
+        else countEl.textContent = hits? hits+' 命中' : '无结果';
+      }
       chatEl.scrollTop=0;
     }
     async function runSearch(rawQuery){
@@ -9388,8 +9398,9 @@ function initAiSidebar() {
         if(requestId!==searchRequestId) return;
         const items=data.items||[];
         syncAiHistoryWindow(data,items);
-        renderAiHistory(items,{emptyMode:'search'});
-        highlight(query);
+        aiSidebarState.activeSearchMatchCount=Number(data.match_count||0);
+        renderAiHistory(items,{emptyMode:'search',searchContext:true});
+        highlight(query,aiSidebarState.activeSearchMatchCount);
       }catch(_){
         if(requestId===searchRequestId && countEl) countEl.textContent='搜索失败';
       }
@@ -9400,6 +9411,7 @@ function initAiSidebar() {
       searchRequestId++;
       input.value='';
       aiSidebarState.activeSearchQuery='';
+      aiSidebarState.activeSearchMatchCount=0;
       highlight('');
       if(restore) loadAiHistoryForCurrentDiary(true);
     }

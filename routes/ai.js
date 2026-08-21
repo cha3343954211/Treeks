@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { authRequired } = require('../middleware/auth');
 const { db } = require('../db');
 const { canReadDiary } = require('../services/permissions');
@@ -47,10 +48,11 @@ function loadRecentConversations(userId, diaryId, limit=12){
 }
 function saveConversations(userId, diaryId, messages){
   try{
-    const stmt = db.prepare('INSERT INTO ai_conversations (user_id, diary_id, role, content, result, action, model_id, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const stmt = db.prepare('INSERT INTO ai_conversations (user_id, diary_id, role, content, result, action, model_id, mode, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const threadId = crypto.randomUUID();
     const tx = db.transaction(()=>{
       for(const m of messages){
-        stmt.run(userId, diaryId, String(m.role||'user'), String(m.content||''), String(m.result||''), String(m.action||''), String(m.model_id||''), String(m.mode||''));
+        stmt.run(userId, diaryId, String(m.role||'user'), String(m.content||''), String(m.result||''), String(m.action||''), String(m.model_id||''), String(m.mode||''), threadId);
       }
     });
     tx();
@@ -156,23 +158,54 @@ router.get('/conversations', authRequired, (req, res)=>{
     if(row && !canReadDiary(row, req.user.id)) return res.status(403).json({ error: '无权限访问该日记的对话' });
   }
   const search = String(req.query.search || '').trim().slice(0, 200);
-  const searchPattern = search ? `%${search.replace(/[\\%_]/g, '\\$&')}%` : '';
+  const searchPattern = search ? `%${search.replace(/[\\%_]/g, '\$&')}%` : '';
   const searchSql = search ? ` AND (content LIKE ? ESCAPE '\\' OR result LIKE ? ESCAPE '\\')` : '';
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit,10)||100));
   const beforeId = Number.parseInt(req.query.before_id, 10);
   const hasCursor = Number.isInteger(beforeId) && beforeId > 0;
   const cursorSql = hasCursor ? ' AND id < ?' : '';
-  const listParams = [req.user.id, diaryId];
-  if(search) listParams.push(searchPattern, searchPattern);
-  if(hasCursor) listParams.push(beforeId);
-  listParams.push(limit);
-  const rows = db.prepare(`SELECT id, user_id, diary_id, role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${searchSql}${cursorSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...listParams).reverse();
-  const oldest = rows[0] || null;
-  const moreParams = [req.user.id, diaryId];
-  if(search) moreParams.push(searchPattern, searchPattern);
-  const hasMore = Boolean(oldest && db.prepare(`SELECT 1 FROM ai_conversations WHERE user_id=? AND diary_id=?${searchSql} AND id < ? LIMIT 1`).get(...moreParams, oldest.id));
-  const total = db.prepare(`SELECT COUNT(*) AS count FROM ai_conversations WHERE user_id=? AND diary_id=?${searchSql}`).get(...moreParams).count;
-  res.json({ items: rows, diary_id: diaryId, query: search, total, has_more: hasMore, oldest_id: oldest?.id || null });
+  let rows;
+  let total;
+  let hasMore;
+  let matchCount;
+  if(search) {
+    // Include the other half of the exchange so an answer hit keeps its
+    // question visible, and vice versa.
+    const searchCte = `
+      WITH matched AS (
+        SELECT id, role, thread_id FROM ai_conversations
+        WHERE user_id=? AND diary_id=?
+          AND (content LIKE ? ESCAPE '\\' OR result LIKE ? ESCAPE '\\')
+      ),
+      context AS (
+        SELECT id FROM matched
+        UNION
+        SELECT neighbor.id FROM matched item
+        JOIN ai_conversations neighbor ON
+          IFNULL(item.thread_id, '') != '' AND neighbor.thread_id=item.thread_id
+          AND neighbor.role != item.role
+      )
+    `;
+    const searchBase = [req.user.id, diaryId, searchPattern, searchPattern];
+    const searchListParams = [...searchBase];
+    if(hasCursor) searchListParams.push(beforeId);
+    searchListParams.push(limit);
+    rows = db.prepare(`${searchCte} SELECT c.*, CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS search_hit FROM context ctx JOIN ai_conversations c ON c.id=ctx.id LEFT JOIN matched m ON m.id=c.id ${cursorSql} ORDER BY c.created_at DESC, c.id DESC LIMIT ?`).all(...searchListParams);
+    total = db.prepare(`${searchCte} SELECT COUNT(*) AS count FROM context ctx JOIN ai_conversations c ON c.id=ctx.id`).get(...searchBase).count;
+    matchCount = db.prepare(`${searchCte} SELECT COUNT(*) AS count FROM matched`).get(...searchBase).count;
+    rows.reverse();
+    const oldest = rows[0] || null;
+    hasMore = Boolean(oldest && db.prepare(`${searchCte} SELECT 1 FROM context ctx JOIN ai_conversations c ON c.id=ctx.id WHERE c.id < ? LIMIT 1`).all(...searchBase, oldest.id).length);
+  } else {
+    const listParams = [req.user.id, diaryId];
+    if(hasCursor) listParams.push(beforeId);
+    listParams.push(limit);
+    rows = db.prepare(`SELECT id, user_id, diary_id, role, content, result, action, mode, model_id, thread_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${cursorSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...listParams).reverse();
+    const oldest = rows[0] || null;
+    hasMore = Boolean(oldest && db.prepare('SELECT 1 FROM ai_conversations WHERE user_id=? AND diary_id=? AND id < ? LIMIT 1').get(req.user.id, diaryId, oldest.id));
+    total = db.prepare('SELECT COUNT(*) AS count FROM ai_conversations WHERE user_id=? AND diary_id=?').get(req.user.id, diaryId).count;
+  }
+  res.json({ items: rows, diary_id: diaryId, query: search, total, match_count: search ? matchCount : undefined, has_more: hasMore, oldest_id: rows[0]?.id || null });
 });
 router.delete('/conversations', authRequired, (req, res)=>{
   const rawId = req.query.diary_id ?? req.body?.diary_id;
@@ -223,12 +256,12 @@ router.get('/assist/stream', authRequired, async (req, res) => {
   try {
     const chatMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。尊重用户语气，不提供诊断、判断或虚构事实。所有输出必须是纯 Markdown，不要使用 HTML，不要用代码块包裹整篇输出。'}, ...historyMessages, {role:'user',content:userPrompt}];
     const resp=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,stream:true,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:chatMessages}),signal:controller.signal});
-    if(!resp.ok){ let errText=''; try{const j=await resp.json(); errText=j?.error?.message||j?.error||'';}catch(_){ try{errText=await resp.text();}catch(_){}} console.error('[AI stream] provider error:',resp.status, String(errText).slice(0,400)); const fbMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。所有输出必须是纯 Markdown，不要使用 HTML。'}, ...historyMessages, {role:'user',content:userPrompt}]; const fallback=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:fbMessages}),signal:controller.signal}); const fj=await fallback.json().catch(()=>({})); if(fallback.ok && fj?.choices?.[0]?.message?.content){ let fr=String(fj.choices[0].message.content).trim(); const fm=fr.match(/^\`\`\`(?:markdown)?\s*\n([\s\S]*?)\n\`\`\`\s*$/); if(fm) fr=fm[1].trim(); sseWrite(res,'delta',{text:fr.slice(0,8000)}); sseWrite(res,'done',{result:fr}); clearTimeout(timeout); return res.end(); } sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(timeout); return res.end(); }
+    if(!resp.ok){ let errText=''; try{const j=await resp.json(); errText=j?.error?.message||j?.error||'';}catch(_){ try{errText=await resp.text();}catch(_){}} console.error('[AI stream] provider error:',resp.status, String(errText).slice(0,400)); const fbMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。所有输出必须是纯 Markdown，不要使用 HTML。'}, ...historyMessages, {role:'user',content:userPrompt}]; const fallback=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:fbMessages}),signal:controller.signal}); const fj=await fallback.json().catch(()=>({})); if(fallback.ok && fj?.choices?.[0]?.message?.content){ let fr=String(fj.choices[0].message.content).trim(); const fm=fr.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/); if(fm) fr=fm[1].trim(); sseWrite(res,'delta',{text:fr.slice(0,8000)}); sseWrite(res,'done',{result:fr}); clearTimeout(timeout); return res.end(); } sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(timeout); return res.end(); }
     const reader=resp.body && resp.body.getReader ? resp.body.getReader() : null; if(!reader){ const text=await resp.text(); sseWrite(res,'delta',{text}); sseWrite(res,'done',{result:text}); clearTimeout(timeout); return res.end(); }
     const decoder=new TextDecoder('utf-8'); let buffer=''; let full='';
     while(true){ const {done,value}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const delta=j?.choices?.[0]?.delta?.content||''; if(delta){ full+=delta; sseWrite(res,'delta',{text:delta}); } }catch(_){} } }
     if(buffer.trim().startsWith('data:')){ const payload=buffer.trim().slice(5).trim(); if(payload && payload!=='[DONE]'){ try{ const j=JSON.parse(payload); const d=j?.choices?.[0]?.delta?.content||''; if(d){ full+=d; sseWrite(res,'delta',{text:d}); } }catch(_){} } }
-    let finalText=full.trim(); const fence=finalText.match(/^\`\`\`(?:markdown)?\s*\n([\s\S]*?)\n\`\`\`\s*$/); if(fence) finalText=fence[1].trim(); sseWrite(res,'done',{result:finalText||full, diary_id: diaryCtx.diaryId});
+    let finalText=full.trim(); const fence=finalText.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/); if(fence) finalText=fence[1].trim(); sseWrite(res,'done',{result:finalText||full, diary_id: diaryCtx.diaryId});
     try{ saveConversations(req.user.id, diaryCtx.diaryId, [{role:'user', content: (p||labelsForSave(a,p)), result:'', action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}, {role:'assistant', content: finalText||full, result: finalText||full, action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}]); }catch(_){}
     clearTimeout(timeout); res.end();
   } catch(e){ clearTimeout(timeout); if(e.name==='AbortError') sseWrite(res,'error',{error:'AI 请求超时，请稍后重试'}); else { console.error('[AI stream] failed',e.message); sseWrite(res,'error',{error:'AI 服务连接失败，请稍后重试'}); } res.end(); }

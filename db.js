@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // 数据库目录：优先使用启动时 bootstrap 设置的环境变量，否则使用默认位置
 const DB_PATH = process.env.TREEKS_RUNTIME_DB_DIR || path.join(__dirname, 'data');
@@ -201,6 +202,7 @@ function initDatabase() {
       action TEXT DEFAULT 'custom',
       model_id TEXT DEFAULT '',
       mode TEXT DEFAULT '',
+      thread_id TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -378,6 +380,44 @@ function initDatabase() {
     -- 反向索引：支持历史消息查询（recipient_id, sender_id, created_at）
     CREATE INDEX IF NOT EXISTS idx_messages_recipient_pair ON messages(recipient_id, sender_id, created_at);
   `);
+
+  // A question and its answer share one stable id. Search uses this to show
+  // the complete exchange even when only the answer contains the keyword.
+  addColumnIfMissing('ai_conversations', 'thread_id', "TEXT DEFAULT ''");
+  const blankThreads = db.prepare("SELECT COUNT(*) AS count FROM ai_conversations WHERE IFNULL(thread_id, '') = ''").get().count;
+  if (blankThreads) {
+    const rows = db.prepare(`
+      SELECT id, user_id, diary_id, role, created_at
+      FROM ai_conversations
+      WHERE IFNULL(thread_id, '') = ''
+      ORDER BY user_id, diary_id, created_at, id
+    `).all();
+    const updateThread = db.prepare('UPDATE ai_conversations SET thread_id=? WHERE id=?');
+    const parsedTime = row => Date.parse(String(row.created_at || '').replace(' ', 'T') + 'Z');
+    const sameExchange = (left, right) => (
+      left && right &&
+      left.user_id === right.user_id &&
+      left.diary_id === right.diary_id &&
+      left.role === 'user' && right.role === 'assistant' &&
+      Number.isFinite(parsedTime(left)) && Number.isFinite(parsedTime(right)) &&
+      Math.abs(parsedTime(right) - parsedTime(left)) <= 15000
+    );
+    const backfillThreads = db.transaction(() => {
+      for (let i = 0; i < rows.length;) {
+        const threadId = crypto.randomUUID();
+        if (sameExchange(rows[i], rows[i + 1])) {
+          updateThread.run(threadId, rows[i].id);
+          updateThread.run(threadId, rows[i + 1].id);
+          i += 2;
+        } else {
+          updateThread.run(threadId, rows[i].id);
+          i += 1;
+        }
+      }
+    });
+    backfillThreads();
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ai_conversations_thread ON ai_conversations(thread_id)');
 
   // Normalize future inserts even when an old SQLite table still has a
   // datetime('now', 'localtime') default in its persisted schema.

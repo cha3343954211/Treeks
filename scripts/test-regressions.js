@@ -220,6 +220,28 @@ async function main() {
   assert.equal(olderAiHistory.data.items[0].content, 'message-1');
   assert.equal(olderAiHistory.data.items.at(-1).content, 'message-25');
 
+  const threadDiary = await request('/api/diaries', {
+    method: 'POST',
+    headers: auth(alice.token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title: 'AI thread', content: 'Conversation context' })
+  });
+  assert.equal(threadDiary.res.status, 201);
+  const threadId = 'search-thread-1';
+  const insertThread = db.prepare(`
+    INSERT INTO ai_conversations
+      (user_id, diary_id, role, content, result, action, model_id, mode, thread_id)
+    VALUES (?, ?, ?, ?, ?, 'ask', '', 'ask', ?)
+  `);
+  insertThread.run(alice.user.id, threadDiary.data.id, 'user', 'question about mythical horses', '', threadId);
+  insertThread.run(alice.user.id, threadDiary.data.id, 'assistant', 'stored prompt', 'The answer mentions unicorns.', threadId);
+
+  const contextualAiSearch = await request(`/api/ai/conversations?diary_id=${threadDiary.data.id}&search=${encodeURIComponent('unicorns')}`, { headers: auth(alice.token) });
+  assert.equal(contextualAiSearch.res.status, 200);
+  assert.equal(contextualAiSearch.data.match_count, 1);
+  assert.deepEqual(contextualAiSearch.data.items.map(item => item.role), ['user', 'assistant']);
+  assert.equal(contextualAiSearch.data.items[0].search_hit, 0);
+  assert.equal(contextualAiSearch.data.items[1].search_hit, 1);
+
   const escapedAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=${encodeURIComponent('needle-100%_')}`, { headers: auth(alice.token) });
   assert.equal(escapedAiSearch.res.status, 200);
   assert.equal(escapedAiSearch.data.total, 1);
