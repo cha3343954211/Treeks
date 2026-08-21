@@ -106,7 +106,8 @@ async function main() {
   const insertMany = db.transaction(() => {
     for (let i = 1; i <= 125; i += 1) {
       const createdAt = new Date(baseTime + i * 1000).toISOString().slice(0, 19).replace('T', ' ');
-      insertConversation.run(alice.user.id, aiDiaryId, 'user', `message-${i}`, createdAt);
+      const content = i === 42 ? 'needle-100%_special' : `message-${i}`;
+      insertConversation.run(alice.user.id, aiDiaryId, 'user', content, createdAt);
     }
   });
   insertMany();
@@ -218,6 +219,16 @@ async function main() {
   assert.equal(olderAiHistory.data.has_more, false);
   assert.equal(olderAiHistory.data.items[0].content, 'message-1');
   assert.equal(olderAiHistory.data.items.at(-1).content, 'message-25');
+
+  const escapedAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=${encodeURIComponent('needle-100%_')}`, { headers: auth(alice.token) });
+  assert.equal(escapedAiSearch.res.status, 200);
+  assert.equal(escapedAiSearch.data.total, 1);
+  assert.equal(escapedAiSearch.data.items.length, 1);
+  assert.equal(escapedAiSearch.data.items[0].content, 'needle-100%_special');
+
+  const caseInsensitiveAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=NEEDLE-100%25_`, { headers: auth(alice.token) });
+  assert.equal(caseInsensitiveAiSearch.res.status, 200);
+  assert.equal(caseInsensitiveAiSearch.data.total, 1);
 
   // ===== 改进项回归：登录限流（15 分钟 20 次 → 第 21 次 429） =====
   // 注意：同一 IP 已登录 2 次（alice/bob register），此处再打 18 次错误密码应触发 429

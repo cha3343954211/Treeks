@@ -155,16 +155,24 @@ router.get('/conversations', authRequired, (req, res)=>{
     const row = db.prepare('SELECT id, user_id FROM diaries WHERE id=?').get(diaryId);
     if(row && !canReadDiary(row, req.user.id)) return res.status(403).json({ error: '无权限访问该日记的对话' });
   }
+  const search = String(req.query.search || '').trim().slice(0, 200);
+  const searchPattern = search ? `%${search.replace(/[\\%_]/g, '\\$&')}%` : '';
+  const searchSql = search ? ` AND (content LIKE ? ESCAPE '\\' OR result LIKE ? ESCAPE '\\')` : '';
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit,10)||100));
   const beforeId = Number.parseInt(req.query.before_id, 10);
   const hasCursor = Number.isInteger(beforeId) && beforeId > 0;
   const cursorSql = hasCursor ? ' AND id < ?' : '';
-  const listParams = hasCursor ? [req.user.id, diaryId, beforeId, limit] : [req.user.id, diaryId, limit];
-  const rows = db.prepare(`SELECT id, user_id, diary_id, role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${cursorSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...listParams).reverse();
+  const listParams = [req.user.id, diaryId];
+  if(search) listParams.push(searchPattern, searchPattern);
+  if(hasCursor) listParams.push(beforeId);
+  listParams.push(limit);
+  const rows = db.prepare(`SELECT id, user_id, diary_id, role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${searchSql}${cursorSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...listParams).reverse();
   const oldest = rows[0] || null;
-  const hasMore = Boolean(oldest && db.prepare(`SELECT 1 FROM ai_conversations WHERE user_id=? AND diary_id=? AND id < ? LIMIT 1`).get(req.user.id, diaryId, oldest.id));
-  const total = db.prepare('SELECT COUNT(*) AS count FROM ai_conversations WHERE user_id=? AND diary_id=?').get(req.user.id, diaryId).count;
-  res.json({ items: rows, diary_id: diaryId, total, has_more: hasMore, oldest_id: oldest?.id || null });
+  const moreParams = [req.user.id, diaryId];
+  if(search) moreParams.push(searchPattern, searchPattern);
+  const hasMore = Boolean(oldest && db.prepare(`SELECT 1 FROM ai_conversations WHERE user_id=? AND diary_id=?${searchSql} AND id < ? LIMIT 1`).get(...moreParams, oldest.id));
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM ai_conversations WHERE user_id=? AND diary_id=?${searchSql}`).get(...moreParams).count;
+  res.json({ items: rows, diary_id: diaryId, query: search, total, has_more: hasMore, oldest_id: oldest?.id || null });
 });
 router.delete('/conversations', authRequired, (req, res)=>{
   const rawId = req.query.diary_id ?? req.body?.diary_id;

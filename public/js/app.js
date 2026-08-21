@@ -7839,6 +7839,8 @@ const aiSidebarState = {
   historyOldestId: null,
   hasOlderHistory: false,
   isLoadingOlderHistory: false,
+  activeSearchQuery: '',
+  resetSearch: null,
   isGenerating: false,
   abortController: null
 };
@@ -8336,13 +8338,16 @@ async function loadOlderAiHistory(){
   const previousTop=chat.scrollTop;
   try{
     const diaryId=getAiDiaryId();
-    const data=await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100&before_id='+encodeURIComponent(String(cursor)));
+    let historyUrl='/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100&before_id='+encodeURIComponent(String(cursor));
+    if(aiSidebarState.activeSearchQuery) historyUrl += '&search='+encodeURIComponent(aiSidebarState.activeSearchQuery);
+    const data=await api(historyUrl);
     const items=data.items||[];
     const fragment=document.createDocumentFragment();
     for(const it of items) fragment.appendChild(createAiHistoryMessage(it));
     document.getElementById('ai-history-older')?.after(fragment);
     syncAiHistoryWindow(data, items);
     ensureAiHistoryOlderButton();
+    if(aiSidebarState.activeSearchQuery) aiSidebarState.applySearchHighlight?.(aiSidebarState.activeSearchQuery);
     chat.scrollTop=previousTop+(chat.scrollHeight-previousHeight);
   }catch(_){
     if(btn){ btn.disabled=false; btn.textContent='加载更早对话'; }
@@ -8351,12 +8356,18 @@ async function loadOlderAiHistory(){
     chat.dispatchEvent(new Event('scroll'));
   }
 }
-function renderAiHistory(items){
+function renderAiHistory(items, options = {}){
   const chat=document.getElementById('ai-chat');
   if(!chat) return;
   chat.innerHTML='';
   if(!items || !items.length){
-    chat.innerHTML = `
+    const isSearch = options.emptyMode === 'search';
+    chat.innerHTML = isSearch ? `
+    <div class="ai-empty" id="ai-empty">
+      <div class="ai-empty-icon" aria-hidden="true">⌕</div>
+      <div class="ai-empty-title">未找到对话</div>
+      <div class="ai-empty-desc">换个关键词试试，或关闭搜索查看当前日记的完整记录。</div>
+    </div>` : `
     <div class="ai-empty" id="ai-empty">
       <div class="ai-empty-icon" aria-hidden="true">✦</div>
       <div class="ai-empty-title">从当前笔记开始</div>
@@ -8384,7 +8395,14 @@ function renderAiHistory(items){
 }
 async function loadAiHistoryForCurrentDiary(force){
   const diaryId = getAiDiaryId();
+  if(aiSidebarState.activeSearchQuery && aiSidebarState.historyLoadedFor !== String(diaryId)) {
+    aiSidebarState.resetSearch?.({ restore:false });
+  }
   if(!force && aiSidebarState.historyLoadedFor === String(diaryId)) return;
+  if(aiSidebarState.activeSearchQuery) {
+    aiSidebarState.refreshSearch?.(aiSidebarState.activeSearchQuery);
+    return;
+  }
   aiSidebarState.historyLoadedFor = String(diaryId);
   aiSidebarState.currentDiaryId = diaryId;
   aiSidebarState.historyOldestId=null;
@@ -9302,7 +9320,8 @@ function initAiSidebar() {
     const countEl=document.getElementById('ai-chat-search-count');
     const chatEl=document.getElementById('ai-chat');
     if(!btnSearch||!bar||!input||!closeBtn||!chatEl) return;
-    let lastQuery='';
+    let searchRequestId=0;
+    let searchTimer=null;
     function highlight(query){
       const q=String(query||'').trim();
       // restore
@@ -9353,15 +9372,52 @@ function initAiSidebar() {
       if(countEl) countEl.textContent = q? (hits? hits+' 命中' : '无结果') : '';
       chatEl.scrollTop=0;
     }
+    async function runSearch(rawQuery){
+      const query=String(rawQuery||'').trim();
+      const requestId=++searchRequestId;
+      aiSidebarState.activeSearchQuery=query;
+      if(!query){
+        await loadAiHistoryForCurrentDiary(true);
+        if(requestId===searchRequestId) highlight('');
+        return;
+      }
+      if(countEl) countEl.textContent='搜索中…';
+      try{
+        const diaryId=getAiDiaryId();
+        const data=await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=200&search='+encodeURIComponent(query));
+        if(requestId!==searchRequestId) return;
+        const items=data.items||[];
+        syncAiHistoryWindow(data,items);
+        renderAiHistory(items,{emptyMode:'search'});
+        highlight(query);
+      }catch(_){
+        if(requestId===searchRequestId && countEl) countEl.textContent='搜索失败';
+      }
+    }
+    function clearSearch(options={}){
+      const {restore=true}=options;
+      clearTimeout(searchTimer); searchTimer=null;
+      searchRequestId++;
+      input.value='';
+      aiSidebarState.activeSearchQuery='';
+      highlight('');
+      if(restore) loadAiHistoryForCurrentDiary(true);
+    }
+    aiSidebarState.resetSearch=clearSearch;
+    aiSidebarState.refreshSearch=runSearch;
+    aiSidebarState.applySearchHighlight=highlight;
     btnSearch.addEventListener('click', ()=>{
       const isHidden = bar.style.display==='none' || getComputedStyle(bar).display==='none';
       bar.style.display = isHidden ? 'flex' : 'none';
-      if(isHidden){ input.focus(); input.select(); } else { input.value=''; highlight(''); }
+      if(isHidden){ input.focus(); input.select(); } else { clearSearch(); }
     });
-    closeBtn.addEventListener('click', ()=>{ bar.style.display='none'; try{ document.querySelectorAll('#ai-chat mark').forEach(m=>{ const t=document.createTextNode(m.textContent); m.replaceWith(t); }); }catch(_){} input.value=''; highlight(''); });
-    input.addEventListener('input', ()=>{ lastQuery=input.value; highlight(lastQuery); });
+    closeBtn.addEventListener('click', ()=>{ bar.style.display='none'; clearSearch(); });
+    input.addEventListener('input', ()=>{
+      clearTimeout(searchTimer);
+      searchTimer=setTimeout(()=>runSearch(input.value),220);
+    });
     input.addEventListener('keydown', (e)=>{
-      if(e.key==='Escape'){ bar.style.display='none'; input.value=''; highlight(''); btnSearch.focus(); }
+      if(e.key==='Escape'){ bar.style.display='none'; clearSearch(); btnSearch.focus(); }
     });
     // bind Ctrl+F when sidebar open
     document.addEventListener('keydown', (e)=>{
