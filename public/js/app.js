@@ -9380,7 +9380,7 @@ function initAiSidebar() {
     const stop=document.createElement('button'); stop.id='btn-ai-stop'; stop.type='button'; stop.className='ai-icon-btn'; stop.title='停止生成'; stop.setAttribute('aria-label','停止生成');
     stop.style.cssText='display:none;width:36px;height:36px;border-radius:6px;background:var(--bg-paper);border:1px solid var(--border)';
     stop.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
-    stop.addEventListener('click', ()=>{ try{ if(aiSidebarState.abortController) aiSidebarState.abortController.abort(); }catch(_){} setAiComposerBusy(false); });
+    stop.addEventListener('click', ()=>{ try{ if(aiSidebarState.abortController) aiSidebarState.abortController.abort(); }catch(_){} try{ document.querySelectorAll('#ai-chat .ai-thinking, #ai-chat .ai-streaming').forEach(el=>{ if(el.closest('.ai-message')) el.closest('.ai-message')?.remove(); }); }catch(_){} setAiComposerBusy(false); });
     const composerEl=document.getElementById('ai-composer'); if(composerEl) composerEl.appendChild(stop);
   }
   const copyBtn=document.getElementById('btn-ai-copy-context');
@@ -9393,7 +9393,7 @@ function initAiSidebar() {
   function aiSidebarHasOpenModal(){ try{ return !!document.querySelector('.modal[style*="display: flex"], .modal[style*="display:flex"], #ai-svg-modal[style*="display: flex"], #ai-svg-modal[style*="display:flex"], #image-lightbox-modal[style*="display: flex"]'); }catch(_){ return false; } }
   document.addEventListener('keydown', (e)=>{
     if(e.key==='Escape' && aiSidebarState.isOpen && !aiSidebarHasOpenModal()){
-      if(aiSidebarState.isGenerating && aiSidebarState.abortController){ try{ aiSidebarState.abortController.abort(); }catch(_){} setAiComposerBusy(false); }
+      if(aiSidebarState.isGenerating && aiSidebarState.abortController){ try{ aiSidebarState.abortController.abort(); }catch(_){} try{ document.querySelectorAll('#ai-chat .ai-thinking, #ai-chat .ai-streaming').forEach(el=>{ const m=el.closest('.ai-message'); if(m) m.remove(); }); }catch(_){} setAiComposerBusy(false); }
       else if(!e.ctrlKey && !e.metaKey) setAiSidebarOpen(false);
     }
   });
