@@ -3815,22 +3815,21 @@ html, body {
 }
 .theme-card {
   background: var(--bg-paper);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 2px solid var(--border);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: none;
   overflow: hidden;
-  transition: all 0.3s var(--ease);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
   cursor: default;
 }
 .theme-card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+  transform: none;
 }
 .theme-card.active {
   border-color: var(--accent);
-  box-shadow: 0 4px 16px rgba(76, 153, 92, 0.15);
+  box-shadow: var(--shadow);
 }
 .theme-preview {
   height: 120px;
@@ -8108,20 +8107,14 @@ html, body {
   overflow: hidden;
 }
 .shared-diary-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, var(--accent-soft), transparent 50%);
-  opacity: 0;
-  transition: opacity 0.25s var(--ease);
-  pointer-events: none;
+  display: none;
 }
 .shared-diary-card:hover {
-  border-color: var(--border-focus);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: none;
 }
-.shared-diary-card:hover::before { opacity: 1; }
+
 .shared-diary-card .diary-card-header {
   display: flex;
   align-items: center;
