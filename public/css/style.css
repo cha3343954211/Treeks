@@ -12236,7 +12236,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 
 /* ===== AI mode tabs + edit hint ===== */
 .ai-mode-tabs { display: flex; gap: 6px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--border); }
-.ai-mode-tab { flex: 1; height: 30px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.16s var(--ease-smooth); }
+.ai-mode-tab { flex: 1; height: 30px; border: 1px solid transparent; /* pill tabs */ border-radius: 999px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.16s var(--ease-smooth); }
 .ai-mode-tab:hover { background: var(--bg-paper); color: var(--fg); border-color: var(--border); }
 .ai-mode-tab.active { background: var(--bg-paper); border-color: var(--border-strong); color: var(--fg); box-shadow: none; }
 .ai-mode-pill { margin-left: 6px; padding: 3px 8px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: 0.03em; box-shadow: 0 1px 4px rgba(76,153,92,0.22); }
@@ -12389,6 +12389,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   display:inline-flex; align-items:center; justify-content:center;
   background: var(--bg-paper); border:1px solid var(--border); color: var(--accent); flex:0 0 auto;
 }
+.ai-slash-item:focus-visible{ outline: 2px solid var(--accent); outline-offset: 1px; }
 .ai-slash-item.active .ai-slash-ico{ background: var(--accent); color:#fff; border-color: var(--accent); }
 .ai-slash-text{ min-width:0; display:flex; flex-direction:column; gap:1px; }
 .ai-slash-title{ font-size:12px; font-weight:700; color: var(--fg); letter-spacing:-0.01em; }
