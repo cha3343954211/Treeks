@@ -12202,17 +12202,17 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-empty-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background: var(--accent-light); color: var(--accent); font-weight:700; }
 .ai-empty-title { font-size:13px; font-weight:700; color: var(--fg); letter-spacing:-0.01em; }
 .ai-empty-desc { font-size:11.5px; color: var(--fg-muted); line-height:1.5; max-width: 280px; }
-.ai-empty-desc code{ padding:0 4px; border-radius:4px; background: rgba(76,153,92,0.10); border:1px solid rgba(76,153,92,0.14); font-family: var(--font-mono); font-size:10.5px; }
+.ai-empty-desc code{ padding:0 4px; border-radius:4px; background: var(--accent-light); border:1px solid var(--border); font-family: var(--font-mono); font-size:10.5px; color: var(--fg-secondary); }
 .ai-empty .ai-quick-action:hover { transform: translateY(-0.5px); box-shadow: var(--shadow-sm); }
 .ai-empty-actions { display:flex; gap:6px; margin-top:2px; flex-wrap:wrap; justify-content:center; }
 .ai-context-dot { width:6px; height:6px; border-radius:999px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-light); flex:0 0 auto; }
 .ai-context-copy { margin-left:auto; border:0; background:transparent; color: var(--fg-muted); font:inherit; font-size:11px; cursor:pointer; padding:2px 6px; border-radius:6px; }
 .ai-context-copy:hover { background: var(--bg-paper); color:var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
 .ai-composer-wrap { position: relative; border-top: 1px solid var(--border); background: var(--bg-paper);  }
-.ai-composer-meta { display:flex; align-items:center; justify-content:space-between; padding:7px 12px 0; color: var(--fg-tertiary); font-size:11px; }
+.ai-composer-meta { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:7px 12px 0; color: var(--fg-tertiary); font-size:10.5px; line-height:1.4; }
 .ai-composer-hint{ display:inline-flex; align-items:center; gap:6px; }
 .ai-composer-hint::before{ content:'⌘'; width:14px; height:14px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; font-size:9px; line-height:1; border:1px solid var(--border); background: var(--bg-paper); color: var(--fg-tertiary); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-.ai-char-count { font-variant-numeric: tabular-nums; }
+.ai-char-count { font-variant-numeric: tabular-nums; min-width:42px; text-align:right; font-weight:600; letter-spacing:0.01em; }
 /* ===== AI model administration ===== */
 .ai-model-admin-list {
   display: grid;
@@ -12273,7 +12273,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-message-copy:hover { color:var(--fg); border-color: var(--border-strong); }
 .editor-pane { position: relative; }
 .ai-diff-layer { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; position: absolute; inset: 0; overflow: auto; padding: 18px 14px; background: var(--bg-paper); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.85; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); border-radius: 6px; z-index: 2; box-shadow: var(--shadow-sm); overflow-x: auto;}
-.ai-diff-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-paper); position: relative; z-index: 3; box-shadow: var(--shadow-sm); }
+.ai-diff-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-paper); position: relative; z-index: 3; box-shadow: none; }
 .ai-diff-summary { color: var(--fg-muted); font-size: 11.5px; font-weight: 500; }
 .ai-diff-bar-actions { display: flex; gap: 6px; }
 .ai-diff-btn { min-height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-paper); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.04); transition: all 0.15s var(--ease-smooth); }
