@@ -12436,6 +12436,17 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-chat.has-scroll-top::before{ opacity:1; }
 .ai-chat.has-scroll-bottom::after{ opacity:1; }
 
+
+/* AI loading skeleton */
+.ai-loading-skeleton { display: flex; flex-direction: column; gap: 10px; padding: 20px 16px; }
+.ai-skeleton-line { height: 12px; border-radius: 6px; background: var(--bg-hover); animation: aiSkeletonPulse 1.4s ease-in-out infinite; }
+.ai-skeleton-line.w-80 { width: 80%; }
+.ai-skeleton-line.w-60 { width: 60%; }
+.ai-skeleton-line.w-70 { width: 70%; animation-delay: 0.15s; }
+.ai-loading-skeleton .ai-skeleton-line:nth-child(2) { animation-delay: 0.1s; }
+.ai-loading-skeleton .ai-skeleton-line:nth-child(3) { animation-delay: 0.2s; }
+@keyframes aiSkeletonPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
 /* ===== AI dark mode polish ===== */
 [data-theme="dark"] .ai-sidebar, [data-mode="dark"] .ai-sidebar{ background: var(--bg-paper); border-left-color: var(--border); }
 [data-theme="dark"] .ai-sidebar-header, [data-mode="dark"] .ai-sidebar-header{ background: var(--bg-paper); border-bottom-color: var(--border); }

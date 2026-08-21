@@ -8349,6 +8349,8 @@ async function loadAiHistoryForCurrentDiary(force){
   aiSidebarState.historyLoadedFor = String(diaryId);
   aiSidebarState.currentDiaryId = diaryId;
   try{
+    const _chat=document.getElementById('ai-chat');
+    if(_chat && !_chat.querySelector('.ai-message')){ _chat.innerHTML='<div class="ai-loading-skeleton"><div class="ai-skeleton-line w-80"></div><div class="ai-skeleton-line w-60"></div><div class="ai-skeleton-line w-70"></div></div>'; }
     const data = await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100');
     renderAiHistory(data.items||[]);
     updateAiContextIndicator();
