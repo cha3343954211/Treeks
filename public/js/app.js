@@ -8298,11 +8298,7 @@ function renderAiHistory(items){
     if(role==='user'){
       text.textContent = content;
     } else {
-      if(isSvg){
-        text.innerHTML = '<span style="color:var(--fg-muted);font-size:12px">已生成 SVG</span>';
-      } else {
-        try{ text.innerHTML = renderAiMarkdown(content); }catch(_){ text.textContent = content; }
-      }
+      text.innerHTML = isSvg ? '<span style="color:var(--fg-muted);font-size:12px">已生成 SVG</span>' : '';
     }
     msg.append(label, text);
     if(role==='assistant'){
@@ -8313,14 +8309,9 @@ function renderAiHistory(items){
         const md = stripCodeFence(content);
         const resultEl=document.createElement('div'); resultEl.className='ai-result-md';
         try{ resultEl.innerHTML = renderAiMarkdown(md); }catch(_){ resultEl.textContent = md; }
+        enhanceAiCodeBlocks(resultEl);
         msg.appendChild(resultEl);
-        const actions=document.createElement('div'); actions.className='ai-result-actions';
-        const insert=document.createElement('button'); insert.type='button'; insert.className='ai-result-action'; insert.textContent='插入正文';
-        insert.addEventListener('click', ()=> applyAiResult(content, 'insert'));
-        const replace=document.createElement('button'); replace.type='button'; replace.className='ai-result-action'; replace.textContent='替换选区';
-        replace.addEventListener('click', ()=> applyAiResult(content, 'replace'));
-        actions.append(insert, replace);
-        msg.appendChild(actions);
+        msg.appendChild(createAiResultActions(content));
       }
     }
     // timestamp - subtle
@@ -8825,6 +8816,42 @@ function initAiSvgFeature(){
 }
 
 function enhanceAiCodeBlocks(root){ try{ root.querySelectorAll('pre').forEach(pre=>{ if(pre.querySelector('.ai-code-copy')) return; const btn=document.createElement('button'); btn.className='ai-code-copy'; btn.type='button'; btn.textContent='复制'; btn.addEventListener('click', async ()=>{ try{ const code=pre.querySelector('code'); const t= code ? code.innerText : pre.innerText; await navigator.clipboard.writeText(t); btn.textContent='已复制'; setTimeout(()=> btn.textContent='复制', 1100); }catch(_){} }); pre.style.position='relative'; pre.appendChild(btn); }); }catch(_){} }
+function createAiResultActions(result) {
+  const actions = document.createElement('div');
+  actions.className = 'ai-result-actions';
+
+  const insert = document.createElement('button');
+  insert.type = 'button';
+  insert.className = 'ai-result-action';
+  insert.textContent = '插入正文';
+  insert.addEventListener('click', () => applyAiResult(result, 'insert'));
+  actions.appendChild(insert);
+
+  const replace = document.createElement('button');
+  replace.type = 'button';
+  replace.className = 'ai-result-action';
+  replace.textContent = '替换选区';
+  replace.addEventListener('click', () => applyAiResult(result, 'replace'));
+  actions.appendChild(replace);
+
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'ai-result-action ai-result-action-icon';
+  copy.title = '复制结果';
+  copy.setAttribute('aria-label', '复制结果');
+  copy.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(result);
+      copy.classList.add('copied');
+      window.setTimeout(() => copy.classList.remove('copied'), 1200);
+    } catch (_) {
+      toast('复制失败，请手动选择内容', 'error');
+    }
+  });
+  actions.appendChild(copy);
+  return actions;
+}
 function appendAiMessage(role, content, result = '') {
   const chat = document.getElementById('ai-chat');
   if (!chat) return;
@@ -8888,40 +8915,7 @@ function appendAiMessage(role, content, result = '') {
     resultEl.innerHTML = renderAiMarkdown(md);
     enhanceAiCodeBlocks(resultEl);
     message.appendChild(resultEl);
-
-    const actions = document.createElement('div');
-    actions.className = 'ai-result-actions';
-    const insert = document.createElement('button');
-    insert.type = 'button';
-    insert.className = 'ai-result-action';
-    insert.textContent = '插入正文';
-    insert.addEventListener('click', () => applyAiResult(result, 'insert'));
-    actions.appendChild(insert);
-
-    const replace = document.createElement('button');
-    replace.type = 'button';
-    replace.className = 'ai-result-action';
-    replace.textContent = '替换选区';
-    replace.addEventListener('click', () => applyAiResult(result, 'replace'));
-    actions.appendChild(replace);
-
-    const copy = document.createElement('button');
-    copy.type = 'button';
-    copy.className = 'ai-result-action ai-result-action-icon';
-    copy.title = '复制结果';
-    copy.setAttribute('aria-label', '复制结果');
-    copy.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-    copy.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(result);
-        copy.classList.add('copied');
-        window.setTimeout(() => copy.classList.remove('copied'), 1200);
-      } catch (_) {
-        toast('复制失败，请手动选择内容', 'error');
-      }
-    });
-    actions.appendChild(copy);
-    message.appendChild(actions);
+    message.appendChild(createAiResultActions(result));
   }
 
   // subtle timestamp for live append
