@@ -793,11 +793,12 @@ html, body {
   transition: all 0.25s var(--ease-spring);
 }
 .diary-card.pinned {
-  background: linear-gradient(135deg, rgba(255, 217, 158, 0.18) 0%, rgba(255, 255, 255, 0.72) 60%);
-  border-color: rgba(217, 154, 58, 0.3);
+  background: var(--bg-paper);
+  border-color: var(--border-strong);
+  border-left: 3px solid #d99a3a;
 }
 .diary-card.pinned::before {
-  background: linear-gradient(180deg, var(--warning), #f0b860);
+  background: #d99a3a;
   opacity: 1;
 }
 .diary-card-header {
@@ -2654,13 +2655,7 @@ html, body {
   opacity: 0.8;
 }
 .admin-stat::after {
-  content: '';
-  position: absolute;
-  top: -40px; right: -40px;
-  width: 140px; height: 140px;
-  background: radial-gradient(circle, var(--stat-glow, rgba(76, 153, 92, 0.12)), transparent 70%);
-  border-radius: 50%;
-  pointer-events: none;
+  display: none;
 }
 .admin-stat:hover {
   box-shadow: var(--shadow-md);
@@ -7663,7 +7658,7 @@ html, body {
 .heatmap-cell.level-1 { background: var(--heat-1); }
 .heatmap-cell.level-2 { background: var(--heat-2); }
 .heatmap-cell.level-3 { background: var(--heat-3); }
-.heatmap-cell.level-4 { background: var(--heat-4); box-shadow: 0 0 0 1px rgba(76, 153, 92, 0.3); }
+.heatmap-cell.level-4 { background: var(--heat-4); box-shadow: 0 0 0 1px var(--border-strong); }
 
 .heatmap-footer {
   display: flex;
