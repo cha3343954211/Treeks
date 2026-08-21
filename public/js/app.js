@@ -7844,10 +7844,12 @@ function setAiComposerBusy(busy){
   const sendBtn=document.getElementById('ai-send-btn')||document.querySelector('.ai-send-btn');
   const stopBtn=document.getElementById('btn-ai-stop');
   const promptEl=document.getElementById('ai-prompt');
+  const modelSel=document.getElementById('ai-model-select');
   const actions=document.querySelectorAll('.ai-quick-action');
   if(sendBtn){ sendBtn.style.display = busy ? 'none' : ''; sendBtn.disabled=!!busy; }
   if(stopBtn) stopBtn.style.display = busy ? 'inline-flex' : 'none';
   if(promptEl){ promptEl.disabled=!!busy; if(!busy) promptEl.focus(); }
+  if(modelSel) modelSel.disabled = !!busy || aiSidebarState.models.length===0;
   actions.forEach(b=>{ b.disabled=!!busy; b.style.opacity= busy ? '0.55' : ''; });
 }
 function autoResizeAiPrompt(){
@@ -7871,14 +7873,16 @@ async function loadAiModels() {
     aiSidebarState.selectedModelId = validId;
     select.innerHTML = aiSidebarState.models.length
       ? aiSidebarState.models.map(item => `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.name)} · ${escapeHtml(item.model)}</option>`).join('')
-      : '<option value="">本地写作辅助</option>';
+      : '<option value="">暂无可用模型 \u00b7 请在管理后台配置</option>';
     select.value = validId;
     select.disabled = aiSidebarState.models.length === 0;
+    try{ select.title = aiSidebarState.models.length ? '' : '\u6682\u65e0\u6a21\u578b\uff0c\u672c\u5730\u8f85\u52a9\u53ef\u7528'; }catch(_){}
   } catch (_) {
     aiSidebarState.models = [];
     aiSidebarState.selectedModelId = '';
-    select.innerHTML = '<option value="">本地写作辅助</option>';
+    select.innerHTML = '<option value="">\u6682\u65e0\u53ef\u7528\u6a21\u578b \u00b7 \u8bf7\u5728\u7ba1\u7406\u540e\u53f0\u914d\u7f6e</option>';
     select.disabled = true;
+    try{ select.title = '\u6682\u65e0\u6a21\u578b'; }catch(_){}
   }
 }
 
@@ -9332,6 +9336,7 @@ function initAiSidebar() {
     }
   })();
   document.getElementById('ai-model-select')?.addEventListener('change', event => {
+    if(aiSidebarState.isGenerating){ event.preventDefault(); try{ event.target.value = aiSidebarState.selectedModelId; }catch(_){} toast('\u751f\u6210\u4e2d\uff0c\u7a0d\u540e\u518d\u5207\u6362\u6a21\u578b',''); return; }
     aiSidebarState.selectedModelId = event.target.value;
     localStorage.setItem(`treeks_ai_model_${state.user?.id || 'default'}`, aiSidebarState.selectedModelId);
   });
