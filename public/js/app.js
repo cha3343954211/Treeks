@@ -8850,6 +8850,7 @@ function appendAiMessage(role, content, result = '') {
       bar.setAttribute('role','status'); bar.setAttribute('aria-live','polite');
       bar.innerHTML='<span>已撤回</span>';
       const undo=document.createElement('button'); undo.type='button'; undo.className='ai-message-copy'; undo.textContent='撤销';
+      undo.setAttribute('aria-label','撤销撤回');
       let timer=null; let dismissed=false;
       const restore=()=>{ if(dismissed) return; dismissed=true; clearTimeout(timer); bar.remove(); message.style.opacity=''; };
       undo.addEventListener('click', restore);
