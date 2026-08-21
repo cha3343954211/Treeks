@@ -8847,6 +8847,7 @@ function appendAiMessage(role, content, result = '') {
     del.addEventListener('click', ()=>{
       message.style.opacity='0.45';
       const bar=document.createElement('div'); bar.className='ai-message-undo';
+      bar.setAttribute('role','status'); bar.setAttribute('aria-live','polite');
       bar.innerHTML='<span>已撤回</span>';
       const undo=document.createElement('button'); undo.type='button'; undo.className='ai-message-copy'; undo.textContent='撤销';
       let timer=null; let dismissed=false;
