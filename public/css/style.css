@@ -12296,7 +12296,6 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 @keyframes aiBlink { 50%{ opacity:0; } }
 
 /* ===== AI SVG 绘图 ===== */
-.ai-quick-action-draw { background: var(--bg-paper); border-color: var(--accent-soft); }
 .ai-svg-card { border:1px solid var(--border); border-radius: 6px; background: var(--bg-paper); padding:8px; box-shadow: none; transition: box-shadow 0.15s, border-color 0.15s; }
 .ai-svg-card:hover { box-shadow: none; border-color: var(--border-strong); }
 .ai-svg-card-preview { background: var(--bg-paper); border:1px solid var(--border); border-radius:6px; overflow:hidden; display:flex; align-items:center; justify-content:center; min-height:124px; }
@@ -12336,8 +12335,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   .ai-diff-split.active{ grid-template-columns: 1fr; }
 }
 @media (max-width: 640px){
-  .ai-slash{
- left: 8px; right: 8px; bottom: 68px; }
+  .ai-slash { left: 8px; right: 8px; bottom: 68px; }
   .ai-svg-modal { width: 98vw; border-radius: 6px; }
   .ai-svg-toolbar { flex-direction:column; align-items:stretch; }
 }
@@ -12405,7 +12403,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   background: var(--bg);
 }
 .ai-chat-search input{
-  flex:1; height:28px; padding:0 10px;
+  flex: 1; height: 28px; padding:0 10px;
   border:1px solid var(--border); border-radius:999px;
   background: var(--bg-paper); font:inherit; font-size:12.5px;
   box-shadow: none;
