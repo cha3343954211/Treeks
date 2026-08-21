@@ -12728,7 +12728,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-composer-wrap { position: relative; border-top: 1px solid rgba(0,0,0,0.06); background: rgba(255,255,255,0.72); backdrop-filter: blur(10px); }
 .ai-composer-meta { display:flex; align-items:center; justify-content:space-between; padding:7px 12px 0; color: var(--fg-tertiary); font-size:11px; }
 .ai-composer-hint{ display:inline-flex; align-items:center; gap:6px; }
-.ai-composer-hint::before{ content:''; width:14px; height:14px; border-radius:999px; border:1px solid rgba(0,0,0,0.08); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.ai-composer-hint::before{ content:'⌘'; width:14px; height:14px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; font-size:9px; line-height:1; border:1px solid rgba(0,0,0,0.08); background: #fff; color: var(--fg-tertiary); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
 .ai-char-count { font-variant-numeric: tabular-nums; }
 /* ===== AI model administration ===== */
 .ai-model-admin-list {
@@ -12890,7 +12890,8 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   overflow: hidden;
   display: none;
 }
-.ai-slash.open{ display: block; }
+.ai-slash.open{ display: block; animation: aiSlashIn 0.16s var(--ease-smooth); }
+@keyframes aiSlashIn{ from{ opacity:0; transform: translateY(4px) scale(0.98); } to{ opacity:1; transform: none; } }
 .ai-slash-head{
   display:flex; align-items:center; justify-content:space-between;
   padding:8px 10px; border-bottom:1px solid rgba(0,0,0,0.06);
@@ -12920,7 +12921,9 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-slash-hint{ margin-left:auto; color: var(--fg-tertiary); font-size:11px; font-family: var(--font-mono); }
 
 /* ===== AI chat search ===== */
-.ai-chat-search{
+.ai-chat-search{ /* search bar */
+  /* smooth reveal handled via display toggle; keep minimal jank */
+
   display:flex; align-items:center; gap:8px;
   padding:8px 12px; border-bottom:1px solid rgba(0,0,0,0.05);
   background: rgba(255,255,255,0.62);
@@ -12941,7 +12944,9 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 [data-theme="dark"] .ai-model-row, [data-mode="dark"] .ai-model-row{ background: rgba(28,32,29,0.52); border-bottom-color: rgba(255,255,255,0.06); }
 [data-theme="dark"] #ai-model-select, [data-mode="dark"] #ai-model-select{ background: rgba(255,255,255,0.06); color: #e6f0e8; border-color: rgba(255,255,255,0.10); }
 [data-theme="dark"] .ai-context-indicator, [data-mode="dark"] .ai-context-indicator{ background: linear-gradient(180deg, rgba(42,52,43,0.9), rgba(28,32,29,0.55)); }
-[data-theme="dark"] .ai-chat-search, [data-mode="dark"] .ai-chat-search{ background: rgba(28,32,29,0.52); }
+[data-theme="dark"] .ai-chat-search, [data-mode="dark"] .ai-chat-search{ /* search bar */
+  /* smooth reveal handled via display toggle; keep minimal jank */
+ background: rgba(28,32,29,0.52); }
 [data-theme="dark"] .ai-chat-search input, [data-mode="dark"] .ai-chat-search input{ background: rgba(255,255,255,0.06); color: #e6f0e8; border-color: rgba(255,255,255,0.10); }
 [data-theme="dark"] .ai-empty, [data-mode="dark"] .ai-empty{ background: linear-gradient(180deg, rgba(42,52,43,0.82), rgba(28,32,29,0.72)); border-color: rgba(255,255,255,0.07); }
 [data-theme="dark"] .ai-composer-wrap, [data-mode="dark"] .ai-composer-wrap{ background: rgba(28,32,29,0.56); }

@@ -8297,13 +8297,19 @@ function renderAiSlashPalette(){
   list.querySelectorAll('.ai-slash-item').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const id=btn.getAttribute('data-slash-id');
+      // capture extra prompt text after "/xxx "
+      const ta=document.getElementById('ai-prompt');
+      let extra="";
+      if(ta){
+        const raw=ta.value;
+        const m=raw.match(/^\/[^\s]+\s+(.+)$/s);
+        if(m) extra=m[1].trim();
+      }
       aiSlashState.open=false; renderAiSlashPalette();
-      if(id==='draw'){
-        const ta=document.getElementById('ai-prompt');
-        if(ta && !ta.value.trim().startsWith('/')) ta.value='';
-        runAiAction(id);
-      } else if(id){
-        runAiAction(id);
+      if(ta) ta.value='';
+      if(id){
+        // pass extra as prompt so runAiAction('draw', '一只猫') works
+        runAiAction(id, extra);
       }
     });
   });
@@ -8316,7 +8322,7 @@ function handleAiPromptSlashKeys(e){
   const matches=getAiSlashMatches(aiSlashState.filter);
   if(e.key==='ArrowDown'){ e.preventDefault(); aiSlashState.activeIndex=Math.min(matches.length-1, aiSlashState.activeIndex+1); renderAiSlashPalette(); return true; }
   if(e.key==='ArrowUp'){ e.preventDefault(); aiSlashState.activeIndex=Math.max(0, aiSlashState.activeIndex-1); renderAiSlashPalette(); return true; }
-  if(e.key==='Enter'){ e.preventDefault(); const cur=matches[aiSlashState.activeIndex]; if(cur){ aiSlashState.open=false; renderAiSlashPalette(); if(cur.id==='draw'){ runAiAction(cur.id); } else runAiAction(cur.id); } return true; }
+  if(e.key==='Enter'){ e.preventDefault(); const cur=matches[aiSlashState.activeIndex]; if(cur){ let extra=""; const ta2=document.getElementById('ai-prompt'); if(ta2){ const mm=ta2.value.match(/^\/[^\s]+\s+(.+)$/s); if(mm) extra=mm[1].trim(); } aiSlashState.open=false; renderAiSlashPalette(); const _ta=document.getElementById('ai-prompt'); if(_ta) _ta.value=''; runAiAction(cur.id, extra); } return true; }
   if(e.key==='Escape'){ e.preventDefault(); closeAiSlash(); return true; }
   if(e.key==='Tab'){ e.preventDefault(); aiSlashState.activeIndex=(aiSlashState.activeIndex+1)%matches.length; renderAiSlashPalette(); return true; }
   return false;
@@ -9100,7 +9106,8 @@ function initAiSidebar() {
       let hits=0;
       chatEl.querySelectorAll('.ai-message').forEach(msg=>{
         const textNodes=[];
-        const walker=document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+        // skip code/pre/svg areas when highlighting to avoid breaking rendering
+        const walker=document.createTreeWalker(msg, NodeFilter.SHOW_TEXT, { acceptNode(n){ const p=n.parentElement; if(!p) return NodeFilter.FILTER_REJECT; if(p.closest('pre, code, .ai-svg-card-preview, mark')) return NodeFilter.FILTER_REJECT; return NodeFilter.FILTER_ACCEPT; }});
         let n;
         while(n=walker.nextNode()){
           if(n.parentElement && n.parentElement.tagName==='MARK') continue;
