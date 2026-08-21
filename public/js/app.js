@@ -8129,12 +8129,14 @@ function setAiSidebarOpen(open, options = {}) {
   aiSidebarState.isOpen = Boolean(open);
   view.classList.toggle('ai-sidebar-open', aiSidebarState.isOpen);
   sidebar.setAttribute('aria-hidden', aiSidebarState.isOpen ? 'false' : 'true');
+  const backdrop=document.getElementById('ai-sidebar-backdrop'); if(backdrop){ backdrop.setAttribute('aria-hidden', aiSidebarState.isOpen ? 'false' : 'true'); backdrop.style.display=''; }
   toggle.setAttribute('aria-expanded', aiSidebarState.isOpen ? 'true' : 'false');
   toggle.classList.toggle('active', aiSidebarState.isOpen);
   const sidebarEl=document.getElementById('ai-sidebar'); if(sidebarEl) sidebarEl.setAttribute('data-ai-mode', getAiMode());
   updateAiContextIndicator();
   if (aiSidebarState.isOpen) { loadAiModels(); try{ loadAiHistoryForCurrentDiary(); }catch(_){} }
 
+  if(aiSidebarState.isOpen){ const sidebarEl=document.getElementById('ai-sidebar'); if(sidebarEl && !sidebarEl.dataset.trapBound){ sidebarEl.dataset.trapBound='1'; sidebarEl.addEventListener('keydown', function aiSidebarFocusTrap(e){ if(e.key!=='Tab'||!aiSidebarState.isOpen) return; const focusable=sidebarEl.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'); if(!focusable.length) return; const first=focusable[0], last=focusable[focusable.length-1]; if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); } else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); } }); } }
   if (aiSidebarState.isOpen && options.focus) {
     window.setTimeout(() => document.getElementById('ai-prompt')?.focus(), 230);
   }
@@ -8994,6 +8996,7 @@ function initAiSidebar() {
   aiSidebarState.initialized = true;
   toggle.addEventListener('click', () => setAiSidebarOpen(!aiSidebarState.isOpen, { focus: true }));
   close.addEventListener('click', () => setAiSidebarOpen(false));
+  document.getElementById('ai-sidebar-backdrop')?.addEventListener('click', () => setAiSidebarOpen(false));
   clear?.addEventListener('click', clearAiChat);
   // SVG modal trigger in header
   (function(){
@@ -9017,9 +9020,22 @@ function initAiSidebar() {
   setAiMode(getAiMode());
   document.getElementById('ai-diff-accept') && document.getElementById('ai-diff-accept').addEventListener('click', acceptAiEdit);
   document.getElementById('ai-diff-discard') && document.getElementById('ai-diff-discard').addEventListener('click', discardAiEdit);
-  document.querySelectorAll('[data-ai-action]').forEach(button => {
-    button.addEventListener('click', () => runAiAction(button.dataset.aiAction));
-  });
+  // delegated: covers static quick-actions + dynamic history/empty-state
+  (function(){
+    const rootIds=['ai-chat','ai-sidebar'];
+    // sidebar-level delegation (quick actions bar + empty)
+    const sidebar=document.getElementById('ai-sidebar');
+    const chat=document.getElementById('ai-chat');
+    function onAiActionClick(e){
+      const btn=e.target.closest('[data-ai-action]');
+      if(!btn || !btn.closest('#ai-sidebar, #ai-chat')) return;
+      if(btn.disabled) return;
+      e.preventDefault();
+      runAiAction(btn.getAttribute('data-ai-action'));
+    }
+    if(sidebar) sidebar.addEventListener('click', onAiActionClick);
+    if(chat) chat.addEventListener('click', onAiActionClick);
+  })();
   composer.addEventListener('submit', event => {
     event.preventDefault();
     const value = prompt.value.trim();
@@ -9046,8 +9062,9 @@ function initAiSidebar() {
       try{ const t=document.getElementById('ai-context-text')?.textContent||document.getElementById('ai-context-indicator')?.textContent||''; await navigator.clipboard.writeText(t); copyBtn.textContent='已复制'; setTimeout(()=> copyBtn.textContent='复制', 1200); }catch(_){}
     });
   }
+  function aiSidebarHasOpenModal(){ try{ return !!document.querySelector('.modal[style*="display: flex"], .modal[style*="display:flex"], #ai-svg-modal[style*="display: flex"], #ai-svg-modal[style*="display:flex"], #image-lightbox-modal[style*="display: flex"]'); }catch(_){ return false; } }
   document.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape' && aiSidebarState.isOpen){
+    if(e.key==='Escape' && aiSidebarState.isOpen && !aiSidebarHasOpenModal()){
       if(aiSidebarState.isGenerating && aiSidebarState.abortController){ try{ aiSidebarState.abortController.abort(); }catch(_){} setAiComposerBusy(false); }
       else if(!e.ctrlKey && !e.metaKey) setAiSidebarOpen(false);
     }
