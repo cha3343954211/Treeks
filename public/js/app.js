@@ -7970,6 +7970,13 @@ function showAiEditPreview(proposed){
       const newCol=splitWrap.querySelector('[data-col="new"]');
       if(oldCol) oldCol.innerHTML = esc(original).replace(/\n/g,'<br>');
       if(newCol) newCol.innerHTML = esc(proposed).replace(/\n/g,'<br>');
+      // responsive: if split container is narrow, keep inline by default
+      try{
+        const rect=splitWrap.getBoundingClientRect();
+        if(rect.width < 520){
+          // hint user: on narrow, inline is better; keep split available but not auto
+        }
+      }catch(_){}
     }
     // ensure toggle exists
     const toggleWrap=bar.querySelector('.ai-diff-view-toggle');
@@ -8208,6 +8215,11 @@ function setAiSidebarOpen(open, options = {}) {
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
+    handle.addEventListener('dblclick', ()=>{
+      try{ localStorage.removeItem(key); }catch(_){}
+      view.style.setProperty('--ai-sidebar-width', '360px');
+      try{ if(typeof toast==='function') toast('已重置侧栏宽度',''); }catch(_){}
+    });
     // touch
     handle.addEventListener('touchstart', (e)=>{
       if(window.matchMedia('(max-width: 768px)').matches) return;
@@ -8324,6 +8336,8 @@ function renderAiHistory(items){
     chat.appendChild(msg);
   }
   chat.scrollTop = chat.scrollHeight;
+  // trigger shadow update after render
+  try{ chat.dispatchEvent(new Event('scroll')); }catch(_){}
 }
 async function loadAiHistoryForCurrentDiary(force){
   const diaryId = getAiDiaryId();
