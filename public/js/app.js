@@ -7835,6 +7835,7 @@ const aiSidebarState = {
   isOpen: false,
   models: [],
   selectedModelId: '',
+  contextScope: (function(){ try{ return localStorage.getItem('treeks_ai_context_scope') || 'auto'; }catch(_){ return 'auto'; }})(),
   mode: (function(){ try{ return localStorage.getItem('treeks_ai_mode') || 'ask'; }catch(_){ return 'ask'; }})(),
   pendingEdit: null,
   currentDiaryId: null,
@@ -7859,13 +7860,20 @@ function setAiComposerBusy(busy){
   const stopBtn=document.getElementById('btn-ai-stop');
   const promptEl=document.getElementById('ai-prompt');
   const modelSel=document.getElementById('ai-model-select');
+  const exportBtn=document.getElementById('btn-export-ai-chat');
   const actions=document.querySelectorAll('.ai-quick-action');
+  const scopeButtons=document.querySelectorAll('[data-ai-context-scope]');
   if(sendBtn){ sendBtn.style.display = busy ? 'none' : ''; sendBtn.disabled=!!busy; }
   if(stopBtn) stopBtn.style.display = busy ? 'inline-flex' : 'none';
   if(promptEl) promptEl.disabled=!!busy;
   if(modelSel) modelSel.disabled = !!busy || aiSidebarState.models.length===0;
+  if(exportBtn) exportBtn.disabled=!!busy;
+  scopeButtons.forEach(b=>{ b.disabled=!!busy; });
   actions.forEach(b=>{ b.disabled=!!busy; b.style.opacity= busy ? '0.55' : ''; });
-  if(!busy && aiSidebarState.isOpen) promptEl?.focus();
+  if(!busy){
+    updateAiPromptCount();
+    if(aiSidebarState.isOpen) promptEl?.focus();
+  }
 }
 
 function cancelAiGeneration(){
@@ -7935,20 +7943,40 @@ async function loadAiModels() {
 function getAiWritingContext() {
   const textarea = document.getElementById('editor-textarea');
   const title = document.getElementById('editor-title');
-  const content = textarea ? textarea.value : '';
+  const rawContent = textarea ? textarea.value : '';
+  const scope = ['auto', 'selection', 'none'].includes(aiSidebarState.contextScope) ? aiSidebarState.contextScope : 'auto';
+  if (scope === 'none') {
+    return { title: '', content: '', selection: '', selectionStart: 0, selectionEnd: 0, hasSelection: false, contextScope: scope };
+  }
+  const content = scope === 'selection' ? '' : rawContent;
   const selectionStart = textarea ? textarea.selectionStart : 0;
   const selectionEnd = textarea ? textarea.selectionEnd : 0;
   const selection = selectionStart !== selectionEnd
     ? content.slice(selectionStart, selectionEnd).trim()
     : '';
+  const scopedSelection = scope === 'selection'
+    ? rawContent.slice(selectionStart, selectionEnd).trim()
+    : selection;
   return {
     title: title ? title.value.trim() : '',
     content,
-    selection,
+    selection: scopedSelection,
     selectionStart,
     selectionEnd,
-    hasSelection: Boolean(selection)
+    hasSelection: Boolean(scopedSelection),
+    contextScope: scope
   };
+}
+
+function setAiContextScope(scope) {
+  aiSidebarState.contextScope = ['auto', 'selection', 'none'].includes(scope) ? scope : 'auto';
+  try{ localStorage.setItem('treeks_ai_context_scope', aiSidebarState.contextScope); }catch(_){}
+  document.querySelectorAll('[data-ai-context-scope]').forEach(btn => {
+    const active = btn.getAttribute('data-ai-context-scope') === aiSidebarState.contextScope;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  updateAiContextIndicator();
 }
 
 function getAiMode(){ return aiSidebarState.mode === 'edit' ? 'edit' : 'ask'; }
@@ -8254,6 +8282,7 @@ function sseConnect(path, handlers){
 function updateAiContextIndicator() {
   const textEl = document.getElementById('ai-context-text');
   const metaEl = document.getElementById('ai-context-meta');
+  const dotEl = document.getElementById('ai-context-dot');
   const indicator = document.getElementById('ai-context-indicator');
   const target = textEl || indicator;
   if (!target) return;
@@ -8262,11 +8291,19 @@ function updateAiContextIndicator() {
   const prefix = did===-1 ? '未绑定日记 · ' : ('日记 #'+did+' · ');
   let msg='';
   let meta='';
-  if (context.hasSelection) { msg = prefix + `将处理已选中的 ${context.selection.length} 个字符`; meta = `选区 ${context.selection.length} 字 · 全文 ${context.content.length} 字 · 按此日记保留`; }
+  indicator?.setAttribute('data-scope', context.contextScope || 'auto');
+  if (context.contextScope === 'none') {
+    msg = prefix + '不会发送笔记内容，仅使用当前提问';
+    meta = '上下文已关闭 · 对话仍按日记归档';
+  } else if (context.contextScope === 'selection') {
+    msg = prefix + (context.hasSelection ? `仅处理选中的 ${context.selection.length} 个字符` : '选区模式：请先在正文选择文本');
+    meta = context.hasSelection ? `选区 ${context.selection.length} 字 · 不发送全文` : '未选中时不会发送笔记内容';
+  } else if (context.hasSelection) { msg = prefix + `将处理已选中的 ${context.selection.length} 个字符`; meta = `选区 ${context.selection.length} 字 · 全文 ${context.content.length} 字 · 按此日记保留`; }
   else if (context.content) { msg = prefix + `将参考当前日记的 ${context.content.length} 个字符`; meta = `全文 ${context.content.length} 字${context.title ? ' · 标题：'+context.title.slice(0,18) : ''} · 按日记归档`; }
   else { msg = prefix + '先写下一两句，我会据此协助你展开'; meta = '对话按日记归档 · 支持问答 / 编辑 / 绘图'; }
   target.textContent = msg;
   if(metaEl){ metaEl.textContent = meta; metaEl.title = meta; }
+  if(dotEl) dotEl.classList.toggle('muted', context.contextScope === 'none');
   try{
     const empty=document.getElementById('ai-empty');
     const chat=document.getElementById('ai-chat');
@@ -8274,10 +8311,21 @@ function updateAiContextIndicator() {
       const hasMessages = chat.querySelectorAll('.ai-message').length > 1;
       empty.style.display = hasMessages ? 'none' : 'flex';
     }
-    const cc=document.getElementById('ai-char-count');
-    const ta=document.getElementById('editor-textarea');
-    if(cc && ta) cc.textContent = String((ta.value||'').length);
   }catch(_){}
+}
+
+function updateAiPromptCount() {
+  const prompt=document.getElementById('ai-prompt');
+  const cc=document.getElementById('ai-char-count');
+  const send=document.getElementById('ai-send-btn');
+  if(!prompt || !cc) return;
+  const n=prompt.value.length;
+  cc.textContent=String(n);
+  cc.style.color = n>490 ? 'var(--danger)' : n>430 ? '#b45309' : 'var(--fg-tertiary)';
+  if(send){
+    send.disabled = n===0 || n>500;
+    send.style.opacity = n>500 ? '0.45' : '';
+  }
 }
 
 function setAiSidebarOpen(open, options = {}) {
@@ -9108,6 +9156,83 @@ function initAiSvgFeature(){
 }
 
 function enhanceAiCodeBlocks(root){ try{ root.querySelectorAll('pre').forEach(pre=>{ if(pre.querySelector('.ai-code-copy')) return; const btn=document.createElement('button'); btn.className='ai-code-copy'; btn.type='button'; btn.textContent='复制'; btn.addEventListener('click', async ()=>{ try{ const code=pre.querySelector('code'); const t= code ? code.innerText : pre.innerText; await navigator.clipboard.writeText(t); btn.textContent='已复制'; setTimeout(()=> btn.textContent='复制', 1100); }catch(_){} }); pre.style.position='relative'; pre.appendChild(btn); }); }catch(_){} }
+function markdownCodeFence(text) {
+  let fence = '```';
+  while (String(text||'').includes(fence)) fence += '`';
+  return fence;
+}
+function buildAiConversationMarkdown(items) {
+  const rows = Array.isArray(items) ? items : [];
+  const title = document.getElementById('editor-title')?.value.trim();
+  const diaryId = getAiDiaryId();
+  const actionLabels = { continue:'续写', polish:'润色', outline:'提纲', summarize:'摘要', title:'标题', tasks:'行动项', custom:'自定义', ask:'问答', edit:'编辑', draw:'绘图' };
+  const lines = [
+    '# Treeks AI 对话导出',
+    '',
+    `- 日记：${title || (diaryId === -1 ? '未绑定日记' : `#${diaryId}`)}`,
+    `- 导出时间：${new Date().toLocaleString()}`,
+    `- 消息数：${rows.length}`
+  ];
+  let lastThreadId = '';
+  rows.forEach(item => {
+    const role = item.role === 'user' ? '你' : 'Treeks AI';
+    const action = actionLabels[item.action] || item.action || '对话';
+    if (item.thread_id && item.thread_id !== lastThreadId) {
+      lines.push('', '---');
+      lastThreadId = item.thread_id;
+    }
+    const time = item.created_at ? new Date(item.created_at).toLocaleString() : '';
+    lines.push('', `## ${role} · ${action}${time ? ` · ${time}` : ''}`, '');
+    if (role === '你') {
+      lines.push(String(item.content || ''));
+      return;
+    }
+    const text = String(item.result || item.content || '');
+    const svg = extractSvgString(text);
+    if (svg) lines.push(markdownCodeFence(svg), svg, markdownCodeFence(svg));
+    else lines.push(text);
+  });
+  return lines.join('\n').replace(/\n{4,}/g, '\n\n\n') + '\n';
+}
+async function exportAiConversationMarkdown() {
+  const button = document.getElementById('btn-export-ai-chat');
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
+  try {
+    const diaryId = getAiDiaryId();
+    let beforeId = '';
+    const allItems = [];
+    for (let page = 0; page < 20; page += 1) {
+      const query = new URLSearchParams({ diary_id: String(diaryId), limit: '200' });
+      if (beforeId) query.set('before_id', String(beforeId));
+      const data = await api('/api/ai/conversations?' + query.toString());
+      const items = data.items || [];
+      allItems.push(...items);
+      if (!data.has_more || !data.oldest_id || items.length === 0) break;
+      beforeId = data.oldest_id;
+    }
+    if (!allItems.length) {
+      toast('当前日记还没有可导出的 AI 对话', '');
+      return;
+    }
+    const markdown = buildAiConversationMarkdown(allItems);
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = `treeks-ai-${diaryId === -1 ? 'global' : diaryId}-${stamp}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast(`已导出 ${allItems.length} 条消息`, 'success');
+  } catch (error) {
+    toast(error.message || '导出失败', 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
 function createAiResultActions(result) {
   const actions = document.createElement('div');
   actions.className = 'ai-result-actions';
@@ -9382,7 +9507,7 @@ async function runAiAction(action, prompt = '', options = {}) {
   const requestId = ++aiSidebarState.requestSequence;
   const requestSnapshot = {
     diaryId: getAiDiaryId(),
-    baseContent: context.content,
+    baseContent: document.getElementById('editor-textarea')?.value ?? context.content,
     selectionStart: context.selectionStart,
     selectionEnd: context.selectionEnd,
     hasSelection: context.hasSelection
@@ -9591,6 +9716,11 @@ function initAiSidebar() {
   close.addEventListener('click', () => setAiSidebarOpen(false));
   document.getElementById('ai-sidebar-backdrop')?.addEventListener('click', () => setAiSidebarOpen(false));
   clear?.addEventListener('click', clearAiChat);
+  document.getElementById('btn-export-ai-chat')?.addEventListener('click', exportAiConversationMarkdown);
+  document.querySelectorAll('[data-ai-context-scope]').forEach(btn => {
+    btn.addEventListener('click', () => setAiContextScope(btn.getAttribute('data-ai-context-scope')));
+  });
+  setAiContextScope(aiSidebarState.contextScope);
   // search bar
   (function(){
     const btnSearch=document.getElementById('btn-search-ai-chat');
@@ -9793,8 +9923,9 @@ function initAiSidebar() {
     else if (getAiMode() === 'ask') runAiAction('ask', value);
     else runAiAction('custom', value);
   });
-  prompt.addEventListener('input', ()=>{ autoResizeAiPrompt(); try{ const cc=document.getElementById('ai-char-count'); if(cc){ const n=prompt.value.length; cc.textContent=String(n); cc.style.color = n>490 ? 'var(--danger)' : n>430 ? '#b45309' : 'var(--fg-tertiary)'; const send=document.getElementById('ai-send-btn'); if(send){ const over=n>500|| n===0; send.disabled = over && n>500; send.style.opacity = over && n>500 ? '0.45' : ''; } } }catch(_){} });
+  prompt.addEventListener('input', ()=>{ autoResizeAiPrompt(); updateAiPromptCount(); });
   autoResizeAiPrompt();
+  updateAiPromptCount();
   const sendBtnElX = document.querySelector('.ai-send-btn'); if(sendBtnElX && !sendBtnElX.id) sendBtnElX.id='ai-send-btn';
   if(!document.getElementById('btn-ai-stop')){
     const stop=document.createElement('button'); stop.id='btn-ai-stop'; stop.type='button'; stop.className='ai-icon-btn'; stop.title='停止生成'; stop.setAttribute('aria-label','停止生成');

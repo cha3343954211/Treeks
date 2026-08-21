@@ -12039,6 +12039,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
@@ -12241,6 +12242,24 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-empty .ai-quick-action:hover { transform: none; box-shadow: none; background: var(--accent-light); border-color: var(--accent-soft); }
 .ai-empty-actions { display: flex; gap: 6px; margin-top:2px; flex-wrap: wrap; justify-content: center; }
 .ai-context-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); flex: 0 0 auto; }
+.ai-context-scope { display: inline-flex; width: fit-content; gap: 2px; margin-top: 5px; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-paper); }
+.ai-context-scope button {
+  min-height: 21px;
+  padding: 1px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-tertiary);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.ai-context-scope button:hover { color: var(--fg); background: var(--bg-hover); box-shadow: none; }
+.ai-context-scope button.active { background: var(--accent-light); color: var(--accent-pressed); font-weight: 700; }
+.ai-context-scope button:disabled { opacity: .55; cursor: not-allowed; }
+.ai-context-scope button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ai-context-dot.muted { background: var(--fg-tertiary); box-shadow: 0 0 0 3px var(--border); }
 .ai-context-copy { margin-left: auto; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; padding: 3px 7px; border-radius: 999px; }
 .ai-context-copy:hover { background: var(--bg-hover); color: var(--fg); box-shadow: none; }
 .ai-composer-wrap { position: relative; border-top: 1px solid var(--border); background: var(--bg-paper); }

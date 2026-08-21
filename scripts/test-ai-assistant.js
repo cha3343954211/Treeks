@@ -276,6 +276,34 @@ async function main() {
         };
       });
       assert(svgSafety.executed === false && svgSafety.hasCircle && !svgSafety.hasScript && !svgSafety.hasOnload && !svgSafety.hasExternalHref, `SVG sanitizer output invalid: ${svgSafety.safe}`);
+      await page.waitForFunction(() => !aiSidebarState?.isGenerating, { timeout: 15000 });
+      const contextControl = await page.evaluate(() => {
+        const textarea = document.getElementById('editor-textarea');
+        textarea.value = 'FULL_SECRET_CONTEXT with SELECTED_TARGET inside';
+        textarea.selectionStart = textarea.value.indexOf('SELECTED_TARGET');
+        textarea.selectionEnd = textarea.selectionStart + 'SELECTED_TARGET'.length;
+        document.querySelector('[data-ai-context-scope="selection"]').click();
+        const selectionContext = getAiWritingContext();
+        document.querySelector('[data-ai-context-scope="none"]').click();
+        const closedContext = getAiWritingContext();
+        document.querySelector('[data-ai-context-scope="auto"]').click();
+        const autoContext = getAiWritingContext();
+        return {
+          selectionContext,
+          closedContext,
+          autoContext,
+          activeAuto: document.querySelector('[data-ai-context-scope="auto"]').classList.contains('active'),
+          exportReady: !!document.getElementById('btn-export-ai-chat')
+        };
+      });
+      assert(contextControl.selectionContext.selection === 'SELECTED_TARGET' && !contextControl.selectionContext.content.includes('FULL_SECRET'), 'selection context scope leaked full note');
+      assert(!contextControl.closedContext.content && !contextControl.closedContext.selection && !contextControl.closedContext.title, 'closed context scope still returned note data');
+      assert(contextControl.autoContext.content.includes('FULL_SECRET_CONTEXT') && contextControl.activeAuto && contextControl.exportReady, 'context scope controls failed');
+      const exported = await page.evaluate(() => buildAiConversationMarkdown([
+        { role: 'user', action: 'ask', content: 'What changed?', created_at: new Date().toISOString() },
+        { role: 'assistant', action: 'ask', result: 'A **markdown** answer.', created_at: new Date().toISOString() }
+      ]));
+      assert(exported.includes('# Treeks AI 对话导出') && exported.includes('What changed?') && exported.includes('A **markdown** answer.'), 'AI conversation export markdown invalid');
       assert(pageErrors.length === 0, `sidebar produced page errors: ${pageErrors.join('; ')}`);
     } finally {
       await browser.close();
