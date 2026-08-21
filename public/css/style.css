@@ -12246,7 +12246,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-result-md { overflow: auto; margin: 8px 0 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-paper); box-shadow: none; }
 .ai-result-md .markdown-body { padding: 0; border: 0; box-shadow: none; max-width: none; font-size: 13px; line-height: 1.65; }
 .ai-result-md .markdown-body pre { position: relative; border-radius: 6px; }
-.ai-result-md .markdown-body pre .ai-code-copy { z-index: 1; position:absolute; top:6px; right:6px; min-height:24px; padding:0 8px; border-radius:6px; border:1px solid var(--border); background: var(--bg-paper); color:var(--fg-muted); font:inherit; font-size:11px; font-weight:600; cursor:pointer; backdrop-filter: blur(6px); }
+.ai-result-md .markdown-body pre .ai-code-copy { z-index: 1; position:absolute; top:6px; right:6px; min-height:24px; padding:0 8px; border-radius:6px; border:1px solid var(--border); background: var(--bg-paper); color:var(--fg-muted); font:inherit; font-size:11px; font-weight:600; cursor:pointer; box-shadow: var(--shadow-sm); }
 .ai-result-md .markdown-body pre .ai-code-copy:hover { color:var(--fg); border-color: var(--border-strong); }
 .ai-message-actions-row { display:flex; gap:6px; margin-top:6px; }
 .ai-message-copy { border:1px solid var(--border); background: var(--bg-paper); color:var(--fg-muted); font:inherit; font-size:11px; padding:4px 8px; border-radius:999px; cursor:pointer; }
@@ -12354,8 +12354,6 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-paper);
-  
-  
   box-shadow: var(--shadow-md);
   overflow: hidden;
   display: none;
