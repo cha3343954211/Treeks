@@ -8096,6 +8096,7 @@ function sseConnect(path, handlers){
 }
 function updateAiContextIndicator() {
   const textEl = document.getElementById('ai-context-text');
+  const metaEl = document.getElementById('ai-context-meta');
   const indicator = document.getElementById('ai-context-indicator');
   const target = textEl || indicator;
   if (!target) return;
@@ -8103,10 +8104,12 @@ function updateAiContextIndicator() {
   const did = getAiDiaryId();
   const prefix = did===-1 ? '未绑定日记 · ' : ('日记 #'+did+' · ');
   let msg='';
-  if (context.hasSelection) msg = prefix + `将处理已选中的 ${context.selection.length} 个字符（对话按此日记保留）`;
-  else if (context.content) msg = prefix + `将参考当前日记的 ${context.content.length} 个字符（对话按此日记保留）`;
-  else msg = prefix + '先写下一两句，我会据此协助你展开（对话按日记归档）';
+  let meta='';
+  if (context.hasSelection) { msg = prefix + `将处理已选中的 ${context.selection.length} 个字符`; meta = `选区 ${context.selection.length} 字 · 全文 ${context.content.length} 字 · 按此日记保留`; }
+  else if (context.content) { msg = prefix + `将参考当前日记的 ${context.content.length} 个字符`; meta = `全文 ${context.content.length} 字${context.title ? ' · 标题：'+context.title.slice(0,18) : ''} · 按日记归档`; }
+  else { msg = prefix + '先写下一两句，我会据此协助你展开'; meta = '对话按日记归档 · 支持问答 / 编辑 / 绘图'; }
   target.textContent = msg;
+  if(metaEl) metaEl.textContent = meta;
   try{
     const empty=document.getElementById('ai-empty');
     const chat=document.getElementById('ai-chat');
@@ -8244,6 +8247,81 @@ function clearAiChat() {
   if(!confirm('清空当前日记的 AI 对话？')) return;
   clearAiHistoryForCurrentDiary();
 }
+
+// ===== AI slash palette (/continue /polish ...) =====
+const AI_SLASH_COMMANDS = [
+  { id:'continue', slash:'/续写', alias:'/continue', title:'续写', desc:'顺着当前内容继续写', hint:'选区优先' },
+  { id:'polish', slash:'/润色', alias:'/polish', title:'润色', desc:'优化语句与节奏，保留原意', hint:'选区/全文' },
+  { id:'outline', slash:'/提纲', alias:'/outline', title:'提纲', desc:'提炼结构化提纲', hint:'全文' },
+  { id:'summarize', slash:'/摘要', alias:'/summarize', title:'摘要', desc:'生成精炼摘要', hint:'全文' },
+  { id:'title', slash:'/标题', alias:'/title', title:'标题', desc:'生成标题建议', hint:'全文' },
+  { id:'tasks', slash:'/行动项', alias:'/tasks', title:'行动项', desc:'提取待办任务', hint:'全文' },
+  { id:'draw', slash:'/绘图', alias:'/draw', title:'绘图', desc:'让 AI 绘制 SVG 矢量图', hint:'提示词' },
+];
+
+let aiSlashState = { open:false, filter:'', activeIndex:0 };
+function getAiSlashMatches(filter){
+  const q = String(filter||'').trim().toLowerCase();
+  if(!q) return AI_SLASH_COMMANDS.slice(0,7);
+  return AI_SLASH_COMMANDS.filter(c=> c.slash.toLowerCase().includes(q) || c.alias.toLowerCase().includes(q) || c.title.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q));
+}
+function renderAiSlashPalette(){
+  const wrap=document.getElementById('ai-composer-wrap');
+  let pal=document.getElementById('ai-slash');
+  if(!wrap) return;
+  if(!pal){
+    pal=document.createElement('div');
+    pal.id='ai-slash';
+    pal.className='ai-slash';
+    pal.innerHTML=`<div class="ai-slash-head"><span>指令</span><span style="opacity:.7">↑↓ 选择 · Enter 确认 · Esc 关闭</span></div><div class="ai-slash-list" id="ai-slash-list"></div>`;
+    wrap.appendChild(pal);
+  }
+  const list=pal.querySelector('#ai-slash-list');
+  const matches=getAiSlashMatches(aiSlashState.filter);
+  if(!aiSlashState.open || !matches.length){ pal.classList.remove('open'); return; }
+  pal.classList.add('open');
+  if(aiSlashState.activeIndex<0) aiSlashState.activeIndex=0;
+  if(aiSlashState.activeIndex>=matches.length) aiSlashState.activeIndex=matches.length-1;
+  const ico=(id)=>{
+    const map={
+      continue:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12-12.5z"/></svg>',
+      polish:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12-12.5z"/></svg>',
+      outline:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>',
+      summarize:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+      title:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>',
+      tasks:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="9 11 12 14 22 4"/></svg>',
+      draw:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg>',
+    }; return map[id]||map['continue'];
+  };
+  list.innerHTML = matches.map((c,i)=>`<button class="ai-slash-item ${i===aiSlashState.activeIndex?'active':''}" data-slash-id="${c.id}" type="button"><span class="ai-slash-ico" aria-hidden="true">${ico(c.id)}</span><span class="ai-slash-text"><span class="ai-slash-title">${c.title}</span><span class="ai-slash-desc">${c.desc}</span></span><span class="ai-slash-hint">${c.slash}</span></button>`).join('');
+  list.querySelectorAll('.ai-slash-item').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id=btn.getAttribute('data-slash-id');
+      aiSlashState.open=false; renderAiSlashPalette();
+      if(id==='draw'){
+        const ta=document.getElementById('ai-prompt');
+        if(ta && !ta.value.trim().startsWith('/')) ta.value='';
+        runAiAction(id);
+      } else if(id){
+        runAiAction(id);
+      }
+    });
+  });
+}
+function openAiSlash(filter=""){ aiSlashState.open=true; aiSlashState.filter=filter; aiSlashState.activeIndex=0; renderAiSlashPalette(); }
+function closeAiSlash(){ aiSlashState.open=false; renderAiSlashPalette(); }
+function handleAiPromptSlashKeys(e){
+  if(!aiSlashState.open) return false;
+  const list=document.getElementById('ai-slash-list');
+  const matches=getAiSlashMatches(aiSlashState.filter);
+  if(e.key==='ArrowDown'){ e.preventDefault(); aiSlashState.activeIndex=Math.min(matches.length-1, aiSlashState.activeIndex+1); renderAiSlashPalette(); return true; }
+  if(e.key==='ArrowUp'){ e.preventDefault(); aiSlashState.activeIndex=Math.max(0, aiSlashState.activeIndex-1); renderAiSlashPalette(); return true; }
+  if(e.key==='Enter'){ e.preventDefault(); const cur=matches[aiSlashState.activeIndex]; if(cur){ aiSlashState.open=false; renderAiSlashPalette(); if(cur.id==='draw'){ runAiAction(cur.id); } else runAiAction(cur.id); } return true; }
+  if(e.key==='Escape'){ e.preventDefault(); closeAiSlash(); return true; }
+  if(e.key==='Tab'){ e.preventDefault(); aiSlashState.activeIndex=(aiSlashState.activeIndex+1)%matches.length; renderAiSlashPalette(); return true; }
+  return false;
+}
+
 
 let aiSvgState = { selected: null, lastGenerated: '' };
 function extractSvgString(text){
@@ -8998,6 +9076,89 @@ function initAiSidebar() {
   close.addEventListener('click', () => setAiSidebarOpen(false));
   document.getElementById('ai-sidebar-backdrop')?.addEventListener('click', () => setAiSidebarOpen(false));
   clear?.addEventListener('click', clearAiChat);
+  // search bar
+  (function(){
+    const btnSearch=document.getElementById('btn-search-ai-chat');
+    const bar=document.getElementById('ai-chat-search');
+    const input=document.getElementById('ai-chat-search-input');
+    const closeBtn=document.getElementById('ai-chat-search-close');
+    const countEl=document.getElementById('ai-chat-search-count');
+    const chatEl=document.getElementById('ai-chat');
+    if(!btnSearch||!bar||!input||!closeBtn||!chatEl) return;
+    let lastQuery='';
+    function highlight(query){
+      const q=String(query||'').trim();
+      // restore
+      chatEl.querySelectorAll('mark').forEach(m=>{
+        const t=document.createTextNode(m.textContent);
+        m.replaceWith(t);
+      });
+      // normalize
+      chatEl.normalize();
+      if(!q) { if(countEl) countEl.textContent=''; chatEl.querySelectorAll('.ai-message').forEach(m=> m.style.display=''); return; }
+      const needle=q.toLowerCase();
+      let hits=0;
+      chatEl.querySelectorAll('.ai-message').forEach(msg=>{
+        const textNodes=[];
+        const walker=document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+        let n;
+        while(n=walker.nextNode()){
+          if(n.parentElement && n.parentElement.tagName==='MARK') continue;
+          if(n.nodeValue.toLowerCase().includes(needle)) textNodes.push(n);
+        }
+        let msgHits=0;
+        textNodes.forEach(tn=>{
+          const val=tn.nodeValue;
+          const lower=val.toLowerCase();
+          let idx=lower.indexOf(needle);
+          if(idx===-1) return;
+          const frag=document.createDocumentFragment();
+          let last=0;
+          while(idx!==-1){
+            frag.appendChild(document.createTextNode(val.slice(last, idx)));
+            const mark=document.createElement('mark');
+            mark.textContent=val.slice(idx, idx+q.length);
+            frag.appendChild(mark);
+            msgHits++; hits++;
+            last= idx + q.length;
+            idx= lower.indexOf(needle, last);
+          }
+          frag.appendChild(document.createTextNode(val.slice(last)));
+          tn.replaceWith(frag);
+        });
+        msg.style.display = msgHits? '' : 'none';
+        // but keep empty placeholder visible logic
+        if(msg.id==='ai-empty' || msg.id==='ai-welcome-msg'){
+          msg.style.display = hits? 'none' : '';
+        }
+      });
+      if(countEl) countEl.textContent = q? (hits? hits+' 命中' : '无结果') : '';
+      chatEl.scrollTop=0;
+    }
+    btnSearch.addEventListener('click', ()=>{
+      const isHidden = bar.style.display==='none' || getComputedStyle(bar).display==='none';
+      bar.style.display = isHidden ? 'flex' : 'none';
+      if(isHidden){ input.focus(); input.select(); } else { input.value=''; highlight(''); }
+    });
+    closeBtn.addEventListener('click', ()=>{ bar.style.display='none'; input.value=''; highlight(''); });
+    input.addEventListener('input', ()=>{ lastQuery=input.value; highlight(lastQuery); });
+    input.addEventListener('keydown', (e)=>{
+      if(e.key==='Escape'){ bar.style.display='none'; input.value=''; highlight(''); btnSearch.focus(); }
+    });
+    // bind Ctrl+F when sidebar open
+    document.addEventListener('keydown', (e)=>{
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='f' && aiSidebarState && aiSidebarState.isOpen){
+        const active=document.activeElement;
+        // only hijack when focus inside sidebar or no input focused
+        const inSidebar = active && active.closest && active.closest('#ai-sidebar');
+        const isTyping = active && (active.tagName==='INPUT' || active.tagName==='TEXTAREA') && !inSidebar;
+        if(isTyping) return;
+        e.preventDefault();
+        bar.style.display='flex';
+        input.focus(); input.select();
+      }
+    });
+  })();
   // SVG modal trigger in header
   (function(){
     const headerActions=document.querySelector('.ai-sidebar-header-actions');
@@ -9070,10 +9231,25 @@ function initAiSidebar() {
     }
   });
   prompt.addEventListener('keydown', event => {
+    if(handleAiPromptSlashKeys(event)) return;
     if (event.key === 'Enter' && !event.shiftKey) {
+      if(aiSlashState.open){ event.preventDefault(); handleAiPromptSlashKeys(Object.assign({preventDefault:()=>{}},{key:'Enter'})); return; }
       event.preventDefault();
       composer.requestSubmit();
     }
+    if(event.key==='Escape' && aiSlashState.open){ event.preventDefault(); closeAiSlash(); }
+  });
+  prompt.addEventListener('input', ()=>{
+    const v=prompt.value.trim();
+    if(v.startsWith('/')){
+      openAiSlash(v.slice(1));
+    } else if(aiSlashState.open){
+      closeAiSlash();
+    }
+  });
+  // click outside to close slash
+  document.addEventListener('click', (e)=>{
+    if(aiSlashState.open && !e.target.closest('#ai-slash') && !e.target.closest('#ai-prompt')) closeAiSlash();
   });
   textarea.addEventListener('select', updateAiContextIndicator);
   textarea.addEventListener('keyup', updateAiContextIndicator);
