@@ -12108,7 +12108,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   grid-template-columns: minmax(0, 1fr) 36px;
   gap: 8px;
   align-items: end;
-  padding: 10px 12px;
+  padding: 8px 12px 10px;
 }
 #ai-prompt {
   min-width: 0;
@@ -12222,7 +12222,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-model-editor-form { display: grid; gap: 13px; }
 .ai-model-editor-form label { display: grid; gap: 6px; color: var(--fg-secondary); font-size: 12px; font-weight: 600; }
 .ai-model-editor-form input { width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; }
-.ai-model-editor-form input:focus { outline: none; border-color: var(--accent); }
+.ai-model-editor-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 .ai-model-editor-toggles { display: flex; flex-wrap: wrap; gap: 16px; padding-top: 2px; }
 .ai-model-editor-toggles .checkbox { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; }
 .ai-model-editor-toggles .checkbox input { width: auto; min-height: 0; }
