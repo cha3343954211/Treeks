@@ -12179,20 +12179,20 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 
 .ai-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 24px 16px 20px; border: 1px dashed var(--border); border-radius: 8px; background: var(--bg); }
 .ai-empty-icon { width: 26px; height: 26px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: var(--accent-light); color: var(--accent); font-weight:700; box-shadow: none; }
-.ai-empty-title { font-size:13px; font-weight:700; color: var(--fg); letter-spacing:-0.01em; }
-.ai-empty-desc { font-size: 11.5px; color: var(--fg-muted); line-height:1.5; max-width: 280px; }
-.ai-empty-desc code{ padding: 0 4px; border-radius: 4px; background: var(--accent-light); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-secondary); }
+.ai-empty-title { font-size: 13px; font-weight: 700; color: var(--fg); letter-spacing: -0.015em; }
+.ai-empty-desc { font-size: 11.5px; color: var(--fg-muted); line-height: 1.55; max-width: 280px; }
+.ai-empty-desc code { padding: 0 4px; border-radius: 999px; background: var(--accent-light); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-secondary); }
 .ai-empty .ai-quick-action:hover { transform: none; box-shadow: none; background: var(--accent-light); border-color: var(--accent-soft); }
 .ai-empty-actions { display: flex; gap: 6px; margin-top:2px; flex-wrap: wrap; justify-content: center; }
-.ai-context-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-light); flex: 0 0 auto; }
-.ai-context-copy { margin-left:auto; border:0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor:pointer; padding:2px 6px; border-radius: 6px; }
+.ai-context-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); flex: 0 0 auto; }
+.ai-context-copy { margin-left: auto; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; padding: 3px 7px; border-radius: 999px; }
 .ai-context-copy:hover { background: var(--bg-hover); color: var(--fg); box-shadow: none; }
 .ai-composer-wrap { position: relative; border-top: 1px solid var(--border); background: var(--bg-paper); }
 .ai-composer-meta { display: flex; /* hint + counter */
- align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 12px 0; color: var(--fg-tertiary); font-size: 10.5px; line-height: 1.4; }
+ align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 12px 0; color: var(--fg-tertiary); font-size: 10.5px; line-height: 1.45; }
 .ai-composer-hint { display: inline-flex; align-items: center; gap: 6px; }
 .ai-composer-hint::before { content:'⌘'; width: 14px; height: 14px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; line-height: 1; border: 1px solid var(--border); background: var(--bg-paper); color: var(--fg-tertiary); box-shadow: none; }
-.ai-char-count { font-variant-numeric: tabular-nums; min-width:42px; text-align: right; font-weight: 600; letter-spacing:0.01em; }
+.ai-char-count { font-variant-numeric: tabular-nums; min-width:42px; text-align: right; font-weight: 600; letter-spacing: 0.015em; }
 /* ===== AI model administration ===== */
 .ai-model-admin-list {
   display: grid;
@@ -12362,7 +12362,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   display: none;
 }
 .ai-slash.open{ display: block; animation: aiSlashIn 0.14s var(--ease-smooth); }
-@keyframes aiSlashIn{ from{ opacity:0; transform: translateY(4px) scale(0.98); } to{ opacity:1; transform: none; } }
+@keyframes aiSlashIn{ from{ opacity: 0; transform: translateY(4px) scale(0.98); } to{ opacity:1; transform: none; } }
 .ai-slash-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 10px; border-bottom: 1px solid var(--border);
@@ -12415,16 +12415,16 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 
 /* ai message polish: timestamp + actions hover */
 .ai-message{ position: relative; }
-.ai-message-time{ display: inline-flex; align-items: center; gap: 6px; margin-top:7px; color: var(--fg-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; letter-spacing:0.01em; opacity:0.92; }
-.ai-message-time::before{ content: ''; width:3px; height:3px; border-radius: 999px; background: currentColor; opacity:0.55; }
-.ai-message-actions-row{ opacity: 0.85; transition: opacity 0.15s; }
+.ai-message-time{ display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; color: var(--fg-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; letter-spacing: 0.015em; opacity: 0.88; }
+.ai-message-time::before{ content: ''; width: 3px; height: 3px; border-radius: 999px; background: currentColor; opacity: 0.5; }
+.ai-message-actions-row{ opacity: 0.82; transition: opacity 0.16s var(--ease-smooth); }
 .ai-message:hover .ai-message-actions-row{ opacity: 1; }
 .ai-message-copy.ai-message-delete{ color: var(--fg-muted); }
 .ai-message-copy.ai-message-delete:hover{ color: var(--danger); border-color: rgba(217,104,92,0.22); background: rgba(217,104,92,0.08); }
 /* scroll shadows for chat */
 .ai-chat { position: relative; }
-.ai-chat::before, .ai-chat::after{
-  content: ''; position: sticky; left: 0; right: 0; height: 10px; pointer-events: none; z-index: 1; opacity:0; transition: opacity 0.2s;
+.ai-chat::before, .ai-chat::after {
+  content: ''; position: sticky; left: 0; right: 0; height: 10px; pointer-events: none; z-index: 1; opacity: 0; transition: opacity 0.2s var(--ease-smooth);
 }
 .ai-chat::before{ top:0; background: linear-gradient(180deg, var(--bg-paper), transparent); margin-bottom:-10px; }
 .ai-chat::after{ bottom:0; background: linear-gradient(0deg, var(--bg-paper), transparent); margin-top:-10px; }
