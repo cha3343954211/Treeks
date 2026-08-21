@@ -373,13 +373,15 @@ async function main() {
   assert.deepEqual(historyAfterRetry.data.items.map(item => item.role), ['user', 'assistant']);
   assert.equal(historyAfterRetry.data.items.at(-1).result, 'mock answer 2');
 
-  const streamQuery = new URLSearchParams({
+  const streamPayload = {
     action: 'ask', title: 'AI retry', content: 'Current note body',
     prompt: 'Keep literal A%20B exactly', diary_id: String(retryDiary.data.id),
     model_id: mockModelId
-  });
-  const streamResponse = await fetch(`${BASE}/api/ai/assist/stream?${streamQuery}`, {
-    headers: auth(alice.token, { Accept: 'text/event-stream' })
+  };
+  const streamResponse = await fetch(`${BASE}/api/ai/assist/stream`, {
+    method: 'POST',
+    headers: auth(alice.token, { Accept: 'text/event-stream', 'Content-Type': 'application/json' }),
+    body: JSON.stringify(streamPayload)
   });
   assert.equal(streamResponse.status, 200);
   const streamBody = await streamResponse.text();

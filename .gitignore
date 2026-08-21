@@ -24,6 +24,7 @@ test-*
 !scripts/test-prod-fts-trigger.js
 !scripts/test-audio-message.js
 !scripts/test-sticker-message.js
+!scripts/test-ai-assistant.js
 tmp-*
 *.tmp
 *.bak

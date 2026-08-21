@@ -3651,6 +3651,9 @@ function confirmDelete(id) {
 
 // ===== 编辑器 =====
 async function openEditor(id) {
+  hideAiEditPreview();
+  aiSidebarState.pendingEdit=null;
+  if(aiSidebarState.isGenerating) cancelAiGeneration();
   // 离开当前协同房间，避免新建日记时编辑内容被误同步到旧日记导致数据覆盖
   if (collabCurrentDiaryId && collabCurrentDiaryId !== id) {
     collabLeave(collabCurrentDiaryId);
@@ -7842,6 +7845,7 @@ const aiSidebarState = {
   activeSearchQuery: '',
   activeSearchMatchCount: 0,
   resetSearch: null,
+  requestSequence: 0,
   isGenerating: false,
   abortController: null
 };
@@ -7907,15 +7911,18 @@ async function loadAiModels() {
 function getAiWritingContext() {
   const textarea = document.getElementById('editor-textarea');
   const title = document.getElementById('editor-title');
-  const content = textarea ? textarea.value.trim() : '';
-  const selection = textarea && textarea.selectionStart !== textarea.selectionEnd
-    ? textarea.value.slice(textarea.selectionStart, textarea.selectionEnd).trim()
+  const content = textarea ? textarea.value : '';
+  const selectionStart = textarea ? textarea.selectionStart : 0;
+  const selectionEnd = textarea ? textarea.selectionEnd : 0;
+  const selection = selectionStart !== selectionEnd
+    ? content.slice(selectionStart, selectionEnd).trim()
     : '';
   return {
     title: title ? title.value.trim() : '',
     content,
     selection,
-    source: selection || content,
+    selectionStart,
+    selectionEnd,
     hasSelection: Boolean(selection)
   };
 }
@@ -8027,15 +8034,15 @@ function renderAiDiffHtml(oldText, newText){
   });
   return { html: html || '<span class="ai-diff-eq">'+esc(newText)+'</span>', del, ins };
 }
-function showAiEditPreview(proposed){
+function showAiEditPreview(proposed, request = {}){
   const textarea=document.getElementById('editor-textarea');
   const layer=document.getElementById('ai-diff-layer');
   const bar=document.getElementById('ai-diff-bar');
   const summary=document.getElementById('ai-diff-summary');
   const splitWrap=document.getElementById('ai-diff-split');
   if(!textarea || !layer || !bar) return;
-  const original=textarea.value;
-  aiSidebarState.pendingEdit={ original, proposed };
+  const original=String(request.baseContent ?? textarea.value);
+  aiSidebarState.pendingEdit={ original, proposed, diaryId: request.diaryId ?? getAiDiaryId() };
   const rendered=renderAiDiffHtml(original, proposed);
   // default inline
   layer.innerHTML=rendered.html;
@@ -8094,6 +8101,12 @@ function acceptAiEdit(){
   if(!aiSidebarState.pendingEdit) return;
   const textarea=document.getElementById('editor-textarea');
   if(!textarea) return;
+  if(aiSidebarState.pendingEdit.diaryId !== getAiDiaryId() || textarea.value !== aiSidebarState.pendingEdit.original){
+    hideAiEditPreview();
+    aiSidebarState.pendingEdit=null;
+    toast('笔记已变化，为避免覆盖修改已放弃本次 AI 编辑','error');
+    return;
+  }
   textarea.value=aiSidebarState.pendingEdit.proposed;
   textarea.focus();
   textarea.dispatchEvent(new Event('input', {bubbles:true}));
@@ -8928,11 +8941,10 @@ function initAiSvgFeature(){
       // Try streaming first
       let svg='';
       try{
-        const qs=new URLSearchParams({action:'draw', title: context.title||'', content: context.content||'', selection: context.selection||'', prompt, ...(aiSidebarState && aiSidebarState.selectedModelId ? {model_id:String(aiSidebarState.selectedModelId)}:{} )});
+        const payload={action:'draw', title: context.title||'', content: context.content||'', selection: context.selection||'', prompt, diary_id: getAiDiaryId(), ...(aiSidebarState && aiSidebarState.selectedModelId ? {model_id:aiSidebarState.selectedModelId}:{} )};
         const token=(typeof state!=='undefined' && state.token) ? state.token : '';
-        const url='/api/ai/assist/stream?'+qs.toString() + (token?'&_token='+encodeURIComponent(token):'');
-        const headers={ 'Accept':'text/event-stream' }; if(token) headers['Authorization']='Bearer '+token;
-        const res=await fetch(url, {headers});
+        const headers={ 'Accept':'text/event-stream', 'Content-Type':'application/json' }; if(token) headers['Authorization']='Bearer '+token;
+        const res=await fetch('/api/ai/assist/stream', {method:'POST', headers, body:JSON.stringify(payload)});
         if(!res.ok) throw new Error('stream failed '+res.status);
         const reader=res.body.getReader(); const dec=new TextDecoder('utf-8'); let buf='', full='';
         while(true){
@@ -9281,6 +9293,14 @@ async function runAiAction(action, prompt = '', options = {}) {
   if(retryThreadId) document.querySelectorAll('#ai-chat .ai-message[data-thread-id="'+CSS.escape(retryThreadId)+'"]').forEach(node=>node.remove());
   const context = getAiWritingContext();
   if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
+  const requestId = ++aiSidebarState.requestSequence;
+  const requestSnapshot = {
+    diaryId: getAiDiaryId(),
+    baseContent: context.content,
+    selectionStart: context.selectionStart,
+    selectionEnd: context.selectionEnd,
+    hasSelection: context.hasSelection
+  };
   const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
   const displayPrompt=String(prompt||labels[action]||'处理当前内容');
   appendAiMessage('user', displayPrompt, '', {action, prompt:displayPrompt});
@@ -9302,30 +9322,27 @@ async function runAiAction(action, prompt = '', options = {}) {
   let thinking = null;
   let fullBuffer = '';
   let metaInfo = null;
-  const qs = new URLSearchParams({
+  const streamPayload = {
     action: String(action||'custom'),
     title: String(context.title||''),
     content: String(context.content||''),
     selection: String(context.selection||''),
     prompt: String(prompt||''),
-    diary_id: String(getAiDiaryId()),
+    diary_id: getAiDiaryId(),
     ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}),
-    ...(aiSidebarState.selectedModelId ? { model_id: String(aiSidebarState.selectedModelId) } : {})
-  });
-  // EventSource URL needs auth via cookie/header; we pass token as query fallback if needed
-  // Use fetch-based SSE path: build authenticated URL with token param for EventSource compatibility
-  const token = state.token || '';
-  const streamUrl = '/api/ai/assist/stream?' + qs.toString() + (token ? '&_token=' + encodeURIComponent(token) : '');
-  // For EventSource, need to send Authorization header — not possible, so we use fetch streaming fallback that carries header
-  // Prefer fetch streaming implementation that handles SSE parsing with auth header
-  async function fetchStreamSSE(url){
-    const headers = { 'Accept': 'text/event-stream' };
+    ...(aiSidebarState.selectedModelId ? { model_id: aiSidebarState.selectedModelId } : {})
+  };
+  const streamUrl = '/api/ai/assist/stream';
+  async function fetchStreamSSE(url, payload){
+    const headers = { 'Accept': 'text/event-stream', 'Content-Type': 'application/json' };
     if(state.token) headers['Authorization']='Bearer '+state.token;
     const signal = aiSidebarState.abortController ? aiSidebarState.abortController.signal : undefined;
-    const res = await fetch(url, { headers, signal });
+    const res = await fetch(url, { method:'POST', headers, body:JSON.stringify(payload), signal });
     if(!res.ok){
       const text = await res.text().catch(()=> '');
-      throw new Error(text || ('请求失败 ('+res.status+')'));
+      let message=text;
+      try{ message=JSON.parse(text)?.error || text; }catch(_){}
+      throw new Error(message || ('请求失败 ('+res.status+')'));
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
@@ -9348,7 +9365,7 @@ async function runAiAction(action, prompt = '', options = {}) {
         else if(event==='thinking'){ try{ const j=JSON.parse(data); if(thinking) thinking.markDone(j.index); else if(metaInfo && metaInfo.thinkingSteps){ thinking=createAiThinkingBlock(streamHost, metaInfo.thinkingSteps); thinking.markDone(j.index);} }catch(_){} }
         else if(event==='thinking_done'){ if(thinking) thinking.setAllDone(); if(!streaming){ streaming=createAiStreamingBlock(streamHost); } }
         else if(event==='delta'){ try{ const j=JSON.parse(data); const t=j.text||''; fullBuffer+=t; if(!streaming) streaming=createAiStreamingBlock(streamHost); streaming.appendDelta(t); }catch(_){} }
-        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, threadId:j.thread_id||'' }; }catch(_){ }
+        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, scope:j.scope||(metaInfo&&metaInfo.scope)||'note', threadId:j.thread_id||'' }; }catch(_){ }
         }
         else if(event==='unavailable'){
           if(retryThreadId) throw new Error('AI 服务暂不可用，已保留原对话');
@@ -9362,7 +9379,7 @@ async function runAiAction(action, prompt = '', options = {}) {
       const lines=buf.split('\n');
       let event='message'; let data='';
       for(const line of lines){ if(line.startsWith('event:')) event=line.slice(6).trim(); else if(line.startsWith('data:')) data+=line.slice(5).trim(); }
-      if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, threadId:j.thread_id||'' }; }catch(_){} }
+      if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, scope:j.scope||(metaInfo&&metaInfo.scope)||'note', threadId:j.thread_id||'' }; }catch(_){} }
     }
   }
   try{
@@ -9384,7 +9401,7 @@ async function runAiAction(action, prompt = '', options = {}) {
       try{
         const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined, ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}) }) });
         if(response.available){
-          output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action, threadId:response.thread_id||'' };
+          output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action, scope:response.scope||'note', threadId:response.thread_id||'' };
         } else {
           if(retryThreadId) throw new Error('AI 服务暂不可用，已保留原对话');
           const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt);
@@ -9398,18 +9415,26 @@ async function runAiAction(action, prompt = '', options = {}) {
 
   setAiComposerBusy(false);
   // diary-bound: after success, the server has persisted; refresh history softly after rendering
-  if(output.threadId) setTimeout(()=>{ try{ loadAiHistoryForCurrentDiary(true); }catch(_){} }, 1200);
+  if(output.threadId) setTimeout(()=>{
+    if(aiSidebarState.requestSequence === requestId && !aiSidebarState.isGenerating) loadAiHistoryForCurrentDiary(true);
+  }, 0);
   if (output.mode === 'edit' && action !== 'draw') {
     const target = output.result;
+    let proposed=target;
+    if(output.scope === 'selection' && requestSnapshot.hasSelection){
+      proposed = requestSnapshot.baseContent.slice(0, requestSnapshot.selectionStart)
+        + target
+        + requestSnapshot.baseContent.slice(requestSnapshot.selectionEnd);
+    }
     // 编辑：直接在编辑区以红绿差异呈现，不再只留在侧栏
     appendAiMessage('assistant', output.note + '（已在编辑区以红绿差异呈现，可点「应用」写入笔记）', target, {threadId:output.threadId, action, prompt:displayPrompt});
-    showAiEditPreview(target);
+    showAiEditPreview(proposed, requestSnapshot);
     // 侧栏结果额外提供直接应用按钮
     const last=document.querySelector('#ai-chat .ai-message:last-child');
     const actions=last && last.querySelector('.ai-result-actions');
     if(actions){
       const applyBtn=document.createElement('button'); applyBtn.type='button'; applyBtn.className='ai-result-action'; applyBtn.textContent='应用到编辑器';
-      applyBtn.addEventListener('click', function(){ const t=document.getElementById('editor-textarea'); if(t){ t.value=target; t.dispatchEvent(new Event('input',{bubbles:true})); hideAiEditPreview(); aiSidebarState.pendingEdit=null; toast('已应用到编辑器','success'); } });
+      applyBtn.addEventListener('click', acceptAiEdit);
       actions.prepend(applyBtn);
     }
   } else if (output.mode === 'draw' || action === 'draw') {
@@ -16050,4 +16075,3 @@ function renderMoodHeatmap(yearHeatmap) {
   }
   container.innerHTML = html.join('');
 }
-
