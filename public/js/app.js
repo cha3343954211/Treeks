@@ -8852,9 +8852,12 @@ function appendAiMessage(role, content, result = '') {
       let timer=null; let dismissed=false;
       const restore=()=>{ if(dismissed) return; dismissed=true; clearTimeout(timer); bar.remove(); message.style.opacity=''; };
       undo.addEventListener('click', restore);
+      const onKey=(e)=>{ if(e.key==='Escape'){ restore(); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('keydown', onKey);
+
       bar.appendChild(undo);
       message.appendChild(bar);
-      timer=setTimeout(()=>{ if(dismissed) return; dismissed=true; message.remove(); bar.remove(); try{ const empty=document.getElementById('ai-empty'); const chat=document.getElementById('ai-chat'); if(empty && chat && chat.querySelectorAll('.ai-message').length<=1) empty.style.display='flex'; }catch(_){} }, 5200);
+      timer=setTimeout(()=>{ if(dismissed) return; dismissed=true; message.remove(); bar.remove(); document.removeEventListener('keydown', onKey); try{ const empty=document.getElementById('ai-empty'); const chat=document.getElementById('ai-chat'); if(empty && chat && chat.querySelectorAll('.ai-message').length<=1) empty.style.display='flex'; }catch(_){} }, 5200);
     });
     row.append(cp, retry, del); text.appendChild(row);
   } else { text.innerHTML = renderAiMarkdown(rawContent); }
