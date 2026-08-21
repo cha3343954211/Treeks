@@ -12036,7 +12036,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   background-repeat: no-repeat;
   background-position: right 8px center;
 }
-#ai-model-select:focus { outline: none; border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-light); }
+#ai-model-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 #ai-model-select:disabled { cursor: default; color: var(--fg-tertiary); background-color: var(--bg); }
 .ai-icon-btn, .ai-send-btn {
   display: inline-flex;
@@ -12091,7 +12091,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-quick-action { padding: 7px 6px; text-align: center; font-weight: 600; letter-spacing: -0.01em; display:inline-flex; align-items:center; justify-content:center; gap:5px; }
 .ai-qa-ico{ display:inline-flex; width:14px; height:14px; align-items:center; justify-content:center; border-radius:999px; background: rgba(76,153,92,0.08); flex:0 0 auto; }
 .ai-quick-action:hover .ai-qa-ico{ background: rgba(76,153,92,0.14); }
-.ai-quick-action:hover, .ai-result-action:hover { color: var(--accent-pressed); border-color: var(--accent-soft); background: var(--accent-light); transform: translateY(-0.5px); box-shadow: 0 4px 10px rgba(76,153,92,0.12); }
+.ai-quick-action:hover, .ai-result-action:hover { color: var(--accent-pressed); border-color: var(--accent-soft); background: var(--accent-light); transform: translateY(-0.5px); box-shadow: var(--shadow-sm); }
 .ai-quick-action:active { transform: translateY(0); }
 .ai-quick-action:disabled, .ai-quick-action[disabled] { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
 .ai-quick-action-draw { background: var(--bg-paper); border-color: var(--accent-soft); }
@@ -12147,7 +12147,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 #ai-prompt::placeholder { color: var(--fg-tertiary); }
-#ai-prompt:focus { outline: none; border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-light), 0 1px 3px rgba(0,0,0,0.04) inset; }
+#ai-prompt:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 .ai-send-btn {
   width: 36px;
   height: 36px;
@@ -12424,9 +12424,9 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
   background: var(--bg-paper); font:inherit; font-size:12.5px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
-.ai-chat-search input:focus{ outline:none; border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-light); }
+.ai-chat-search input:focus{ outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 .ai-chat-search-count{ color: var(--fg-tertiary); font-size:11px; min-width:32px; text-align:right; }
-.ai-chat mark{ background: #fff3b0; padding:0 1px; border-radius:3px; }
+.ai-chat mark{ background: #fef08a; padding:0 2px; border-radius:3px; }
 
 
 /* ai message polish: timestamp + actions hover */
@@ -12459,7 +12459,7 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 [data-theme="dark"] .ai-composer-wrap, [data-mode="dark"] .ai-composer-wrap{ background: var(--bg-paper); border-top-color: var(--border); }
 [data-theme="dark"] #ai-prompt, [data-mode="dark"] #ai-prompt{ background: rgba(255,255,255,0.06); color: #e6f0e8; border-color: rgba(255,255,255,0.10); }
 [data-theme="dark"] .ai-slash, [data-mode="dark"] .ai-slash{ background: rgba(28,32,29,0.96); border-color: rgba(255,255,255,0.08); }
-[data-theme="dark"] .ai-slash-head, [data-mode="dark"] .ai-slash-head{ background: rgba(42,52,43,0.7); }
+[data-theme="dark"] .ai-slash-head, [data-mode="dark"] .ai-slash-head{ background: var(--bg-paper); border-bottom-color: var(--border); }
 [data-theme="dark"] .ai-message-assistant .ai-message-content, [data-mode="dark"] .ai-message-assistant .ai-message-content,
 [data-theme="dark"] .ai-result-md, [data-mode="dark"] .ai-result-md,
 [data-theme="dark"] .ai-thinking, [data-mode="dark"] .ai-thinking,
