@@ -12259,6 +12259,27 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-context-scope button.active { background: var(--accent-light); color: var(--accent-pressed); font-weight: 700; }
 .ai-context-scope button:disabled { opacity: .55; cursor: not-allowed; }
 .ai-context-scope button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ai-topic-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 2px 12px;
+  color: var(--fg-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ai-topic-divider::before,
+.ai-topic-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.ai-topic-divider[data-pending] {
+  color: var(--accent);
+}
 .ai-context-dot.muted { background: var(--fg-tertiary); box-shadow: 0 0 0 3px var(--border); }
 .ai-context-copy { margin-left: auto; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; padding: 3px 7px; border-radius: 999px; }
 .ai-context-copy:hover { background: var(--bg-hover); color: var(--fg); box-shadow: none; }

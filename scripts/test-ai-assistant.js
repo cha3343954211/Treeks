@@ -224,7 +224,7 @@ async function main() {
       await page.setRequestInterception(true);
       page.on('request', request => {
         if (request.url().startsWith(base)) {
-          request.continue();
+          request.continue({ method: request.method(), headers: request.headers(), postData: request.postData() });
         } else {
           request.abort();
         }
@@ -299,6 +299,25 @@ async function main() {
       assert(contextControl.selectionContext.selection === 'SELECTED_TARGET' && !contextControl.selectionContext.content.includes('FULL_SECRET'), 'selection context scope leaked full note');
       assert(!contextControl.closedContext.content && !contextControl.closedContext.selection && !contextControl.closedContext.title, 'closed context scope still returned note data');
       assert(contextControl.autoContext.content.includes('FULL_SECRET_CONTEXT') && contextControl.activeAuto && contextControl.exportReady, 'context scope controls failed');
+      await page.evaluate(() => {
+        setAiMode('ask');
+        const prompt = document.getElementById('ai-prompt');
+        prompt.value = 'FRESH_TOPIC_PROMPT';
+        prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await page.click('[data-ai-fresh-topic]');
+      assert(await page.evaluate(() => document.querySelector('[data-ai-fresh-topic]')?.getAttribute('aria-pressed')) === 'true', 'fresh topic did not activate');
+      await page.waitForFunction(() => !document.getElementById('ai-send-btn')?.disabled, { timeout: 5000 });
+      const resultCountBefore = await page.evaluate(() => document.querySelectorAll('#ai-chat .ai-result-md').length);
+      await page.click('.ai-send-btn');
+      await page.waitForFunction(count => document.querySelectorAll('#ai-chat .ai-result-md').length > count, { timeout: 20000 }, resultCountBefore);
+      await page.waitForFunction(() => !aiSidebarState?.isGenerating, { timeout: 20000 });
+      assert(provider.lastPrompt.includes('FRESH_TOPIC_PROMPT'), `fresh topic prompt missing from provider payload: ${String(provider.lastPrompt).slice(0, 500)}`);
+      assert(provider.lastPrompt.includes('SELECTED_TARGET'), 'fresh topic should still receive current note context');
+      assert(!provider.lastPrompt.includes('browser streaming check'), 'fresh topic leaked prior prompt');
+      assert(!provider.lastPrompt.includes('REPLACED'), 'fresh topic leaked prior assistant answer');
+      await page.waitForFunction(() => document.querySelectorAll('.ai-topic-divider').length === 1 && !document.querySelector('.ai-topic-divider[data-pending]'), { timeout: 15000 });
+      assert(await page.evaluate(() => document.querySelector('[data-ai-fresh-topic]')?.getAttribute('aria-pressed')) === 'false', 'fresh topic did not reset after generation');
       const exported = await page.evaluate(() => buildAiConversationMarkdown([
         { role: 'user', action: 'ask', content: 'What changed?', created_at: new Date().toISOString() },
         { role: 'assistant', action: 'ask', result: 'A **markdown** answer.', created_at: new Date().toISOString() }

@@ -7852,7 +7852,9 @@ const aiSidebarState = {
   isGenerating: false,
   abortController: null,
   activeStreamHost: null,
-  activeStreamBuffer: ''
+  activeStreamBuffer: '',
+  freshThreadPending: false,
+  freshThreadId: ''
 };
 function setAiComposerBusy(busy){
   aiSidebarState.isGenerating = !!busy;
@@ -7863,12 +7865,14 @@ function setAiComposerBusy(busy){
   const exportBtn=document.getElementById('btn-export-ai-chat');
   const actions=document.querySelectorAll('.ai-quick-action');
   const scopeButtons=document.querySelectorAll('[data-ai-context-scope]');
+  const freshButton=document.querySelector('[data-ai-fresh-topic]');
   if(sendBtn){ sendBtn.style.display = busy ? 'none' : ''; sendBtn.disabled=!!busy; }
   if(stopBtn) stopBtn.style.display = busy ? 'inline-flex' : 'none';
   if(promptEl) promptEl.disabled=!!busy;
   if(modelSel) modelSel.disabled = !!busy || aiSidebarState.models.length===0;
   if(exportBtn) exportBtn.disabled=!!busy;
   scopeButtons.forEach(b=>{ b.disabled=!!busy; });
+  if(freshButton) freshButton.disabled=!!busy;
   actions.forEach(b=>{ b.disabled=!!busy; b.style.opacity= busy ? '0.55' : ''; });
   if(!busy){
     updateAiPromptCount();
@@ -7977,6 +7981,32 @@ function setAiContextScope(scope) {
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
   updateAiContextIndicator();
+}
+
+function createAiFreshTopicDivider(pending = false) {
+  const divider=document.createElement('div');
+  divider.className='ai-topic-divider';
+  divider.textContent='新话题 · 不携带上方对话上下文';
+  if(pending) divider.dataset.pending='true';
+  return divider;
+}
+
+function setAiFreshTopic(active) {
+  aiSidebarState.freshThreadPending = Boolean(active);
+  const btn=document.querySelector('[data-ai-fresh-topic]');
+  if(btn){
+    btn.classList.toggle('active', aiSidebarState.freshThreadPending);
+    btn.setAttribute('aria-pressed', aiSidebarState.freshThreadPending ? 'true' : 'false');
+    btn.title = aiSidebarState.freshThreadPending ? '已开启：下一轮不携带上方旧对话，点击可恢复连续上下文' : '下一轮只使用当前笔记和提问，不携带上方旧对话';
+  }
+  updateAiContextIndicator();
+}
+
+function markAiFreshTopic(threadId) {
+  aiSidebarState.freshThreadId = String(threadId || '');
+  aiSidebarState.freshThreadPending = false;
+  document.querySelectorAll('.ai-topic-divider[data-pending]').forEach(node => node.removeAttribute('data-pending'));
+  setAiFreshTopic(false);
 }
 
 function getAiMode(){ return aiSidebarState.mode === 'edit' ? 'edit' : 'ask'; }
@@ -8301,6 +8331,10 @@ function updateAiContextIndicator() {
   } else if (context.hasSelection) { msg = prefix + `将处理已选中的 ${context.selection.length} 个字符`; meta = `选区 ${context.selection.length} 字 · 全文 ${context.content.length} 字 · 按此日记保留`; }
   else if (context.content) { msg = prefix + `将参考当前日记的 ${context.content.length} 个字符`; meta = `全文 ${context.content.length} 字${context.title ? ' · 标题：'+context.title.slice(0,18) : ''} · 按日记归档`; }
   else { msg = prefix + '先写下一两句，我会据此协助你展开'; meta = '对话按日记归档 · 支持问答 / 编辑 / 绘图'; }
+  if(aiSidebarState.freshThreadPending){
+    msg += ' · 新话题';
+    meta += (meta ? ' · ' : '') + '下一轮不携带旧对话';
+  }
   target.textContent = msg;
   if(metaEl){ metaEl.textContent = meta; metaEl.title = meta; }
   if(dotEl) dotEl.classList.toggle('muted', context.contextScope === 'none');
@@ -8594,11 +8628,15 @@ function renderAiHistory(items, options = {}){
     ensureAiHistoryOlderButton();
     return;
   }
-  for(const it of items){
+  const freshIndex = aiSidebarState.freshThreadId
+    ? items.findIndex(item => String(item.thread_id || '') === aiSidebarState.freshThreadId)
+    : -1;
+  items.forEach((it, index) => {
+    if(index === freshIndex) chat.appendChild(createAiFreshTopicDivider());
     const message=createAiHistoryMessage(it, items);
     if(options.searchContext) message.dataset.searchContext='true';
     chat.appendChild(message);
-  }
+  });
   ensureAiHistoryOlderButton();
   chat.scrollTop = chat.scrollHeight;
   // trigger shadow update after render
@@ -9501,6 +9539,7 @@ async function runAiAction(action, prompt = '', options = {}) {
   if(aiSidebarState.isGenerating){ toast('正在生成中，请稍候',''); return; }
   aiSidebarState.resetSearch?.({ restore:false });
   const retryThreadId=String(options.retryThreadId||'');
+  const useFreshContext=!retryThreadId && aiSidebarState.freshThreadPending;
   if(retryThreadId) document.querySelectorAll('#ai-chat .ai-message[data-thread-id="'+CSS.escape(retryThreadId)+'"]').forEach(node=>node.remove());
   const context = getAiWritingContext();
   if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
@@ -9514,6 +9553,11 @@ async function runAiAction(action, prompt = '', options = {}) {
   };
   const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
   const displayPrompt=String(prompt||labels[action]||'处理当前内容');
+  if(useFreshContext){
+    const chatForDivider=document.getElementById('ai-chat');
+    chatForDivider?.querySelectorAll('.ai-topic-divider[data-pending]').forEach(node=>node.remove());
+    chatForDivider?.appendChild(createAiFreshTopicDivider(true));
+  }
   appendAiMessage('user', displayPrompt, '', {action, prompt:displayPrompt});
   setAiComposerBusy(true);
   aiSidebarState.abortController = (typeof AbortController!=='undefined') ? new AbortController() : null;
@@ -9543,6 +9587,7 @@ async function runAiAction(action, prompt = '', options = {}) {
     prompt: String(prompt||''),
     diary_id: getAiDiaryId(),
     ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}),
+    ...(useFreshContext ? { fresh_context: true } : {}),
     ...(aiSidebarState.selectedModelId ? { model_id: aiSidebarState.selectedModelId } : {})
   };
   const streamUrl = '/api/ai/assist/stream';
@@ -9610,7 +9655,7 @@ async function runAiAction(action, prompt = '', options = {}) {
     if(clientTimedOut) throw new Error('AI 响应超时，请稍后重试');
   }
   try{
-    await fetchStreamSSE(streamUrl);
+    await fetchStreamSSE(streamUrl, streamPayload);
     if(streamHost){ streamHost.remove(); }
     aiSidebarState.activeStreamHost=null;
     aiSidebarState.activeStreamBuffer=fullBuffer;
@@ -9629,7 +9674,7 @@ async function runAiAction(action, prompt = '', options = {}) {
     // fallback to non-stream api if stream failed mid-flight and we have no output yet
     if(!output){
       try{
-        const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined, ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}) }) });
+        const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined, ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}), ...(useFreshContext ? { fresh_context: true } : {}) }) });
         if(response.available){
           output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action, scope:response.scope||'note', threadId:response.thread_id||'' };
         } else {
@@ -9655,6 +9700,7 @@ async function runAiAction(action, prompt = '', options = {}) {
   aiSidebarState.activeStreamBuffer='';
   setAiComposerBusy(false);
   // diary-bound: after success, the server has persisted; refresh history softly after rendering
+  if(output.threadId && useFreshContext) markAiFreshTopic(output.threadId);
   if(output.threadId) setTimeout(()=>{
     if(aiSidebarState.requestSequence === requestId && !aiSidebarState.isGenerating) loadAiHistoryForCurrentDiary(true);
   }, 0);
@@ -9720,7 +9766,11 @@ function initAiSidebar() {
   document.querySelectorAll('[data-ai-context-scope]').forEach(btn => {
     btn.addEventListener('click', () => setAiContextScope(btn.getAttribute('data-ai-context-scope')));
   });
+  document.querySelector('[data-ai-fresh-topic]')?.addEventListener('click', () => {
+    setAiFreshTopic(!aiSidebarState.freshThreadPending);
+  });
   setAiContextScope(aiSidebarState.contextScope);
+  setAiFreshTopic(aiSidebarState.freshThreadPending);
   // search bar
   (function(){
     const btnSearch=document.getElementById('btn-search-ai-chat');

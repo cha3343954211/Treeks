@@ -271,6 +271,12 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   if (body.retry_thread_id != null && typeof body.retry_thread_id !== 'string') {
     return res.status(400).json({ error: '重试对话格式无效' });
   }
+  if (body.fresh_context != null && typeof body.fresh_context !== 'boolean') {
+    return res.status(400).json({ error: '新话题标记格式无效' });
+  }
+  if (body.fresh_context && body.retry_thread_id) {
+    return res.status(400).json({ error: '重新生成不能同时开启新话题' });
+  }
   if (body.diary_id != null && !(typeof body.diary_id === 'number' || typeof body.diary_id === 'string')) {
     return res.status(400).json({ error: 'diary_id 格式无效' });
   }
@@ -293,7 +299,8 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   const effectiveTitle = diaryCtx.title || t;
   const effectiveSource = submittedSource != null ? submittedSource : diaryCtx.source;
   const editScope = a === 'edit' && String(sel || '').trim() ? 'selection' : 'note';
-  const historyRows = loadRecentConversations(req.user.id, diaryCtx.diaryId, 12, retryContext ? rawRetryId : '');
+  const freshContext = body.fresh_context === true && !retryContext;
+  const historyRows = freshContext ? [] : loadRecentConversations(req.user.id, diaryCtx.diaryId, 12, retryContext ? rawRetryId : '');
   const historyMessages = buildHistoryMessages(historyRows);
   if (!ALLOWED_ACTIONS.has(a)) return res.status(400).end('unsupported action');
   const source = String(effectiveSource || '').trim();
@@ -307,7 +314,7 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   if (isRateLimited(req.user.id)) { res.writeHead(429, {'Content-Type':'text/event-stream'}); sseWrite(res,'error',{error:'AI 请求过于频繁，请稍后再试'}); return res.end(); }
   const baseUrl = aiModel.base_url.replace(/\/+$/, ''); const isEdit = a==='edit' || a==='draw'; const userPrompt = buildUserPrompt(a,effectiveTitle,effectiveSource,c,p,editScope); const thinkingSteps = buildThinkingSteps(a,effectiveTitle,effectiveSource,p);
   res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-cache',Connection:'keep-alive','X-Accel-Buffering':'no'});
-  sseWrite(res,'meta',{model:{id:aiModel.id,name:aiModel.name,model:aiModel.model},mode: a==='draw' ? 'draw' : (isEdit?'edit':(a==='ask'?'ask':'assist')),scope:editScope,note:'已由 '+aiModel.name+' 生成',thinkingSteps, diary_id: diaryCtx.diaryId});
+  sseWrite(res,'meta',{model:{id:aiModel.id,name:aiModel.name,model:aiModel.model},mode: a==='draw' ? 'draw' : (isEdit?'edit':(a==='ask'?'ask':'assist')),scope:editScope,note:'已由 '+aiModel.name+' 生成',thinkingSteps, diary_id: diaryCtx.diaryId, fresh_context:freshContext});
   for(let i=0;i<thinkingSteps.length;i++){ sseWrite(res,'thinking',{index:i,total:thinkingSteps.length,text:thinkingSteps[i],state:'done'}); await new Promise(r=>setTimeout(r,180+Math.random()*220)); }
   sseWrite(res,'thinking_done',{});
   const controller=new AbortController();
@@ -415,7 +422,7 @@ router.post('/assist/stream', authRequired, async (req, res) => {
 });
 
 router.post('/assist', authRequired, async (req, res) => {
-  let { action, title, content, selection, prompt, model_id: modelId, retry_thread_id: retryThreadId } = req.body || {};
+  let { action, title, content, selection, prompt, model_id: modelId, retry_thread_id: retryThreadId, fresh_context: freshContextPost } = req.body || {};
   if (modelId != null && !(typeof modelId === 'number' || typeof modelId === 'string')) {
     return res.status(400).json({ error: 'AI 模型格式无效' });
   }
@@ -438,6 +445,12 @@ router.post('/assist', authRequired, async (req, res) => {
   }
   if (retryThreadId != null && typeof retryThreadId !== 'string') {
     return res.status(400).json({ error: '重试对话格式无效' });
+  }
+  if (freshContextPost != null && typeof freshContextPost !== 'boolean') {
+    return res.status(400).json({ error: '新话题标记格式无效' });
+  }
+  if (freshContextPost && retryThreadId) {
+    return res.status(400).json({ error: '重新生成不能同时开启新话题' });
   }
   const retryContextPost = retryThreadId ? loadRetryContext(req.user.id, retryThreadId) : null;
   if(retryThreadId && !retryContextPost) return res.status(404).json({ error: '要重新生成的对话不存在' });
@@ -467,7 +480,7 @@ router.post('/assist', authRequired, async (req, res) => {
   const timeout = setTimeout(() => controller.abort(), 30000);
 
   const userPrompt = buildUserPrompt(action, effectiveTitlePost, effectiveSourcePost, content, prompt, editScopePost);
-  const historyRowsPost = loadRecentConversations(req.user.id, diaryCtxPost.diaryId, 12, retryContextPost ? retryThreadId : '');
+  const historyRowsPost = freshContextPost && !retryContextPost ? [] : loadRecentConversations(req.user.id, diaryCtxPost.diaryId, 12, retryContextPost ? retryThreadId : '');
   const historyMessagesPost = buildHistoryMessages(historyRowsPost);
 
   const isEdit = action === 'edit' || action === 'draw';
@@ -510,6 +523,7 @@ router.post('/assist', authRequired, async (req, res) => {
       scope: editScopePost,
       model: { id: aiModel.id, name: aiModel.name, model: aiModel.model },
       diary_id: diaryCtxPost.diaryId,
+      fresh_context: Boolean(freshContextPost && !retryContextPost),
       thread_id: savedThreadIdPost || null
     });
   } catch (error) {
