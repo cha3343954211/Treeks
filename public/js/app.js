@@ -8204,10 +8204,14 @@ function discardAiEdit(){
 function createAiThinkingBlock(container, steps){
   const wrap=document.createElement('div');
   wrap.className='ai-thinking open';
+  wrap.setAttribute('aria-busy','true');
+  const bodyId='ai-thinking-'+Math.random().toString(36).slice(2);
   const header=document.createElement('button');
   header.type='button'; header.className='ai-thinking-header';
-  header.innerHTML='<span class="ai-thinking-caret">▸</span><span class="ai-thinking-title"><span class="ai-thinking-dot" aria-hidden="true"></span><span>正在工作</span></span><span class="ai-thinking-count"></span>';
-  const body=document.createElement('div'); body.className='ai-thinking-body';
+  header.setAttribute('aria-expanded','true');
+  header.setAttribute('aria-controls',bodyId);
+  header.innerHTML='<span class="ai-thinking-caret" aria-hidden="true">▸</span><span class="ai-thinking-title"><span class="ai-thinking-dot" aria-hidden="true"></span><span>正在工作</span></span><span class="ai-thinking-count"></span>';
+  const body=document.createElement('div'); body.className='ai-thinking-body'; body.id=bodyId;
   const list=document.createElement('ul'); list.className='ai-thinking-list';
   steps.forEach((text, idx)=>{
     const li=document.createElement('li');
@@ -8221,7 +8225,10 @@ function createAiThinkingBlock(container, steps){
   const count=wrap.querySelector('.ai-thinking-count');
   function setCount(done, total){ if(count) count.textContent = done + '/' + total; }
   setCount(0, steps.length);
-  header.addEventListener('click', ()=> wrap.classList.toggle('open'));
+  header.addEventListener('click', ()=>{
+    const open=wrap.classList.toggle('open');
+    header.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
   container.appendChild(wrap);
   container.scrollTop = container.scrollHeight;
   return {
@@ -8244,8 +8251,12 @@ function createAiThinkingBlock(container, steps){
       const title=wrap.querySelector('.ai-thinking-title');
       if(title) title.lastChild.textContent=' 工作完成';
       // auto fold after a short delay like Claude Code
-      setTimeout(()=> wrap.classList.remove('open'), 900);
+      setTimeout(()=>{
+        wrap.classList.remove('open');
+        header.setAttribute('aria-expanded','false');
+      }, 900);
       const dot=wrap.querySelector('.ai-thinking-dot'); if(dot) dot.style.animation='none';
+      wrap.setAttribute('aria-busy','false');
     },
     setTitle(text){ const title=wrap.querySelector('.ai-thinking-title'); if(title && title.lastChild) title.lastChild.textContent=' '+text; }
   };
@@ -8253,16 +8264,31 @@ function createAiThinkingBlock(container, steps){
 function createAiStreamingBlock(container){
   const wrap=document.createElement('div');
   wrap.className='ai-streaming';
-  const head=document.createElement('div'); head.className='ai-streaming-head';
-  head.innerHTML='<span class="ai-thinking-dot" aria-hidden="true" style="width:6px;height:6px;box-shadow:0 0 0 3px var(--accent-light)"></span><span>正在生成</span><span style="margin-left:auto;color:var(--fg-tertiary)">流式输出</span>';
+  wrap.setAttribute('aria-busy','true');
+  const bodyId='ai-stream-'+Math.random().toString(36).slice(2);
+  const head=document.createElement('button');
+  head.type='button'; head.className='ai-streaming-head';
+  head.setAttribute('aria-expanded','true');
+  head.setAttribute('aria-controls',bodyId);
+  head.innerHTML='<span class="ai-thinking-dot" aria-hidden="true" style="width:6px;height:6px;box-shadow:0 0 0 3px var(--accent-light)"></span><span class="ai-streaming-state">正在生成</span><span class="ai-streaming-count" style="margin-left:auto">0 字</span><span class="ai-streaming-caret" aria-hidden="true">▸</span>';
   const body=document.createElement('div');
-  body.className='ai-result-md';
+  body.className='ai-result-md ai-streaming-body';
+  body.id=bodyId;
   body.style.margin='0';
   const inner=document.createElement('div');
   inner.className='markdown-body';
   inner.innerHTML='<span class="ai-streaming-cursor" aria-hidden="true"></span>';
   body.appendChild(inner);
   wrap.append(head, body);
+  const state=wrap.querySelector('.ai-streaming-state');
+  const count=wrap.querySelector('.ai-streaming-count');
+  const caret=wrap.querySelector('.ai-streaming-caret');
+  function setExpanded(open){
+    wrap.classList.toggle('collapsed', !open);
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if(caret) caret.style.transform = open ? 'rotate(90deg)' : '';
+  }
+  head.addEventListener('click', ()=> setExpanded(wrap.classList.contains('collapsed')));
   container.appendChild(wrap);
   container.scrollTop = container.scrollHeight;
   let buffer='';
@@ -8270,6 +8296,7 @@ function createAiStreamingBlock(container){
   function flush(){
     const md=stripCodeFence(buffer);
     inner.innerHTML = renderAiMarkdown(md) + '<span class="ai-streaming-cursor" aria-hidden="true"></span>';
+    if(count) count.textContent = buffer.length + ' 字';
     container.scrollTop = container.scrollHeight;
   }
   return {
@@ -8284,7 +8311,10 @@ function createAiStreamingBlock(container){
       buffer = String(fullText||buffer);
       const md=stripCodeFence(buffer);
       inner.innerHTML = renderAiMarkdown(md);
-      head.innerHTML='<span style="display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;border-radius:999px;background:#e6ffec;color:#1a7f37;font-size:10px">✓</span><span>已完成</span>';
+      if(state) state.textContent = '已完成';
+      if(count) count.textContent = buffer.length + ' 字';
+      const dot=wrap.querySelector('.ai-thinking-dot'); if(dot) dot.style.animation='none';
+      wrap.setAttribute('aria-busy','false');
       container.scrollTop = container.scrollHeight;
       return buffer;
     },

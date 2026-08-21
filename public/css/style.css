@@ -12388,7 +12388,29 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-thinking-item.pending { opacity:.72; }
 .ai-thinking-item.pending .ai-thinking-item-check { background: var(--bg-paper); border: 1px solid var(--border); color: var(--fg-tertiary); }
 .ai-streaming { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-paper); padding: 12px 14px; box-shadow: none; }
-.ai-streaming-head { display: flex; align-items: center; gap: 8px; margin-bottom:9px; color: var(--fg-tertiary); font-size: 11px; font-weight: 600; letter-spacing: 0.01em; }
+.ai-streaming-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-tertiary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: left;
+  cursor: pointer;
+}
+.ai-streaming-head:hover { background: var(--bg-hover); }
+.ai-streaming-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ai-streaming-count { margin-left: auto; color: var(--fg-tertiary); font-variant-numeric: tabular-nums; }
+.ai-streaming-caret { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; background: var(--accent-light); color: var(--accent-pressed); font-size: 10px; transition: transform .18s var(--ease-smooth); }
+.ai-streaming.collapsed .ai-streaming-body { display: none; }
 .ai-streaming-cursor { display:inline-block; width:7px; height: 14px; background: var(--accent); border-radius:2px; vertical-align:middle; animation: aiBlink 1s step-end infinite; margin-left:1px; }
 @keyframes aiBlink { 50%{ opacity: 0; } }
 

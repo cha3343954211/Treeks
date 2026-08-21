@@ -299,6 +299,40 @@ async function main() {
       assert(contextControl.selectionContext.selection === 'SELECTED_TARGET' && !contextControl.selectionContext.content.includes('FULL_SECRET'), 'selection context scope leaked full note');
       assert(!contextControl.closedContext.content && !contextControl.closedContext.selection && !contextControl.closedContext.title, 'closed context scope still returned note data');
       assert(contextControl.autoContext.content.includes('FULL_SECRET_CONTEXT') && contextControl.activeAuto && contextControl.exportReady, 'context scope controls failed');
+      const streamingA11y = await page.evaluate(() => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const stream = createAiStreamingBlock(host);
+        const head = host.querySelector('.ai-streaming-head');
+        const body = host.querySelector('.ai-streaming-body');
+        const initial = {
+          tag: head.tagName,
+          expanded: head.getAttribute('aria-expanded'),
+          controls: head.getAttribute('aria-controls') === body.id
+        };
+        stream.appendDelta('hello');
+        stream.finalize('hello');
+        const completed = {
+          count: head.querySelector('.ai-streaming-count')?.textContent,
+          busy: host.querySelector('.ai-streaming')?.getAttribute('aria-busy')
+        };
+        head.click();
+        const collapsed = head.getAttribute('aria-expanded') === 'false'
+          && host.querySelector('.ai-streaming').classList.contains('collapsed');
+        head.click();
+        const restored = head.getAttribute('aria-expanded') === 'true';
+        const thinking = createAiThinkingBlock(host, ['step']);
+        const thinkingHeader = host.querySelector('.ai-thinking-header');
+        thinkingHeader.click();
+        const thinkingCollapsed = thinkingHeader.getAttribute('aria-expanded') === 'false';
+        thinkingHeader.click();
+        const thinkingRestored = thinkingHeader.getAttribute('aria-expanded') === 'true';
+        host.remove();
+        return { ...initial, ...completed, collapsed, restored, thinkingCollapsed, thinkingRestored };
+      });
+      assert(streamingA11y.tag === 'BUTTON' && streamingA11y.expanded === 'true' && streamingA11y.controls, `stream collapse semantics invalid: ${JSON.stringify(streamingA11y)}`);
+      assert(streamingA11y.count === '5 字' && streamingA11y.busy === 'false' && streamingA11y.collapsed && streamingA11y.restored, `stream collapse behavior invalid: ${JSON.stringify(streamingA11y)}`);
+      assert(streamingA11y.thinkingCollapsed && streamingA11y.thinkingRestored, 'thinking collapse semantics invalid');
       await page.evaluate(() => {
         setAiMode('ask');
         const prompt = document.getElementById('ai-prompt');
