@@ -8183,7 +8183,7 @@ function setAiSidebarOpen(open, options = {}) {
   if (aiSidebarState.isOpen) { loadAiModels(); try{ loadAiHistoryForCurrentDiary(); }catch(_){} }
 
   // resizable sidebar (persisted)
-  (function initAiSidebarResize(){
+  (function initAiSidebarResize(){ if(document.getElementById('ai-sidebar-resize')?.dataset.resized) return; const _rs=document.getElementById('ai-sidebar-resize'); if(_rs) _rs.dataset.resized='1';
     const key='treeks_ai_sidebar_width';
     const view=document.getElementById('view-editor');
     const handle=document.getElementById('ai-sidebar-resize');
