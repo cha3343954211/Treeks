@@ -8028,7 +8028,6 @@ function discardAiEdit(){
   aiSidebarState.pendingEdit=null;
   toast('已放弃本次编辑', '');
 }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function createAiThinkingBlock(container, steps){
   const wrap=document.createElement('div');
   wrap.className='ai-thinking open';
@@ -9326,20 +9325,29 @@ function initAiSidebar() {
         input.focus(); input.select();
       }
     });
-    // chat scroll shadows
+    // Chat edge shadows and a jump-to-latest affordance.
     try{
       const chatEl2=document.getElementById('ai-chat');
+      const scrollBtn=document.getElementById('ai-scroll-bottom');
       if(chatEl2){
-        const updateShadows=()=>{
+        const updateScrollState=()=>{
           const top = chatEl2.scrollTop > 6;
-          const bottom = (chatEl2.scrollTop + chatEl2.clientHeight) < (chatEl2.scrollHeight - 6);
+          const bottomDistance = chatEl2.scrollHeight - chatEl2.scrollTop - chatEl2.clientHeight;
+          const bottom = bottomDistance > 6;
           chatEl2.classList.toggle('has-scroll-top', top);
           chatEl2.classList.toggle('has-scroll-bottom', bottom);
+          scrollBtn?.classList.toggle('visible', bottomDistance > 32);
         };
-        chatEl2.addEventListener('scroll', updateShadows, {passive:true});
-        new MutationObserver(updateShadows).observe(chatEl2, {childList:true, subtree:true});
-        window.addEventListener('resize', updateShadows);
-        setTimeout(updateShadows, 300);
+        chatEl2.addEventListener('scroll', updateScrollState, {passive:true});
+        new MutationObserver(updateScrollState).observe(chatEl2, {childList:true, subtree:true});
+        window.addEventListener('resize', updateScrollState);
+        if(window.ResizeObserver) new ResizeObserver(updateScrollState).observe(chatEl2);
+        scrollBtn?.addEventListener('click', () => {
+          try{ chatEl2.scrollTo({top:chatEl2.scrollHeight, behavior:'smooth'}); }
+          catch(_){ chatEl2.scrollTop=chatEl2.scrollHeight; }
+          chatEl2.focus({preventScroll:true});
+        });
+        requestAnimationFrame(updateScrollState);
       }
     }catch(_){}
   })();

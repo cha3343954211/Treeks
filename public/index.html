@@ -785,7 +785,11 @@
               </div>
             </div>
             <div class="ai-chat-search" id="ai-chat-search" style="display:none"><input id="ai-chat-search-input" type="search" placeholder="搜索当前日记的对话" aria-label="搜索 AI 对话"><span class="ai-chat-search-count" id="ai-chat-search-count" aria-live="polite" aria-atomic="true"></span><button class="ai-icon-btn" id="ai-chat-search-close" title="关闭搜索" aria-label="关闭搜索"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
-            <div class="ai-chat" id="ai-chat" aria-live="polite" aria-label="AI 对话" role="log">
+            <div class="ai-chat-shell">
+              <button class="ai-scroll-bottom" id="ai-scroll-bottom" type="button" title="滚动到底部" aria-label="滚动到底部">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+              </button>
+              <div class="ai-chat" id="ai-chat" tabindex="-1" aria-live="polite" aria-label="AI 对话" role="log">
               <div class="ai-empty" id="ai-empty">
                 <div class="ai-empty-icon" aria-hidden="true">✦</div>
                 <div class="ai-empty-title">从当前笔记开始</div>
@@ -799,6 +803,7 @@
               <div class="ai-message ai-message-assistant" id="ai-welcome-msg">
                 <div class="ai-message-label">Treeks AI</div>
                 <div class="ai-message-content">选中一段文字后可针对选区处理；未选中时，我会参考整篇日记。</div>
+              </div>
               </div>
             </div>
             <div class="ai-composer-wrap">

@@ -50,7 +50,7 @@ async function register(username) {
 }
 
 async function main() {
-  const appSource = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8');
+  const appSource = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8').replace(/\r\n/g, '\n');
   const names = [...appSource.matchAll(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map(m => m[1]);
   const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
   assert.deepEqual([...new Set(duplicates)], [], 'top-level function names must be unique');
