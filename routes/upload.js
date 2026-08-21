@@ -228,6 +228,35 @@ router.post('/file', generalFileUpload.single('file'), (req, res) => {
 });
 
 // 获取文件列表（支持按 kind / folder / limit 过滤）
+router.post('/svg', (req, res) => {
+  const { svg, name, folder } = req.body || {};
+  if (typeof svg !== 'string' || !svg.trim()) return res.status(400).json({ error: 'svg 必填' });
+  const trimmed = svg.trim();
+  if (!trimmed.startsWith('<svg') || !trimmed.includes('</svg>')) return res.status(400).json({ error: '无效的 SVG 内容（需包含 <svg>...</svg>）' });
+  if (trimmed.length > 500 * 1024) return res.status(413).json({ error: 'SVG 过大（>500KB）' });
+  // basic sanitize: block script/event handlers
+  if (/<script/i.test(trimmed) || /on\w+\s*=/i.test(trimmed)) return res.status(400).json({ error: 'SVG 包含不被允许的内容' });
+  const safeName = (typeof name === 'string' && name.trim() ? name.trim() : 'ai-drawing').replace(/[^\w\-\u4e00-\u9fa5]+/g, '-').slice(0, 80) || 'ai-drawing';
+  const folderVal = (typeof folder === 'string' ? folder.trim().slice(0,200) : '');
+  const subdir = 'images';
+  const path = require('path');
+  const crypto = require('crypto');
+  const { getRuntimeUploadDir } = require('../services/storageLocation');
+  const hash = crypto.createHash('md5').update(Date.now()+trimmed+req.user.id).digest('hex').slice(0,12);
+  const dateStr = new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const filename = dateStr + '_' + hash + '.svg';
+  const userDir = path.join(getRuntimeUploadDir(), String(req.user.id), subdir);
+  if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+  const filePath = path.join(userDir, filename);
+  try { checkStorage(req.user, Buffer.byteLength(trimmed,'utf8')); } catch(e){ return res.status(400).json({ error: e.message }); }
+  try { require('fs').writeFileSync(filePath, trimmed, 'utf8'); } catch(e){ return res.status(500).json({ error: '保存失败：'+e.message }); }
+  const url = '/uploads/' + req.user.id + '/' + subdir + '/' + filename;
+  const ins = db.prepare('INSERT INTO files (user_id, kind, filename, original_name, mime_type, size, url, folder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(req.user.id, 'image', filename, safeName+'.svg', 'image/svg+xml', Buffer.byteLength(trimmed,'utf8'), url, folderVal);
+  // also keep images table for legacy
+  try { db.prepare('INSERT OR IGNORE INTO images (user_id, filename, original_name, size, url) VALUES (?, ?, ?, ?, ?)').run(req.user.id, filename, safeName+'.svg', Buffer.byteLength(trimmed,'utf8'), url); } catch(_){}
+  res.status(201).json({ id: ins.lastInsertRowid, url, filename, originalName: safeName+'.svg', size: Buffer.byteLength(trimmed,'utf8'), folder: folderVal });
+});
+
 router.get('/files', (req, res) => {
   const kind = (req.query.kind || '').toString();
   const folder = (req.query.folder || '').toString();

@@ -58,6 +58,9 @@ function extractToken(req) {
   if (typeof req.query.token === 'string' && req.query.token.length > 0) {
     return req.query.token;
   }
+  if (typeof req.query._token === 'string' && req.query._token.length > 0) {
+    return req.query._token;
+  }
   if (req.headers.cookie) {
     // 简单解析 cookie，避免引入 cookie-parser 中间件
     const m = req.headers.cookie.match(/(?:^|;\s*)treeks_token=([^;]+)/);

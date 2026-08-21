@@ -3,6 +3,7 @@ const os = require('os');
 const { db } = require('../db');
 const { authRequired, adminRequired } = require('../middleware/auth');
 const { getRuntimeUploadDir, getRuntimeDbDir } = require('../services/storageLocation');
+const { encryptSecret, getAllModels, normalizeModelInput } = require('../services/aiModels');
 
 const router = express.Router();
 
@@ -28,6 +29,104 @@ function setSetting(key, value) {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
   ).run(key, String(value));
 }
+
+function getAiModelOr404(id, res) {
+  const model = db.prepare('SELECT * FROM ai_models WHERE id = ?').get(id);
+  if (!model) {
+    res.status(404).json({ error: 'AI 模型不存在' });
+    return null;
+  }
+  return model;
+}
+
+function presentAiModel(row) {
+  return {
+    id: row.id, name: row.name, base_url: row.base_url, model: row.model,
+    enabled: Boolean(row.enabled), is_default: Boolean(row.is_default),
+    has_api_key: Boolean(row.api_key_encrypted), created_at: row.created_at, updated_at: row.updated_at
+  };
+}
+
+// ===== AI 助手配置 =====
+router.get('/ai-models', (req, res) => {
+  res.json({ models: getAllModels() });
+});
+
+router.post('/ai-models', (req, res) => {
+  let input;
+  try { input = normalizeModelInput(req.body || {}); } catch (error) { return res.status(400).json({ error: error.message }); }
+  if (!input.apiKey || input.apiKey.length > 1000) return res.status(400).json({ error: '请填写有效的 API Key' });
+  const enabled = req.body?.enabled !== false ? 1 : 0;
+  const makeDefault = req.body?.is_default === true && enabled === 1;
+  try {
+    const transaction = db.transaction(() => {
+      if (makeDefault) db.prepare('UPDATE ai_models SET is_default = 0').run();
+      const info = db.prepare(
+        `INSERT INTO ai_models (name, base_url, model, api_key_encrypted, enabled, is_default, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
+      ).run(input.name, input.baseUrl, input.model, encryptSecret(input.apiKey), enabled, makeDefault ? 1 : 0);
+      if (!makeDefault && !db.prepare('SELECT 1 FROM ai_models WHERE is_default = 1').get() && enabled) {
+        db.prepare('UPDATE ai_models SET is_default = 1 WHERE id = ?').run(info.lastInsertRowid);
+      }
+      return info.lastInsertRowid;
+    });
+    const id = transaction();
+    const created = db.prepare('SELECT * FROM ai_models WHERE id = ?').get(id);
+    logAction(req.user.id, 'create_ai_model', String(id), { name: input.name, model: input.model });
+    res.status(201).json({ model: presentAiModel(created) });
+  } catch (error) {
+    if (/UNIQUE constraint/.test(error.message)) return res.status(409).json({ error: '模型名称已存在' });
+    console.error('[Admin] 创建 AI 模型失败:', error.message);
+    res.status(500).json({ error: '保存 AI 模型失败' });
+  }
+});
+
+router.put('/ai-models/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '模型 ID 无效' });
+  const current = getAiModelOr404(id, res);
+  if (!current) return;
+  let input;
+  try { input = normalizeModelInput(req.body || {}, current); } catch (error) { return res.status(400).json({ error: error.message }); }
+  if (input.apiKey && input.apiKey.length > 1000) return res.status(400).json({ error: 'API Key 过长' });
+  const enabled = typeof req.body?.enabled === 'boolean' ? (req.body.enabled ? 1 : 0) : current.enabled;
+  const makeDefault = req.body?.is_default === true && enabled === 1;
+  try {
+    const transaction = db.transaction(() => {
+      if (makeDefault) db.prepare('UPDATE ai_models SET is_default = 0').run();
+      db.prepare(
+        `UPDATE ai_models SET name = ?, base_url = ?, model = ?, api_key_encrypted = ?, enabled = ?,
+         is_default = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(input.name, input.baseUrl, input.model, input.apiKey ? encryptSecret(input.apiKey) : current.api_key_encrypted, enabled, makeDefault ? 1 : (current.is_default && enabled ? 1 : 0), id);
+      if (!db.prepare('SELECT 1 FROM ai_models WHERE is_default = 1 AND enabled = 1').get()) {
+        db.prepare('UPDATE ai_models SET is_default = 1 WHERE id = (SELECT id FROM ai_models WHERE enabled = 1 ORDER BY id LIMIT 1)').run();
+      }
+    });
+    transaction();
+    const updated = db.prepare('SELECT * FROM ai_models WHERE id = ?').get(id);
+    logAction(req.user.id, 'update_ai_model', String(id), { name: input.name, model: input.model, enabled: Boolean(enabled) });
+    res.json({ model: presentAiModel(updated) });
+  } catch (error) {
+    if (/UNIQUE constraint/.test(error.message)) return res.status(409).json({ error: '模型名称已存在' });
+    console.error('[Admin] 更新 AI 模型失败:', error.message);
+    res.status(500).json({ error: '更新 AI 模型失败' });
+  }
+});
+
+router.delete('/ai-models/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '模型 ID 无效' });
+  const current = getAiModelOr404(id, res);
+  if (!current) return;
+  db.transaction(() => {
+    db.prepare('DELETE FROM ai_models WHERE id = ?').run(id);
+    if (current.is_default) {
+      db.prepare('UPDATE ai_models SET is_default = 1 WHERE id = (SELECT id FROM ai_models WHERE enabled = 1 ORDER BY id LIMIT 1)').run();
+    }
+  })();
+  logAction(req.user.id, 'delete_ai_model', String(id), { name: current.name, model: current.model });
+  res.json({ message: 'AI 模型已删除' });
+});
 
 // ===== 概览统计 =====
 // 优化：合并多个 COUNT 查询为单条 SQL，减少数据库往返

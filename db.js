@@ -190,6 +190,37 @@ function initDatabase() {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- AI 对话：按日记归档，-1 表示未绑定具体日记的全局会话
+    CREATE TABLE IF NOT EXISTS ai_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      diary_id INTEGER DEFAULT -1,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      result TEXT DEFAULT '',
+      action TEXT DEFAULT 'custom',
+      model_id TEXT DEFAULT '',
+      mode TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_conversations_user_diary ON ai_conversations(user_id, diary_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_conversations_created ON ai_conversations(created_at);
+
+    CREATE TABLE IF NOT EXISTS ai_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      model TEXT NOT NULL,
+      api_key_encrypted TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_models_name ON ai_models(name);
+    CREATE INDEX IF NOT EXISTS idx_ai_models_enabled ON ai_models(enabled, is_default);
+
     CREATE TABLE IF NOT EXISTS admin_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       admin_id INTEGER NOT NULL,

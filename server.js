@@ -154,6 +154,7 @@ app.use('/api/friends', require('./routes/friends'));
 app.use('/api/letters', require('./routes/letters'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/stickers', require('./routes/stickers'));
+app.use('/api/ai', require('./routes/ai'));
 
 // WebSocket 协同编辑
 require('./services/collab').setupWebSocket(server);

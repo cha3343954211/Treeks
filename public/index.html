@@ -256,6 +256,13 @@
               </svg>
               平台设置
             </button>
+            <button class="nav-item" data-nav="admin-ai">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m12 3-1.8 5.2L5 10l5.2 1.8L12 17l1.8-5.2L19 10l-5.2-1.8L12 3Z"/>
+                <path d="m19 15-.8 2.2L16 18l2.2.8L19 21l.8-2.2L22 18l-2.2-.8L19 15Z"/>
+              </svg>
+              AI 管理
+            </button>
             <button class="nav-item" data-nav="admin-system">
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
@@ -399,6 +406,10 @@
               </div>
               <div class="editor-header-side">
                 <span class="editor-collapsed-title" id="editor-collapsed-title" title=""></span>
+                <button class="editor-ai-toggle" id="btn-toggle-ai-sidebar" title="打开 AI 写作助手 (Ctrl+J)" aria-label="打开 AI 写作助手" aria-controls="ai-sidebar" aria-expanded="false">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.6 5.4L5 10l5.4 1.6L12 17l1.6-5.4L19 10l-5.4-1.6L12 3Z"/><path d="m19 16-.7 2.3L16 19l2.3.7L19 22l.7-2.3L22 19l-2.3-.7L19 16Z"/></svg>
+                  <span>AI</span>
+                </button>
                 <button class="editor-collapse-btn" id="btn-editor-top-toggle" title="收起编辑器顶部（标题、属性、工具栏）" aria-label="收起编辑器顶部">
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
                 </button>
@@ -488,7 +499,7 @@
           </div>
           <div class="editor-body">
             <div class="editor-pane" id="editor-pane">
-              <textarea id="editor-textarea" class="editor-textarea" placeholder="在这里写下今天的故事...&#10;&#10;支持 Markdown 语法，可拖拽图片/粘贴或点击工具栏上传。"></textarea>
+              <div class="ai-diff-bar" id="ai-diff-bar" style="display:none;"><span class="ai-diff-summary" id="ai-diff-summary"></span><span class="ai-diff-bar-actions"><button class="ai-diff-btn ai-diff-accept" id="ai-diff-accept" type="button">应用</button><button class="ai-diff-btn ai-diff-discard" id="ai-diff-discard" type="button">放弃</button></span></div><div class="ai-diff-layer" id="ai-diff-layer" aria-hidden="true" style="display:none;"></div><textarea id="editor-textarea" class="editor-textarea" placeholder="在这里写下今天的故事...&#10;&#10;支持 Markdown 语法，可拖拽图片/粘贴或点击工具栏上传。"></textarea>
               <div class="editor-dropzone" id="editor-dropzone" style="display:none;">
                 <div class="dropzone-content">
                   <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -733,6 +744,51 @@
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
           </div>
+
+          <aside class="ai-sidebar" id="ai-sidebar" aria-label="AI 写作助手" aria-hidden="true">
+            <div class="ai-sidebar-header">
+              <div class="ai-sidebar-title">
+                <span class="ai-title-mark" aria-hidden="true">AI</span>
+                <span>写作助手</span><span class="ai-mode-pill" id="ai-mode-pill">问答</span>
+              </div>
+              <div class="ai-sidebar-header-actions">
+                <button class="ai-icon-btn" id="btn-clear-ai-chat" title="清空对话" aria-label="清空对话">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
+                </button>
+                <button class="ai-icon-btn" id="btn-close-ai-sidebar" title="关闭 AI 写作助手" aria-label="关闭 AI 写作助手">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="ai-model-row">
+              <label for="ai-model-select">使用模型</label>
+              <select id="ai-model-select" aria-label="选择 AI 模型">
+                <option value="">本地写作辅助</option>
+              </select>
+            </div>
+            <div class="ai-mode-tabs" role="tablist" aria-label="AI 模式"><button class="ai-mode-tab active" data-ai-mode="ask" role="tab" aria-selected="true">问答</button><button class="ai-mode-tab" data-ai-mode="edit" role="tab" aria-selected="false">编辑</button></div><div class="ai-edit-hint" id="ai-edit-hint">编辑模式：AI 会直接改写当前笔记，并在编辑区以红绿差异呈现。选区优先。</div><div class="ai-context-indicator" id="ai-context-indicator">将使用当前日记作为上下文</div>
+            <div class="ai-quick-actions" aria-label="AI 快捷操作">
+              <button class="ai-quick-action" data-ai-action="continue">续写</button>
+              <button class="ai-quick-action" data-ai-action="polish">润色</button>
+              <button class="ai-quick-action" data-ai-action="outline">提纲</button>
+              <button class="ai-quick-action" data-ai-action="summarize">摘要</button>
+              <button class="ai-quick-action" data-ai-action="title">标题</button>
+              <button class="ai-quick-action" data-ai-action="tasks">行动项</button>
+              <button class="ai-quick-action ai-quick-action-draw" data-ai-action="draw" title="让 AI 绘制 SVG 矢量图">绘图</button>
+            </div>
+            <div class="ai-chat" id="ai-chat" aria-live="polite">
+              <div class="ai-message ai-message-assistant">
+                <div class="ai-message-label">Treeks AI</div>
+                <div class="ai-message-content">选中一段文字后可针对选区处理；未选中时，我会参考整篇日记。</div>
+              </div>
+            </div>
+            <form class="ai-composer" id="ai-composer">
+              <textarea id="ai-prompt" rows="2" maxlength="500" placeholder="例如：让这段更有画面感" aria-label="向 AI 写作助手提问"></textarea>
+              <button class="ai-send-btn" type="submit" title="发送" aria-label="发送">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></svg>
+              </button>
+            </form>
+          </aside>
         </div>
 
         <!-- 统计视图 -->
@@ -928,6 +984,14 @@
             <h2>平台设置</h2>
           </div>
           <div id="admin-settings-content"></div>
+        </div>
+
+        <div id="view-admin-ai" class="content-view">
+          <div class="content-header">
+            <h2>AI 管理</h2>
+            <button class="btn btn-primary" id="btn-add-ai-model">添加模型</button>
+          </div>
+          <div id="admin-ai-models-content"></div>
         </div>
 
         <div id="view-admin-system" class="content-view">
@@ -1851,6 +1915,63 @@
     </div>
   </div>
 
-  <script src="/js/app.js"></script>
+  
+<!-- AI SVG 绘图：画布 + 预览 + 保存到用户文件 -->
+<div class="ai-svg-modal-backdrop" id="ai-svg-modal" aria-hidden="true" style="display:none;">
+  <div class="ai-svg-modal" role="dialog" aria-modal="true" aria-labelledby="ai-svg-modal-title">
+    <div class="ai-svg-modal-header">
+      <h3 id="ai-svg-modal-title">SVG 矢量绘图</h3>
+      <button class="ai-icon-btn" id="ai-svg-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="ai-svg-modal-tabs" role="tablist">
+      <button class="ai-mode-tab active" data-svg-tab="draw" role="tab" aria-selected="true">手绘</button>
+      <button class="ai-mode-tab" data-svg-tab="ai" role="tab" aria-selected="false">AI 生成</button>
+      <button class="ai-mode-tab" data-svg-tab="code" role="tab" aria-selected="false">代码</button>
+    </div>
+    <div class="ai-svg-modal-body">
+      <div class="ai-svg-panel active" data-svg-panel="draw">
+        <div class="ai-svg-toolbar">
+          <div class="ai-svg-tools">
+            <button class="ai-svg-tool active" data-tool="pen" title="画笔">✏️ 画笔</button>
+            <button class="ai-svg-tool" data-tool="line" title="直线">╱ 直线</button>
+            <button class="ai-svg-tool" data-tool="rect" title="矩形">▭ 矩形</button>
+            <button class="ai-svg-tool" data-tool="ellipse" title="椭圆">⬭ 椭圆</button>
+            <button class="ai-svg-tool" data-tool="text" title="文字">T 文字</button>
+          </div>
+          <div class="ai-svg-props">
+            <label>描边 <input type="color" id="ai-svg-stroke" value="#1f2937"></label>
+            <label>填充 <input type="color" id="ai-svg-fill" value="#ffffff"><input type="checkbox" id="ai-svg-fill-none" checked> 无填充</label>
+            <label>粗细 <input type="range" id="ai-svg-width" min="1" max="12" value="3"></label>
+            <button class="btn btn-secondary" id="ai-svg-undo" type="button">撤销</button>
+            <button class="btn btn-secondary" id="ai-svg-clear" type="button">清空</button>
+          </div>
+        </div>
+        <div class="ai-svg-canvas-wrap">
+          <svg id="ai-svg-canvas" viewBox="0 0 800 480" width="100%" height="360" xmlns="http://www.w3.org/2000/svg" style="background:#fff;border:1px solid var(--border);border-radius:8px;touch-action:none"></svg>
+        </div>
+      </div>
+      <div class="ai-svg-panel" data-svg-panel="ai">
+        <div class="ai-svg-ai-row">
+          <input id="ai-svg-prompt" type="text" placeholder="描述你想要的画面，例如：扁平风的山间小屋与松树" maxlength="200">
+          <button class="btn btn-primary" id="ai-svg-generate" type="button">AI 生成</button>
+        </div>
+        <div class="ai-svg-preview" id="ai-svg-ai-preview" aria-live="polite"><span class="ai-svg-empty">在上方输入描述，点“AI 生成”</span></div>
+      </div>
+      <div class="ai-svg-panel" data-svg-panel="code">
+        <textarea id="ai-svg-code" spellcheck="false" placeholder="在此粘贴或编辑 &lt;svg&gt;...&lt;/svg&gt; 代码"></textarea>
+        <div class="ai-svg-preview" id="ai-svg-code-preview"></div>
+      </div>
+    </div>
+    <div class="ai-svg-modal-footer">
+      <span class="ai-svg-hint">保存后可在聊天中选中，一键插入到 Markdown（自动保存到“我的文件 / images”）</span>
+      <span style="flex:1"></span>
+      <button class="btn" id="ai-svg-cancel" type="button">取消</button>
+      <button class="btn btn-primary" id="ai-svg-save" type="button">保存并插入</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
 </body>
 </html>
+

@@ -2948,6 +2948,9 @@ function navigateTo(nav) {
   } else if (nav === 'admin-settings') {
     showView('admin-settings');
     loadAdminSettings();
+  } else if (nav === 'admin-ai') {
+    showView('admin-ai');
+    loadAdminAiModels();
   } else if (nav === 'admin-system') {
     showView('admin-system');
     loadAdminSystem();
@@ -3746,6 +3749,8 @@ async function openEditor(id) {
   updateWordCount();
   // 初始化当前日记的笔刷标注数据
   initAnnotationsForDiary(id || null);
+  // 加载该日记的 AI 对话历史（按日记隔离）
+  try{ aiSidebarState.historyLoadedFor=null; loadAiHistoryForCurrentDiary(true); }catch(_){}
   // 刷新附件徽标
   refreshAttachmentBadge(id);
   // 如果该日记带 PDF 附件，自动加载并进入预览模式
@@ -7821,7 +7826,1180 @@ async function revertToVersion(versionId) {
   }
 }
 
-// ===== 事件绑定 =====
+// ===== AI writing sidebar =====
+const aiSidebarState = {
+  initialized: false,
+  isOpen: false,
+  models: [],
+  selectedModelId: '',
+  mode: (function(){ try{ return localStorage.getItem('treeks_ai_mode') || 'ask'; }catch(_){ return 'ask'; }})(),
+  pendingEdit: null,
+  currentDiaryId: null,
+  historyLoadedFor: null
+};
+
+async function loadAiModels() {
+  const select = document.getElementById('ai-model-select');
+  if (!select) return;
+  try {
+    const data = await api('/api/ai/status');
+    aiSidebarState.models = data.models || [];
+    const storageKey = `treeks_ai_model_${state.user?.id || 'default'}`;
+    const savedId = localStorage.getItem(storageKey);
+    const validId = aiSidebarState.models.some(item => String(item.id) === String(savedId)) ? String(savedId) : String(aiSidebarState.models.find(item => item.is_default)?.id || '');
+    aiSidebarState.selectedModelId = validId;
+    select.innerHTML = aiSidebarState.models.length
+      ? aiSidebarState.models.map(item => `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.name)} · ${escapeHtml(item.model)}</option>`).join('')
+      : '<option value="">本地写作辅助</option>';
+    select.value = validId;
+    select.disabled = aiSidebarState.models.length === 0;
+  } catch (_) {
+    aiSidebarState.models = [];
+    aiSidebarState.selectedModelId = '';
+    select.innerHTML = '<option value="">本地写作辅助</option>';
+    select.disabled = true;
+  }
+}
+
+function getAiWritingContext() {
+  const textarea = document.getElementById('editor-textarea');
+  const title = document.getElementById('editor-title');
+  const content = textarea ? textarea.value.trim() : '';
+  const selection = textarea && textarea.selectionStart !== textarea.selectionEnd
+    ? textarea.value.slice(textarea.selectionStart, textarea.selectionEnd).trim()
+    : '';
+  return {
+    title: title ? title.value.trim() : '',
+    content,
+    selection,
+    source: selection || content,
+    hasSelection: Boolean(selection)
+  };
+}
+
+function getAiMode(){ return aiSidebarState.mode === 'edit' ? 'edit' : 'ask'; }
+function setAiMode(mode){
+  aiSidebarState.mode = mode === 'edit' ? 'edit' : 'ask';
+  try{ localStorage.setItem('treeks_ai_mode', aiSidebarState.mode); }catch(_){}
+  const sidebar=document.getElementById('ai-sidebar');
+  if(sidebar) sidebar.setAttribute('data-ai-mode', aiSidebarState.mode);
+  document.querySelectorAll('.ai-mode-tab').forEach(function(btn){
+    const active=btn.getAttribute('data-ai-mode')===aiSidebarState.mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const pill=document.getElementById('ai-mode-pill');
+  if(pill) pill.textContent = aiSidebarState.mode === 'edit' ? '编辑' : '问答';
+  const ph=document.getElementById('ai-prompt');
+  if(ph) ph.placeholder = aiSidebarState.mode === 'edit' ? '描述你想怎么改这篇笔记（选区优先）' : '围绕当前笔记提问，或输入写作指令';
+  updateAiContextIndicator();
+}
+function stripCodeFence(text){
+  const m=String(text||'').trim().match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
+  return m ? m[1].trim() : String(text||'').trim();
+}
+function renderAiMarkdown(markdown){
+  try{ return renderMarkdown(markdown); }catch(_){ return '<pre style="white-space:pre-wrap;word-break:break-word;">' + escapeHtml(markdown) + '</pre>'; }
+}
+function computeAiLineDiff(oldText, newText){
+  const a=String(oldText||'').split('\n');
+  const b=String(newText||'').split('\n');
+  const n=a.length, m=b.length;
+  const dp=Array.from({length:n+1},()=>Array(m+1).fill(0));
+  for(let i=n-1;i>=0;i--) for(let j=m-1;j>=0;j--) dp[i][j]= a[i]===b[j] ? dp[i+1][j+1]+1 : Math.max(dp[i+1][j], dp[i][j+1]);
+  const ops=[]; let i=0,j=0;
+  while(i<n && j<m){ if(a[i]===b[j]){ ops.push({type:'equal', text:a[i]}); i++; j++; } else if(dp[i+1][j] >= dp[i][j+1]){ ops.push({type:'delete', text:a[i]}); i++; } else { ops.push({type:'insert', text:b[j]}); j++; } }
+  while(i<n){ ops.push({type:'delete', text:a[i++]}); }
+  while(j<m){ ops.push({type:'insert', text:b[j++]}); }
+  return ops;
+}
+function renderAiDiffHtml(oldText, newText){
+  const ops=computeAiLineDiff(oldText, newText);
+  const esc=(s)=> String(s).replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let html=''; let del=0, ins=0;
+  ops.forEach(function(op){
+    if(op.type==='equal') html+='<span class="ai-diff-eq">'+esc(op.text)+'\n</span>';
+    else if(op.type==='delete'){ html+='<span class="ai-diff-del">'+esc(op.text)+'\n</span>'; del++; }
+    else { html+='<span class="ai-diff-ins">'+esc(op.text)+'\n</span>'; ins++; }
+  });
+  return { html: html || '<span class="ai-diff-eq">'+esc(newText)+'</span>', del, ins };
+}
+function showAiEditPreview(proposed){
+  const textarea=document.getElementById('editor-textarea');
+  const layer=document.getElementById('ai-diff-layer');
+  const bar=document.getElementById('ai-diff-bar');
+  const summary=document.getElementById('ai-diff-summary');
+  if(!textarea || !layer || !bar) return;
+  const original=textarea.value;
+  aiSidebarState.pendingEdit={ original, proposed };
+  const rendered=renderAiDiffHtml(original, proposed);
+  layer.innerHTML=rendered.html;
+  layer.style.display='block';
+  bar.style.display='flex';
+  layer.setAttribute('aria-hidden','false');
+  if(summary) summary.textContent='检测到 '+(rendered.del? rendered.del+' 处删除 ':'')+(rendered.ins? rendered.ins+' 处新增':'')+( !rendered.del && !rendered.ins ? '无差异' : '')+' · 绿色为新增，红色为删除';
+  textarea.setAttribute('aria-hidden','true');
+}
+function hideAiEditPreview(){
+  const layer=document.getElementById('ai-diff-layer');
+  const bar=document.getElementById('ai-diff-bar');
+  const textarea=document.getElementById('editor-textarea');
+  if(layer){ layer.style.display='none'; layer.setAttribute('aria-hidden','true'); }
+  if(bar) bar.style.display='none';
+  if(textarea) textarea.removeAttribute('aria-hidden');
+}
+function acceptAiEdit(){
+  if(!aiSidebarState.pendingEdit) return;
+  const textarea=document.getElementById('editor-textarea');
+  if(!textarea) return;
+  textarea.value=aiSidebarState.pendingEdit.proposed;
+  textarea.focus();
+  textarea.dispatchEvent(new Event('input', {bubbles:true}));
+  hideAiEditPreview();
+  aiSidebarState.pendingEdit=null;
+  toast('已应用 AI 编辑', 'success');
+}
+function discardAiEdit(){
+  hideAiEditPreview();
+  aiSidebarState.pendingEdit=null;
+  toast('已放弃本次编辑', '');
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function createAiThinkingBlock(container, steps){
+  const wrap=document.createElement('div');
+  wrap.className='ai-thinking open';
+  const header=document.createElement('button');
+  header.type='button'; header.className='ai-thinking-header';
+  header.innerHTML='<span class="ai-thinking-caret">▸</span><span class="ai-thinking-title"><span class="ai-thinking-dot" aria-hidden="true"></span><span>正在工作</span></span><span class="ai-thinking-count"></span>';
+  const body=document.createElement('div'); body.className='ai-thinking-body';
+  const list=document.createElement('ul'); list.className='ai-thinking-list';
+  steps.forEach((text, idx)=>{
+    const li=document.createElement('li');
+    li.className='ai-thinking-item pending';
+    li.dataset.index=String(idx);
+    li.innerHTML='<span class="ai-thinking-item-check">○</span><span class="ai-thinking-item-text">'+escapeHtml(text)+'</span>';
+    list.appendChild(li);
+  });
+  body.appendChild(list);
+  wrap.append(header, body);
+  const count=wrap.querySelector('.ai-thinking-count');
+  function setCount(done, total){ if(count) count.textContent = done + '/' + total; }
+  setCount(0, steps.length);
+  header.addEventListener('click', ()=> wrap.classList.toggle('open'));
+  container.appendChild(wrap);
+  container.scrollTop = container.scrollHeight;
+  return {
+    wrap, list,
+    markDone(index){
+      const li=list.querySelector('[data-index="'+index+'"]');
+      if(!li) return;
+      li.classList.remove('pending');
+      const check=li.querySelector('.ai-thinking-item-check'); if(check) check.textContent='✓';
+      setCount(list.querySelectorAll('.ai-thinking-item:not(.pending)').length, steps.length);
+      container.scrollTop = container.scrollHeight;
+    },
+    setAllDone(){
+      wrap.classList.add('done');
+      list.querySelectorAll('.ai-thinking-item.pending').forEach(li=>{
+        li.classList.remove('pending');
+        const c=li.querySelector('.ai-thinking-item-check'); if(c) c.textContent='✓';
+      });
+      setCount(steps.length, steps.length);
+      const title=wrap.querySelector('.ai-thinking-title');
+      if(title) title.lastChild.textContent=' 工作完成';
+      // auto fold after a short delay like Claude Code
+      setTimeout(()=> wrap.classList.remove('open'), 900);
+      const dot=wrap.querySelector('.ai-thinking-dot'); if(dot) dot.style.animation='none';
+    },
+    setTitle(text){ const title=wrap.querySelector('.ai-thinking-title'); if(title && title.lastChild) title.lastChild.textContent=' '+text; }
+  };
+}
+function createAiStreamingBlock(container){
+  const wrap=document.createElement('div');
+  wrap.className='ai-streaming';
+  const head=document.createElement('div'); head.className='ai-streaming-head';
+  head.innerHTML='<span class="ai-thinking-dot" aria-hidden="true" style="width:6px;height:6px;box-shadow:0 0 0 3px var(--accent-light)"></span><span>正在生成</span><span style="margin-left:auto;color:var(--fg-tertiary)">流式输出</span>';
+  const body=document.createElement('div');
+  body.className='ai-result-md';
+  body.style.margin='0';
+  const inner=document.createElement('div');
+  inner.className='markdown-body';
+  inner.innerHTML='<span class="ai-streaming-cursor" aria-hidden="true"></span>';
+  body.appendChild(inner);
+  wrap.append(head, body);
+  container.appendChild(wrap);
+  container.scrollTop = container.scrollHeight;
+  let buffer='';
+  let timer=null;
+  function flush(){
+    const md=stripCodeFence(buffer);
+    inner.innerHTML = renderAiMarkdown(md) + '<span class="ai-streaming-cursor" aria-hidden="true"></span>';
+    container.scrollTop = container.scrollHeight;
+  }
+  return {
+    wrap, inner,
+    appendDelta(delta){
+      buffer += String(delta||'');
+      if(timer) return;
+      timer=setTimeout(()=>{ timer=null; flush(); }, 32);
+    },
+    finalize(fullText){
+      if(timer){ clearTimeout(timer); timer=null; }
+      buffer = String(fullText||buffer);
+      const md=stripCodeFence(buffer);
+      inner.innerHTML = renderAiMarkdown(md);
+      head.innerHTML='<span style="display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;border-radius:999px;background:#e6ffec;color:#1a7f37;font-size:10px">✓</span><span>已完成</span>';
+      container.scrollTop = container.scrollHeight;
+      return buffer;
+    },
+    destroy(){ wrap.remove(); }
+  };
+}
+function sseConnect(path, handlers){
+  return new Promise((resolve, reject)=>{
+    const es=new EventSource(path);
+    let done=false;
+    const finish=(ok, val)=>{ if(done) return; done=true; try{ es.close(); }catch(_){ } if(ok) resolve(val); else reject(val); };
+    es.addEventListener('meta', e=>{ try{ handlers.onMeta && handlers.onMeta(JSON.parse(e.data)); }catch(_){} });
+    es.addEventListener('thinking', e=>{ try{ handlers.onThinking && handlers.onThinking(JSON.parse(e.data)); }catch(_){} });
+    es.addEventListener('thinking_done', ()=>{ try{ handlers.onThinkingDone && handlers.onThinkingDone(); }catch(_){} });
+    es.addEventListener('delta', e=>{ try{ handlers.onDelta && handlers.onDelta(JSON.parse(e.data)); }catch(_){} });
+    es.addEventListener('done', e=>{ try{ const d=JSON.parse(e.data); handlers.onDone && handlers.onDone(d); }catch(_){ handlers.onDone && handlers.onDone({}); } finish(true, null); });
+    es.addEventListener('unavailable', e=>{ try{ handlers.onUnavailable && handlers.onUnavailable(JSON.parse(e.data)); }catch(_){} finish(true, null); });
+    es.addEventListener('error', e=>{ try{ const d=JSON.parse(e.data); handlers.onError && handlers.onError(d); }catch(_){ handlers.onError && handlers.onError({error:'AI 服务暂时不可用'}); } finish(false, new Error('sse error')); });
+    es.onerror=()=>{ if(done) return; // EventSource will retry; treat as error if no done yet and readyState closed
+      if(es.readyState===2){ finish(false, new Error('SSE connection failed')); } };
+    // safety timeout
+    setTimeout(()=>{ if(!done){ try{ es.close(); }catch(_){} finish(false, new Error('SSE timeout')); } }, 50000);
+  });
+}
+function updateAiContextIndicator() {
+  const indicator = document.getElementById('ai-context-indicator');
+  if (!indicator) return;
+  const context = getAiWritingContext();
+  const did = getAiDiaryId();
+  const prefix = did===-1 ? '未绑定日记 · ' : ('日记 #'+did+' · ');
+  if (context.hasSelection) {
+    indicator.textContent = prefix + `将处理已选中的 ${context.selection.length} 个字符（对话按此日记保留）`;
+  } else if (context.content) {
+    indicator.textContent = prefix + `将参考当前日记的 ${context.content.length} 个字符（对话按此日记保留）`;
+  } else {
+    indicator.textContent = prefix + '先写下一两句，我会据此协助你展开（对话按日记归档）';
+  }
+}
+
+function setAiSidebarOpen(open, options = {}) {
+  const view = document.getElementById('view-editor');
+  const sidebar = document.getElementById('ai-sidebar');
+  const toggle = document.getElementById('btn-toggle-ai-sidebar');
+  if (!view || !sidebar || !toggle) return;
+
+  aiSidebarState.isOpen = Boolean(open);
+  view.classList.toggle('ai-sidebar-open', aiSidebarState.isOpen);
+  sidebar.setAttribute('aria-hidden', aiSidebarState.isOpen ? 'false' : 'true');
+  toggle.setAttribute('aria-expanded', aiSidebarState.isOpen ? 'true' : 'false');
+  toggle.classList.toggle('active', aiSidebarState.isOpen);
+  const sidebarEl=document.getElementById('ai-sidebar'); if(sidebarEl) sidebarEl.setAttribute('data-ai-mode', getAiMode());
+  updateAiContextIndicator();
+  if (aiSidebarState.isOpen) { loadAiModels(); try{ loadAiHistoryForCurrentDiary(); }catch(_){} }
+
+  if (aiSidebarState.isOpen && options.focus) {
+    window.setTimeout(() => document.getElementById('ai-prompt')?.focus(), 230);
+  }
+}
+
+
+function getAiDiaryId(){
+  const id = state.editingId;
+  if(id != null && Number.isFinite(Number(id))) return Number(id);
+  return -1;
+}
+function renderAiHistory(items){
+  const chat=document.getElementById('ai-chat');
+  if(!chat) return;
+  chat.innerHTML='';
+  if(!items || !items.length){
+    chat.innerHTML = `
+    <div class="ai-message ai-message-assistant">
+      <div class="ai-message-label">Treeks AI</div>
+      <div class="ai-message-content">选中一段文字后可针对选区处理；未选中时，我会参考整篇日记。</div>
+    </div>`;
+    return;
+  }
+  for(const it of items){
+    const role = it.role === 'user' ? 'user' : 'assistant';
+    // For user, content is prompt; for assistant, show result (svg handled)
+    const content = role === 'user' ? (it.content || '') : (it.result || it.content || '');
+    // Reuse append but without re-saving
+    const svg = extractSvgString(content);
+    const isSvg = svg && svg.startsWith('<svg');
+    const msg=document.createElement('div');
+    msg.className='ai-message ai-message-'+role;
+    const label=document.createElement('div'); label.className='ai-message-label'; label.textContent = role==='user' ? '你' : 'Treeks AI';
+    const text=document.createElement('div'); text.className='ai-message-content';
+    if(role==='user'){
+      text.textContent = content;
+    } else {
+      if(isSvg){
+        text.innerHTML = '<span style="color:var(--fg-muted);font-size:12px">已生成 SVG</span>';
+      } else {
+        try{ text.innerHTML = renderAiMarkdown(content); }catch(_){ text.textContent = content; }
+      }
+    }
+    msg.append(label, text);
+    if(role==='assistant'){
+      if(isSvg){
+        const card=renderSvgCard(sanitizeSvgText(svg), {name: 'ai-drawing'});
+        msg.appendChild(card);
+      } else if(content){
+        const md = stripCodeFence(content);
+        const resultEl=document.createElement('div'); resultEl.className='ai-result-md';
+        try{ resultEl.innerHTML = renderAiMarkdown(md); }catch(_){ resultEl.textContent = md; }
+        msg.appendChild(resultEl);
+        const actions=document.createElement('div'); actions.className='ai-result-actions';
+        const insert=document.createElement('button'); insert.type='button'; insert.className='ai-result-action'; insert.textContent='插入正文';
+        insert.addEventListener('click', ()=> applyAiResult(content, 'insert'));
+        const replace=document.createElement('button'); replace.type='button'; replace.className='ai-result-action'; replace.textContent='替换选区';
+        replace.addEventListener('click', ()=> applyAiResult(content, 'replace'));
+        actions.append(insert, replace);
+        msg.appendChild(actions);
+      }
+    }
+    // timestamp
+    if(it.created_at){
+      const ts=document.createElement('div'); ts.style.cssText='margin-top:4px;color:var(--fg-tertiary);font-size:11px';
+      try{ const d=new Date(it.created_at.replace(' ', 'T')+'Z'); ts.textContent=d.toLocaleString(); }catch(_){ ts.textContent=it.created_at; }
+      msg.appendChild(ts);
+    }
+    chat.appendChild(msg);
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+async function loadAiHistoryForCurrentDiary(force){
+  const diaryId = getAiDiaryId();
+  if(!force && aiSidebarState.historyLoadedFor === String(diaryId)) return;
+  aiSidebarState.historyLoadedFor = String(diaryId);
+  aiSidebarState.currentDiaryId = diaryId;
+  try{
+    const data = await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId))+'&limit=100');
+    renderAiHistory(data.items||[]);
+    updateAiContextIndicator();
+  }catch(e){
+    // keep local fallback
+  }
+}
+async function clearAiHistoryForCurrentDiary(){
+  const diaryId = getAiDiaryId();
+  try{
+    await api('/api/ai/conversations?diary_id='+encodeURIComponent(String(diaryId)), { method:'DELETE' });
+  }catch(_){}
+  renderAiHistory([]);
+}
+
+function clearAiChat() {
+  clearAiHistoryForCurrentDiary();
+}
+
+let aiSvgState = { selected: null, lastGenerated: '' };
+function extractSvgString(text){
+  if(!text) return '';
+  const s=String(text).trim();
+  // direct svg
+  if(s.startsWith('<svg')) return s;
+  // fenced code block
+  const m=s.match(/```(?:svg|xml)?\s*([\s\S]*?)\s*```/i);
+  if(m && m[1].trim().startsWith('<svg')) return m[1].trim();
+  // find svg tag inside
+  const m2=s.match(/<svg[\s\S]*?<\/svg>/i);
+  return m2 ? m2[0] : '';
+}
+function sanitizeSvgText(svg){
+  // keep as is but ensure xmlns
+  if(!svg.includes('xmlns=')) svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  return svg;
+}
+function renderSvgCard(svg, opts={}){
+  const card=document.createElement('div');
+  card.className='ai-svg-card' + (opts.selected ? ' ai-svg-selected' : '');
+  card.tabIndex=0;
+  card.setAttribute('role','button');
+  card.setAttribute('aria-label','SVG 矢量图，点击选中');
+  const prev=document.createElement('div');
+  prev.className='ai-svg-card-preview';
+  prev.innerHTML = svg;
+  const actions=document.createElement('div');
+  actions.className='ai-svg-card-actions';
+  const btnSelect=document.createElement('button');
+  btnSelect.type='button'; btnSelect.className='btn btn-secondary';
+  btnSelect.textContent = opts.selected ? '已选中' : '选中';
+  const btnInsert=document.createElement('button');
+  btnInsert.type='button'; btnInsert.className='btn btn-primary';
+  btnInsert.textContent='插入到 Markdown';
+  const btnSave=document.createElement('button');
+  btnSave.type='button'; btnSave.className='btn';
+  btnSave.textContent='保存到文件';
+  const btnCopy=document.createElement('button');
+  btnCopy.type='button'; btnSave.className='btn';
+  btnCopy.textContent='复制代码';
+  btnCopy.className='btn';
+  actions.append(btnSelect, btnInsert, btnSave, btnCopy);
+  card.append(prev, actions);
+  function setSelected(v){
+    card.classList.toggle('ai-svg-selected', v);
+    btnSelect.textContent = v ? '已选中' : '选中';
+    if(v){ aiSvgState.selected = svg; }
+    // allow single selected across chat
+    document.querySelectorAll('#ai-chat .ai-svg-card.ai-svg-selected').forEach(el=>{ if(el!==card) el.classList.remove('ai-svg-selected'); const b=el.querySelector('button'); if(b) b.textContent='选中'; });
+  }
+  card.addEventListener('click', (e)=>{
+    if(e.target.closest('button')) return;
+    const isSel = card.classList.contains('ai-svg-selected');
+    setSelected(!isSel);
+  });
+  btnSelect.addEventListener('click', ()=> setSelected(!card.classList.contains('ai-svg-selected')));
+  btnCopy.addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(svg); toast('已复制 SVG 代码','success'); }catch(_){ toast('复制失败','error'); }
+  });
+  btnSave.addEventListener('click', async ()=>{
+    try{
+      const name = (opts.name || 'ai-drawing');
+      const res = await api('/api/upload/svg', { method:'POST', body: JSON.stringify({ svg, name }) });
+      toast('已保存到我的文件：'+ res.url,'success');
+      // also mark selected
+      setSelected(true);
+    }catch(e){ toast('保存失败：'+e.message,'error'); }
+  });
+  btnInsert.addEventListener('click', async ()=>{
+    // ensure saved then insert markdown
+    try{
+      let url = opts.url || '';
+      if(!url){
+        const name = (opts.name || 'ai-drawing');
+        const res = await api('/api/upload/svg', { method:'POST', body: JSON.stringify({ svg, name }) });
+        url = res.url;
+        toast('已保存到我的文件','success');
+      }
+      const md = '![' + (opts.name||'ai-drawing') + '](' + url + ')';
+      // insert at cursor in editor
+      const ta=document.getElementById('editor-textarea');
+      if(ta){
+        const start=ta.selectionStart, end=ta.selectionEnd;
+        const before=ta.value.slice(0,start), after=ta.value.slice(end);
+        const insert = (before && !before.endsWith('\n') ? '\n' : '') + md + '\n' + after;
+        // Actually keep original before + md + after
+        ta.value = before + (before && !before.endsWith('\n') && before.length? '\n' : '') + md + '\n' + after;
+        ta.selectionStart = ta.selectionEnd = before.length + (before && !before.endsWith('\n') && before.length?1:0) + md.length + 1;
+        ta.focus();
+        ta.dispatchEvent(new Event('input',{bubbles:true}));
+        if(typeof updatePreview==='function') updatePreview();
+        if(typeof updateWordCount==='function') updateWordCount();
+      }
+      toast('已插入到 Markdown','success');
+    }catch(e){ toast('插入失败：'+e.message,'error'); }
+  });
+  // auto select on creation
+  setTimeout(()=> setSelected(true), 0);
+  return card;
+}
+function openAiSvgModal(prefillSvg){
+  const modal=document.getElementById('ai-svg-modal');
+  if(!modal) return;
+  modal.style.display='flex';
+  modal.setAttribute('aria-hidden','false');
+  if(prefillSvg){
+    const codeEl=document.getElementById('ai-svg-code');
+    const previewEl=document.getElementById('ai-svg-code-preview');
+    if(codeEl) codeEl.value = prefillSvg;
+    if(previewEl) previewEl.innerHTML = prefillSvg;
+    // switch to code tab
+    document.querySelectorAll('[data-svg-tab]').forEach(b=> b.classList.toggle('active', b.dataset.svgTab==='code'));
+    document.querySelectorAll('[data-svg-panel]').forEach(p=> p.classList.toggle('active', p.dataset.svgPanel==='code'));
+  }
+}
+function closeAiSvgModal(){
+  const modal=document.getElementById('ai-svg-modal');
+  if(!modal) return;
+  modal.style.display='none';
+  modal.setAttribute('aria-hidden','true');
+}
+function getCurrentSvgFromModal(){
+  const active=document.querySelector('.ai-svg-panel.active');
+  if(!active) return '';
+  if(active.dataset.svgPanel==='draw'){
+    const canvas=document.getElementById('ai-svg-canvas');
+    if(!canvas) return '';
+    // clone and serialize
+    const clone=canvas.cloneNode(true);
+    // remove helper attributes
+    clone.removeAttribute('width'); clone.removeAttribute('height');
+    clone.setAttribute('width','800'); clone.setAttribute('height','480');
+    // ensure xmlns
+    if(!clone.getAttribute('xmlns')) clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    const svg = clone.outerHTML;
+    return sanitizeSvgText(svg);
+  }
+  if(active.dataset.svgPanel==='ai'){
+    const prev=document.getElementById('ai-svg-ai-preview');
+    if(prev && prev.querySelector('svg')) return prev.querySelector('svg').outerHTML;
+    return aiSvgState.lastGenerated || '';
+  }
+  if(active.dataset.svgPanel==='code'){
+    const code=document.getElementById('ai-svg-code');
+    return code ? code.value.trim() : '';
+  }
+  return '';
+}
+function initAiSvgFeature(){
+  if(window.__aiSvgInited) return; window.__aiSvgInited=true;
+  const modal=document.getElementById('ai-svg-modal');
+  if(!modal) return;
+  const btnClose=document.getElementById('ai-svg-close');
+  const btnCancel=document.getElementById('ai-svg-cancel');
+  const btnSave=document.getElementById('ai-svg-save');
+  btnClose && btnClose.addEventListener('click', closeAiSvgModal);
+  btnCancel && btnCancel.addEventListener('click', closeAiSvgModal);
+  modal.addEventListener('click', (e)=>{ if(e.target===modal) closeAiSvgModal(); });
+  // tabs
+  document.querySelectorAll('[data-svg-tab]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const tab=btn.dataset.svgTab;
+      document.querySelectorAll('[data-svg-tab]').forEach(b=>{ b.classList.toggle('active', b===btn); b.setAttribute('aria-selected', b===btn?'true':'false'); });
+      document.querySelectorAll('[data-svg-panel]').forEach(p=> p.classList.toggle('active', p.dataset.svgPanel===tab));
+    });
+  });
+  // hand draw logic
+  const canvas=document.getElementById('ai-svg-canvas');
+  const strokeEl=document.getElementById('ai-svg-stroke');
+  const fillEl=document.getElementById('ai-svg-fill');
+  const fillNoneEl=document.getElementById('ai-svg-fill-none');
+  const widthEl=document.getElementById('ai-svg-width');
+  const btnUndo=document.getElementById('ai-svg-undo');
+  const btnClear=document.getElementById('ai-svg-clear');
+  let tool='pen';
+  let drawing=false; let startPt=null; let currentEl=null; let points=[];
+  document.querySelectorAll('.ai-svg-tool').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      tool=b.dataset.tool;
+      document.querySelectorAll('.ai-svg-tool').forEach(x=> x.classList.toggle('active', x===b));
+      if(canvas) canvas.style.cursor = tool==='text' ? 'text' : 'crosshair';
+    });
+  });
+  function getPt(e){
+    const rect=canvas.getBoundingClientRect();
+    const x = ((e.clientX ?? (e.touches&&e.touches[0].clientX)) - rect.left) * (800/rect.width);
+    const y = ((e.clientY ?? (e.touches&&e.touches[0].clientY)) - rect.top) * (480/rect.height);
+    return {x,y};
+  }
+  function createEl(type){
+    const el=document.createElementNS('http://www.w3.org/2000/svg', type);
+    if(type!=='text'){
+      el.setAttribute('stroke', strokeEl.value);
+      el.setAttribute('stroke-width', widthEl.value);
+      el.setAttribute('stroke-linecap','round');
+      el.setAttribute('stroke-linejoin','round');
+      const fill = fillNoneEl.checked ? 'none' : fillEl.value;
+      el.setAttribute('fill', fill);
+      if(fill==='none') el.setAttribute('fill-opacity','0');
+    }
+    return el;
+  }
+  if(canvas){
+    const onDown=(e)=>{
+      e.preventDefault();
+      drawing=true; startPt=getPt(e);
+      if(tool==='pen'){
+        points=[startPt];
+        currentEl=createEl('path');
+        currentEl.setAttribute('fill','none');
+        canvas.appendChild(currentEl);
+      } else if(tool==='line'){
+        currentEl=createEl('line');
+        currentEl.setAttribute('x1', startPt.x); currentEl.setAttribute('y1', startPt.y);
+        currentEl.setAttribute('x2', startPt.x); currentEl.setAttribute('y2', startPt.y);
+        canvas.appendChild(currentEl);
+      } else if(tool==='rect'){
+        currentEl=createEl('rect');
+        currentEl.setAttribute('x', startPt.x); currentEl.setAttribute('y', startPt.y);
+        currentEl.setAttribute('width', 0); currentEl.setAttribute('height', 0);
+        currentEl.setAttribute('rx','6');
+        canvas.appendChild(currentEl);
+      } else if(tool==='ellipse'){
+        currentEl=createEl('ellipse');
+        currentEl.setAttribute('cx', startPt.x); currentEl.setAttribute('cy', startPt.y);
+        currentEl.setAttribute('rx', 0); currentEl.setAttribute('ry', 0);
+        canvas.appendChild(currentEl);
+      } else if(tool==='text'){
+        const t=prompt('输入文字');
+        if(t){
+          const el=document.createElementNS('http://www.w3.org/2000/svg','text');
+          el.setAttribute('x', startPt.x); el.setAttribute('y', startPt.y);
+          el.setAttribute('fill', strokeEl.value);
+          el.setAttribute('font-size','20');
+          el.setAttribute('font-family','system-ui, sans-serif');
+          el.textContent=t;
+          canvas.appendChild(el);
+        }
+        drawing=false; currentEl=null; startPt=null;
+      }
+    };
+    const onMove=(e)=>{
+      if(!drawing || !currentEl) return;
+      const p=getPt(e);
+      if(tool==='pen'){
+        points.push(p);
+        const d = points.map((pt,i)=> (i===0?'M':'L')+pt.x.toFixed(1)+' '+pt.y.toFixed(1)).join(' ');
+        currentEl.setAttribute('d', d);
+      } else if(tool==='line'){
+        currentEl.setAttribute('x2', p.x); currentEl.setAttribute('y2', p.y);
+      } else if(tool==='rect'){
+        const x=Math.min(startPt.x, p.x), y=Math.min(startPt.y, p.y), w=Math.abs(p.x-startPt.x), h=Math.abs(p.y-startPt.y);
+        currentEl.setAttribute('x', x); currentEl.setAttribute('y', y); currentEl.setAttribute('width', w); currentEl.setAttribute('height', h);
+      } else if(tool==='ellipse'){
+        const rx=Math.abs(p.x-startPt.x), ry=Math.abs(p.y-startPt.y);
+        currentEl.setAttribute('rx', rx); currentEl.setAttribute('ry', ry);
+      }
+    };
+    const onUp=()=>{
+      drawing=false; currentEl=null; startPt=null; points=[];
+    };
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    canvas.addEventListener('touchstart', onDown, {passive:false});
+    canvas.addEventListener('touchmove', onMove, {passive:false});
+  }
+  btnUndo && btnUndo.addEventListener('click', ()=>{
+    if(canvas && canvas.lastChild) canvas.removeChild(canvas.lastChild);
+  });
+  btnClear && btnClear.addEventListener('click', ()=>{
+    if(canvas) while(canvas.firstChild) canvas.removeChild(canvas.firstChild);
+  });
+  // AI generate
+  const aiPrompt=document.getElementById('ai-svg-prompt');
+  const aiGenerate=document.getElementById('ai-svg-generate');
+  const aiPreview=document.getElementById('ai-svg-ai-preview');
+  aiGenerate && aiGenerate.addEventListener('click', async ()=>{
+    const prompt=(aiPrompt.value||'').trim();
+    if(!prompt){ toast('请输入画面描述','error'); return; }
+    aiGenerate.disabled=true; aiGenerate.textContent='生成中…';
+    aiPreview.innerHTML='<span class="ai-svg-empty">AI 正在绘制…</span>';
+    try{
+      // Use AI stream or plain assist for draw
+      const context=getAiWritingContext ? getAiWritingContext() : {title:'', content:'', selection:''};
+      // Try streaming first
+      let svg='';
+      try{
+        const qs=new URLSearchParams({action:'draw', title: context.title||'', content: context.content||'', selection: context.selection||'', prompt, ...(aiSidebarState && aiSidebarState.selectedModelId ? {model_id:String(aiSidebarState.selectedModelId)}:{} )});
+        const token=(typeof state!=='undefined' && state.token) ? state.token : '';
+        const url='/api/ai/assist/stream?'+qs.toString() + (token?'&_token='+encodeURIComponent(token):'');
+        const headers={ 'Accept':'text/event-stream' }; if(token) headers['Authorization']='Bearer '+token;
+        const res=await fetch(url, {headers});
+        if(!res.ok) throw new Error('stream failed '+res.status);
+        const reader=res.body.getReader(); const dec=new TextDecoder('utf-8'); let buf='', full='';
+        while(true){
+          const {done, value}=await reader.read(); if(done) break;
+          buf+=dec.decode(value,{stream:true});
+          let idx; while((idx=buf.indexOf('\n\n'))!==-1){
+            const chunk=buf.slice(0,idx); buf=buf.slice(idx+2);
+            const lines=chunk.split('\n'); let ev=''; let data='';
+            for(const l of lines){ if(l.startsWith('event:')) ev=l.slice(6).trim(); else if(l.startsWith('data:')) data+=l.slice(5).trim(); }
+            if(ev==='delta'){ try{ full+=JSON.parse(data).text; }catch(_){} }
+            else if(ev==='done'){ try{ const r=JSON.parse(data).result; if(r) full=r; }catch(_){} }
+          }
+        }
+        svg=extractSvgString(full);
+      }catch(_){
+        const res=await api('/api/ai/assist', {method:'POST', body: JSON.stringify({action:'draw', title: context.title||'', content: context.content||'', selection: context.selection||'', prompt, model_id: (typeof aiSidebarState!=='undefined' && aiSidebarState.selectedModelId) ? aiSidebarState.selectedModelId : undefined })});
+        if(res.available) svg=extractSvgString(res.result);
+      }
+      if(!svg) throw new Error('未生成有效 SVG');
+      svg=sanitizeSvgText(svg);
+      aiSvgState.lastGenerated=svg;
+      aiPreview.innerHTML = svg;
+      toast('AI 绘图完成，可在右侧预览中查看','success');
+    }catch(e){ aiPreview.innerHTML='<span class="ai-svg-empty">生成失败：'+escapeHtml(e.message)+'</span>'; toast('生成失败：'+e.message,'error'); }
+    finally{ aiGenerate.disabled=false; aiGenerate.textContent='AI 生成'; }
+  });
+  // code tab live preview
+  const codeEl=document.getElementById('ai-svg-code');
+  const codePreview=document.getElementById('ai-svg-code-preview');
+  if(codeEl && codePreview){
+    codeEl.addEventListener('input', ()=>{
+      const v=codeEl.value.trim();
+      if(!v) { codePreview.innerHTML=''; return; }
+      const svg=extractSvgString(v) || v;
+      if(svg.startsWith('<svg')) codePreview.innerHTML = svg; else codePreview.textContent = '不是有效的 <svg> 代码';
+    });
+  }
+  // save & insert
+  btnSave && btnSave.addEventListener('click', async ()=>{
+    const svg=getCurrentSvgFromModal();
+    if(!svg || !svg.trim().startsWith('<svg')){ toast('当前画布为空或不是有效 SVG','error'); return; }
+    const clean=sanitizeSvgText(svg.trim());
+    try{
+      const res=await api('/api/upload/svg', {method:'POST', body: JSON.stringify({svg: clean, name: 'ai-drawing'})});
+      const url=res.url;
+      const md='!['+'ai-drawing'+']('+url+')';
+      const ta=document.getElementById('editor-textarea');
+      if(ta){
+        const start=ta.selectionStart, end=ta.selectionEnd;
+        const before=ta.value.slice(0,start), after=ta.value.slice(end);
+        ta.value = before + (before && !before.endsWith('\n') && before.length?'\n':'') + md + '\n' + after;
+        ta.selectionStart = ta.selectionEnd = before.length + (before && !before.endsWith('\n') && before.length?1:0) + md.length + 1;
+        ta.focus(); ta.dispatchEvent(new Event('input',{bubbles:true}));
+        if(typeof updatePreview==='function') updatePreview();
+        if(typeof updateWordCount==='function') updateWordCount();
+      }
+      // also show in chat as selectable card
+      const chat=document.getElementById('ai-chat');
+      if(chat){
+        const msg=document.createElement('div'); msg.className='ai-message ai-message-assistant';
+        const label=document.createElement('div'); label.className='ai-message-label'; label.textContent='Treeks AI · 绘图';
+        const content=document.createElement('div'); content.className='ai-message-content'; content.textContent='已保存并插入到正文：';
+        msg.append(label, content);
+        const card=renderSvgCard(clean, {name:'ai-drawing', url});
+        msg.appendChild(card);
+        chat.appendChild(msg); chat.scrollTop=chat.scrollHeight;
+      }
+      toast('已保存并插入到 Markdown','success');
+      closeAiSvgModal();
+    }catch(e){ toast('保存失败：'+e.message,'error'); }
+  });
+  // also expose global to open from chat
+  window.openAiSvgModal = openAiSvgModal;
+  window.closeAiSvgModal = closeAiSvgModal;
+}
+
+function appendAiMessage(role, content, result = '') {
+  const chat = document.getElementById('ai-chat');
+  if (!chat) return;
+  const message = document.createElement('div');
+  message.className = `ai-message ai-message-${role}`;
+  const label = document.createElement('div');
+  label.className = 'ai-message-label';
+  label.textContent = role === 'user' ? '你' : 'Treeks AI';
+  const text = document.createElement('div');
+  text.className = 'ai-message-content';
+  text.innerHTML = renderAiMarkdown(content);
+  // SVG card handling: if content or result contains <svg>, render selectable card instead of / in addition to markdown
+  const svgInContent = extractSvgString(content);
+  const svgInResult = extractSvgString(result);
+  const primarySvg = svgInResult || (role==='assistant' ? svgInContent : '');
+  if(primarySvg && primarySvg.startsWith('<svg')){
+    message.append(label, text);
+    const card = renderSvgCard(sanitizeSvgText(primarySvg), {name: 'ai-drawing'});
+    message.appendChild(card);
+    // if there is additional text beyond svg, keep it as markdown above card
+    // do not create the normal ai-result-md for svg
+    chat.appendChild(message);
+    chat.scrollTop = chat.scrollHeight;
+    // Also keep selectable state globally
+    return;
+  }
+  message.append(label, text);
+
+  if (result) {
+    const md = stripCodeFence(result);
+    const resultEl = document.createElement('div');
+    resultEl.className = 'ai-result-md';
+    resultEl.innerHTML = renderAiMarkdown(md);
+    message.appendChild(resultEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'ai-result-actions';
+    const insert = document.createElement('button');
+    insert.type = 'button';
+    insert.className = 'ai-result-action';
+    insert.textContent = '插入正文';
+    insert.addEventListener('click', () => applyAiResult(result, 'insert'));
+    actions.appendChild(insert);
+
+    const replace = document.createElement('button');
+    replace.type = 'button';
+    replace.className = 'ai-result-action';
+    replace.textContent = '替换选区';
+    replace.addEventListener('click', () => applyAiResult(result, 'replace'));
+    actions.appendChild(replace);
+
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'ai-result-action ai-result-action-icon';
+    copy.title = '复制结果';
+    copy.setAttribute('aria-label', '复制结果');
+    copy.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(result);
+        copy.classList.add('copied');
+        window.setTimeout(() => copy.classList.remove('copied'), 1200);
+      } catch (_) {
+        toast('复制失败，请手动选择内容', 'error');
+      }
+    });
+    actions.appendChild(copy);
+    message.appendChild(actions);
+  }
+
+  chat.appendChild(message);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function applyAiResult(result, mode) {
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return;
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const prefix = textarea.value.slice(0, start);
+  const suffix = textarea.value.slice(end);
+  const replaceSelection = mode === 'replace' && start !== end;
+  const insertion = replaceSelection ? result : `${prefix && !prefix.endsWith('\n') ? '\n\n' : ''}${result}${suffix && !suffix.startsWith('\n') ? '\n' : ''}`;
+
+  if (replaceSelection) {
+    textarea.value = prefix + result + suffix;
+    textarea.selectionStart = start;
+    textarea.selectionEnd = start + result.length;
+  } else {
+    textarea.value = prefix + insertion + suffix;
+    const cursor = prefix.length + insertion.length;
+    textarea.selectionStart = textarea.selectionEnd = cursor;
+  }
+  textarea.focus();
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  toast(replaceSelection ? '已替换选区' : '已插入正文', 'success');
+}
+
+function applyAiTitle(title) {
+  const titleInput = document.getElementById('editor-title');
+  if (!titleInput) return;
+  titleInput.value = title.replace(/^[-*#\s]+/, '').trim();
+  titleInput.focus();
+  titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+  toast('标题已应用', 'success');
+}
+
+function getAiSentences(text) {
+  return text
+    .replace(/[#>*_`]/g, ' ')
+    .split(/[。！？!?\n]+/)
+    .map(item => item.replace(/\s+/g, ' ').trim())
+    .filter(item => item.length > 2);
+}
+
+function getAiKeywords(text, limit = 4) {
+  const ignored = new Set(['今天', '我们', '这个', '那个', '然后', '因为', '所以', '已经', '还是', '自己', '一个', '一些', '没有', '可以', '时候', '事情']);
+  const matches = text.match(/[\u4e00-\u9fa5]{2,}|[A-Za-z]{3,}/g) || [];
+  const counts = new Map();
+  matches.forEach(word => {
+    const normalized = word.toLowerCase();
+    if (!ignored.has(normalized)) counts.set(word, (counts.get(word) || 0) + 1);
+  });
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .slice(0, limit)
+    .map(([word]) => word);
+}
+
+function makeAiWritingResult(action, context, prompt = '') {
+  const source = context.source;
+  const sentences = getAiSentences(source);
+  const keywords = getAiKeywords(source || prompt);
+  const subject = keywords.slice(0, 2).join('、') || '这段经历';
+
+  if (!source && action !== 'custom') {
+    return { note: '先写一个开头，或告诉我你想记录什么。', result: '' };
+  }
+
+  if (action === 'continue') {
+    const seed = (sentences[sentences.length - 1] || source).slice(-70).replace(/[，,。.!！?？]+$/, '');
+    return {
+      note: context.hasSelection ? '我会顺着你选中的片段继续写。' : '我会顺着当前日记的最后一个画面继续写。',
+      result: `我停下来想了想，才发现${subject}并不只是一个匆匆掠过的片段。${seed ? `从“${seed}”开始，` : ''}那些细小的感受慢慢有了轮廓。也许不必急着给它下结论，先把当时看见的、听见的和心里闪过的念头记下来，就已经足够珍贵。`
+    };
+  }
+
+  if (action === 'polish') {
+    const polished = source
+      .replace(/\s+/g, ' ')
+      .replace(/\b(很|非常|真的)\s*/g, '')
+      .replace(/，但是/g, '，但')
+      .replace(/，然后/g, '。随后')
+      .replace(/。+/g, '。')
+      .trim();
+    return {
+      note: context.hasSelection ? '已按选区润色，尽量保留原有语气。' : '已整理行文节奏，尽量保留原有语气。',
+      result: polished || source
+    };
+  }
+
+  if (action === 'outline') {
+    const points = (sentences.length ? sentences : [source]).slice(0, 5);
+    return {
+      note: '这是从当前内容提炼出的可继续扩写的结构。',
+      result: ['## 写作提纲', ...points.map((sentence, index) => `### ${index + 1}. ${sentence.slice(0, 22)}\n- ${sentence}`)].join('\n\n')
+    };
+  }
+
+  if (action === 'summarize') {
+    const summary = (sentences.slice(0, 2).join('。') || source).slice(0, 140);
+    return {
+      note: '已提炼成简短摘要。',
+      result: `**摘要**：${summary}${/[。！？!?]$/.test(summary) ? '' : '。'}`
+    };
+  }
+
+  if (action === 'title') {
+    const titles = [
+      `${subject}的片刻`,
+      keywords[0] ? `关于${keywords[0]}的一天` : '把今天写下来',
+      sentences[0] ? sentences[0].slice(0, 16) : '此刻的心情'
+    ];
+    return {
+      note: '从下面选择一个标题，或把它们当作灵感。',
+      result: titles.map((title, index) => `${index + 1}. ${title}`).join('\n')
+    };
+  }
+
+  if (action === 'tasks') {
+    const tasks = (sentences.length ? sentences : [source]).slice(0, 3).map(sentence => `- [ ] 跟进：${sentence.slice(0, 28)}`);
+    return {
+      note: '我把正文里可能需要继续处理的事项整理为任务。',
+      result: ['## 行动项', ...tasks].join('\n')
+    };
+  }
+
+  const request = prompt.trim();
+  if (!source) {
+    return { note: '告诉我一个主题，我可以帮你起草第一段。', result: '' };
+  }
+  if (/润色|改写|通顺/.test(request)) return makeAiWritingResult('polish', context);
+  if (/标题|命名/.test(request)) return makeAiWritingResult('title', context);
+  if (/摘要|总结|概括/.test(request)) return makeAiWritingResult('summarize', context);
+  if (/提纲|结构|大纲/.test(request)) return makeAiWritingResult('outline', context);
+  if (/待办|行动|任务/.test(request)) return makeAiWritingResult('tasks', context);
+  if (/续写|继续|扩写/.test(request)) return makeAiWritingResult('continue', context);
+
+  return {
+    note: `我已结合当前${context.hasSelection ? '选区' : '日记'}理解你的请求：${request}`,
+    result: `可以从“${subject}”展开：先补充一个具体场景，再写下当时最明显的感受，最后留一句你现在回看时的新发现。这样会让这段记录既有画面，也保留你的思考。`
+  };
+}
+
+async function runAiAction(action, prompt = '') {
+  const context = getAiWritingContext();
+  // 编辑模式下，自定义输入直接走 edit
+  if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
+  const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
+  const displayAction = action === 'edit' ? ('编辑：' + (prompt || '优化当前笔记')) : action === 'ask' ? prompt : null;
+  if (action === 'custom' || action === 'ask' || action === 'edit' || action === 'draw') appendAiMessage('user', prompt || labels[action] || '处理当前内容');
+  else appendAiMessage('user', labels[action] || '处理当前内容');
+
+  // streaming with thinking like Claude Code
+  const chatEl = document.getElementById('ai-chat');
+  // create a message container that will host thinking + streaming
+  const streamHost = document.createElement('div');
+  streamHost.className = 'ai-message ai-message-assistant';
+  const streamLabel = document.createElement('div'); streamLabel.className='ai-message-label'; streamLabel.textContent='Treeks AI';
+  const streamNote = document.createElement('div'); streamNote.className='ai-message-content'; streamNote.textContent='正在准备…';
+  streamHost.append(streamLabel, streamNote);
+  if(chatEl) { chatEl.appendChild(streamHost); chatEl.scrollTop = chatEl.scrollHeight; }
+
+  let output = null;
+  let streaming = null;
+  let thinking = null;
+  let fullBuffer = '';
+  let metaInfo = null;
+  const qs = new URLSearchParams({
+    action: String(action||'custom'),
+    title: String(context.title||''),
+    content: String(context.content||''),
+    selection: String(context.selection||''),
+    prompt: String(prompt||''),
+    diary_id: String(getAiDiaryId()),
+    ...(aiSidebarState.selectedModelId ? { model_id: String(aiSidebarState.selectedModelId) } : {})
+  });
+  // EventSource URL needs auth via cookie/header; we pass token as query fallback if needed
+  // Use fetch-based SSE path: build authenticated URL with token param for EventSource compatibility
+  const token = state.token || '';
+  const streamUrl = '/api/ai/assist/stream?' + qs.toString() + (token ? '&_token=' + encodeURIComponent(token) : '');
+  // For EventSource, need to send Authorization header — not possible, so we use fetch streaming fallback that carries header
+  // Prefer fetch streaming implementation that handles SSE parsing with auth header
+  async function fetchStreamSSE(url){
+    const headers = { 'Accept': 'text/event-stream' };
+    if(state.token) headers['Authorization']='Bearer '+state.token;
+    // also allow token via query; server middleware should accept it
+    const res = await fetch(url, { headers });
+    if(!res.ok){
+      const text = await res.text().catch(()=> '');
+      throw new Error(text || ('请求失败 ('+res.status+')'));
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf='';
+    while(true){
+      const {done, value}=await reader.read();
+      if(done) break;
+      buf += decoder.decode(value, {stream:true});
+      let idx;
+      while((idx = buf.indexOf('\n\n')) !== -1){
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx+2);
+        const lines = chunk.split('\n');
+        let event='message'; let data='';
+        for(const line of lines){
+          if(line.startsWith('event:')) event=line.slice(6).trim();
+          else if(line.startsWith('data:')) data+=line.slice(5).trim();
+        }
+        if(event==='meta'){ try{ const j=JSON.parse(data); metaInfo=j; streamNote.textContent=j.note||'正在生成…'; const steps=j.thinkingSteps||[]; if(!thinking && steps.length){ thinking=createAiThinkingBlock(streamHost, steps); } }catch(_){} }
+        else if(event==='thinking'){ try{ const j=JSON.parse(data); if(thinking) thinking.markDone(j.index); else if(metaInfo && metaInfo.thinkingSteps){ thinking=createAiThinkingBlock(streamHost, metaInfo.thinkingSteps); thinking.markDone(j.index);} }catch(_){} }
+        else if(event==='thinking_done'){ if(thinking) thinking.setAllDone(); if(!streaming){ streaming=createAiStreamingBlock(streamHost); } }
+        else if(event==='delta'){ try{ const j=JSON.parse(data); const t=j.text||''; fullBuffer+=t; if(!streaming) streaming=createAiStreamingBlock(streamHost); streaming.appendDelta(t); }catch(_){} }
+        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action }; }catch(_){ }
+        }
+        else if(event==='unavailable'){ output=null; if(streamHost) streamHost.remove(); const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt); output={ note: local.note, result: stripCodeFence(local.result||''), mode: action }; if(thinking) thinking.setAllDone(); }
+        else if(event==='error'){ try{ const j=JSON.parse(data); toast(j.error||'AI 服务暂时不可用','error'); }catch(_){ toast('AI 服务暂时不可用','error'); } if(streaming) streaming.destroy(); if(thinking) thinking.setAllDone(); throw new Error('stream error'); }
+      }
+    }
+    // flush remaining buffer if any
+    if(buf.trim()){
+      const lines=buf.split('\n');
+      let event='message'; let data='';
+      for(const line of lines){ if(line.startsWith('event:')) event=line.slice(6).trim(); else if(line.startsWith('data:')) data+=line.slice(5).trim(); }
+      if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action }; }catch(_){} }
+    }
+  }
+  try{
+    await fetchStreamSSE(streamUrl);
+    if(!output){
+      // fallback local
+      const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt);
+      output={ note: local.note, result: stripCodeFence(local.result||''), mode: action };
+      if(streamHost) streamHost.remove();
+    } else {
+      // remove temporary streaming host and render final message via existingUI
+      if(streamHost) streamHost.remove();
+    }
+  } catch(error){
+    if(streamHost) streamHost.remove();
+    if(thinking) try{ thinking.setAllDone(); }catch(_){}
+    if(streaming) try{ streaming.destroy(); }catch(_){}
+    // fallback to non-stream api if stream failed mid-flight and we have no output yet
+    if(!output){
+      try{
+        const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined }) });
+        if(response.available) output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action };
+        else { const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt); output={ note: local.note, result: stripCodeFence(local.result||''), mode: action }; }
+      } catch(e){ toast(error.message||e.message, 'error'); return; }
+    } else {
+      // we already have partial output from stream, keep it
+    }
+  }
+
+  // diary-bound: after success, the server has persisted; refresh history softly after rendering
+  setTimeout(()=>{ try{ loadAiHistoryForCurrentDiary(true); }catch(_){} }, 1200);
+  if (output.mode === 'edit' && action !== 'draw') {
+    const target = output.result;
+    // 编辑：直接在编辑区以红绿差异呈现，不再只留在侧栏
+    appendAiMessage('assistant', output.note + '（已在编辑区以红绿差异呈现，可点「应用」写入笔记）', target);
+    showAiEditPreview(target);
+    // 侧栏结果额外提供直接应用按钮
+    const last=document.querySelector('#ai-chat .ai-message:last-child');
+    const actions=last && last.querySelector('.ai-result-actions');
+    if(actions){
+      const applyBtn=document.createElement('button'); applyBtn.type='button'; applyBtn.className='ai-result-action'; applyBtn.textContent='应用到编辑器';
+      applyBtn.addEventListener('click', function(){ const t=document.getElementById('editor-textarea'); if(t){ t.value=target; t.dispatchEvent(new Event('input',{bubbles:true})); hideAiEditPreview(); aiSidebarState.pendingEdit=null; toast('已应用到编辑器','success'); } });
+      actions.prepend(applyBtn);
+    }
+  } else if (output.mode === 'draw' || action === 'draw') {
+    const svg = extractSvgString(output.result);
+    if(svg && svg.startsWith('<svg')){
+      appendAiMessage('assistant', output.note, svg);
+    } else {
+      appendAiMessage('assistant', output.note, output.result);
+    }
+  } else {
+    appendAiMessage('assistant', output.note, output.result);
+  }
+  if (action === 'title' && output.result) {
+    const last = document.querySelector('#ai-chat .ai-message:last-child');
+    const actions = last?.querySelector('.ai-result-actions');
+    if (actions) {
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.className = 'ai-result-action';
+      apply.textContent = '应用首个标题';
+      apply.addEventListener('click', () => applyAiTitle(output.result.split('\n')[0].replace(/^1\.\s*/, '')));
+      actions.prepend(apply);
+    }
+  }
+}
+
+function initAiSidebar() {
+  if (aiSidebarState.initialized) return;
+  const toggle = document.getElementById('btn-toggle-ai-sidebar');
+  const close = document.getElementById('btn-close-ai-sidebar');
+  const clear = document.getElementById('btn-clear-ai-chat');
+  const composer = document.getElementById('ai-composer');
+  const prompt = document.getElementById('ai-prompt');
+  const textarea = document.getElementById('editor-textarea');
+  if (!toggle || !close || !composer || !prompt || !textarea) return;
+
+  aiSidebarState.initialized = true;
+  toggle.addEventListener('click', () => setAiSidebarOpen(!aiSidebarState.isOpen, { focus: true }));
+  close.addEventListener('click', () => setAiSidebarOpen(false));
+  clear?.addEventListener('click', clearAiChat);
+  // SVG modal trigger in header
+  (function(){
+    const headerActions=document.querySelector('.ai-sidebar-header-actions');
+    if(headerActions && !document.getElementById('ai-svg-open-btn')){
+      const btn=document.createElement('button');
+      btn.id='ai-svg-open-btn';
+      btn.className='ai-icon-btn';
+      btn.title='打开 SVG 绘图';
+      btn.setAttribute('aria-label','打开 SVG 绘图');
+      btn.innerHTML='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7a2 2 0 0 0 0-3l-1-1a2 2 0 0 0-3 0l-7 7v4h4z"/><path d="M14 6l2 2"/></svg>';
+      btn.addEventListener('click', ()=>{ initAiSvgFeature(); openAiSvgModal(); });
+      headerActions.insertBefore(btn, headerActions.firstChild);
+    }
+  })();
+  document.getElementById('ai-model-select')?.addEventListener('change', event => {
+    aiSidebarState.selectedModelId = event.target.value;
+    localStorage.setItem(`treeks_ai_model_${state.user?.id || 'default'}`, aiSidebarState.selectedModelId);
+  });
+  document.querySelectorAll('.ai-mode-tab').forEach(function(btn){ btn.addEventListener('click', function(){ setAiMode(btn.getAttribute('data-ai-mode')); }); });
+  setAiMode(getAiMode());
+  document.getElementById('ai-diff-accept') && document.getElementById('ai-diff-accept').addEventListener('click', acceptAiEdit);
+  document.getElementById('ai-diff-discard') && document.getElementById('ai-diff-discard').addEventListener('click', discardAiEdit);
+  document.querySelectorAll('[data-ai-action]').forEach(button => {
+    button.addEventListener('click', () => runAiAction(button.dataset.aiAction));
+  });
+  composer.addEventListener('submit', event => {
+    event.preventDefault();
+    const value = prompt.value.trim();
+    if (!value) return;
+    prompt.value = '';
+    if (getAiMode() === 'edit') runAiAction('edit', value);
+    else if (getAiMode() === 'ask') runAiAction('ask', value);
+    else runAiAction('custom', value);
+  });
+  prompt.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  textarea.addEventListener('select', updateAiContextIndicator);
+  textarea.addEventListener('keyup', updateAiContextIndicator);
+  textarea.addEventListener('click', updateAiContextIndicator);
+  textarea.addEventListener('input', updateAiContextIndicator);
+  document.addEventListener('keydown', event => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'j') {
+      event.preventDefault();
+      setAiSidebarOpen(!aiSidebarState.isOpen, { focus: aiSidebarState.isOpen === false });
+    }
+  });
+}
+
+// ===== Event bindings =====
 function bindEvents() {
   // GoodNotes 常用快选色球
   document.querySelectorAll('.quick-color-dot').forEach(dot => {
@@ -7892,6 +9070,13 @@ function bindEvents() {
   initEditorCollapse();
   setupEditorKeybindings();
   setupEditorDragUpload();
+  initAiSidebar();
+  try{ initAiSvgFeature(); }catch(_){}
+  // re-init svg feature when sidebar opened (ensure canvas exists after render)
+  const origSetAiSidebarOpen = typeof setAiSidebarOpen==='function' ? setAiSidebarOpen : null;
+  if(origSetAiSidebarOpen){
+    window.setAiSidebarOpen = function(open, opts){ const r=origSetAiSidebarOpen(open, opts); try{ initAiSvgFeature(); }catch(_){} return r; };
+  }
   if (typeof setupTemplateGalleryEvents === 'function') {
     setupTemplateGalleryEvents();
   }
@@ -8313,6 +9498,7 @@ function bindEvents() {
       if (viewEditor) {
         viewEditor.classList.toggle('preview-fullscreen', mode === 'preview');
       }
+      if (mode === 'preview') setAiSidebarOpen(false);
       // 切换到预览或分屏时刷新预览（立即渲染，避免防抖延迟导致首次切换空白）
       if (mode === 'preview' || mode === 'split') {
         updatePreview({ immediate: true });
@@ -8580,6 +9766,8 @@ function bindEvents() {
   if (refreshSys) refreshSys.addEventListener('click', loadAdminSystem);
   const refreshData = document.getElementById('btn-refresh-data');
   if (refreshData) refreshData.addEventListener('click', loadAdminData);
+  const addAiModel = document.getElementById('btn-add-ai-model');
+  if (addAiModel) addAiModel.addEventListener('click', () => openAiModelEditor());
 
   const userSearch = document.getElementById('admin-user-search');
   if (userSearch) {
@@ -9378,6 +10566,103 @@ async function loadAdminSettings() {
   } catch (e) {
     c.innerHTML = `<div class="empty-state"><h3>加载失败</h3><p>${escapeHtml(e.message)}</p></div>`;
   }
+}
+
+// ===== 管理员：AI 模型 =====
+async function loadAdminAiModels() {
+  const container = document.getElementById('admin-ai-models-content');
+  if (!container) return;
+  container.innerHTML = '<p style="color:var(--fg-muted);padding:20px;">加载中...</p>';
+  try {
+    const { models } = await api('/api/admin/ai-models');
+    if (!models.length) {
+      container.innerHTML = `<div class="empty-state admin-ai-empty"><h3>还没有配置模型</h3><p>添加一个 OpenAI 兼容模型后，用户即可在 AI 写作助手中选择使用。</p></div>`;
+      return;
+    }
+    container.innerHTML = `<div class="ai-model-admin-list">${models.map(item => `
+      <section class="ai-model-admin-item">
+        <div class="ai-model-admin-main">
+          <div class="ai-model-admin-name">${escapeHtml(item.name)} ${item.is_default ? '<span class="badge badge-active">默认</span>' : ''} ${!item.enabled ? '<span class="badge">已停用</span>' : ''}</div>
+          <div class="ai-model-admin-meta">${escapeHtml(item.model)} · ${escapeHtml(item.base_url)}</div>
+          <div class="ai-model-admin-status">${item.has_api_key ? '密钥已安全保存' : '尚未配置密钥'}</div>
+        </div>
+        <div class="ai-model-admin-actions">
+          <button class="btn btn-ghost btn-sm" data-ai-model-action="edit" data-id="${item.id}">编辑</button>
+          <button class="btn btn-ghost btn-sm" data-ai-model-action="default" data-id="${item.id}" ${item.is_default || !item.enabled ? 'disabled' : ''}>设为默认</button>
+          <button class="btn btn-danger-ghost btn-sm" data-ai-model-action="delete" data-id="${item.id}">删除</button>
+        </div>
+      </section>`).join('')}</div>`;
+    container.querySelectorAll('[data-ai-model-action]').forEach(button => {
+      button.addEventListener('click', () => {
+        const id = Number(button.dataset.id);
+        const model = models.find(item => item.id === id);
+        if (!model) return;
+        if (button.dataset.aiModelAction === 'edit') openAiModelEditor(model);
+        else if (button.dataset.aiModelAction === 'default') saveAiModel({ ...model, is_default: true }, model);
+        else if (button.dataset.aiModelAction === 'delete') deleteAiModel(model);
+      });
+    });
+  } catch (error) {
+    container.innerHTML = `<div class="empty-state"><h3>加载失败</h3><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+function aiModelEditorBody(model = {}) {
+  const isEdit = Boolean(model.id);
+  return `
+    <form id="ai-model-editor-form" class="ai-model-editor-form">
+      <label>显示名称<input id="ai-model-name" type="text" maxlength="80" required value="${escapeHtml(model.name || '')}" placeholder="例如：OpenAI 写作模型"></label>
+      <label>服务地址<input id="ai-model-base-url" type="url" maxlength="500" required value="${escapeHtml(model.base_url || 'https://api.openai.com/v1')}" placeholder="https://api.example.com/v1"></label>
+      <label>模型标识<input id="ai-model-id" type="text" maxlength="160" required value="${escapeHtml(model.model || '')}" placeholder="例如：gpt-4o-mini"></label>
+      <label>API Key<input id="ai-model-api-key" type="password" maxlength="1000" ${isEdit ? '' : 'required'} placeholder="${isEdit && model.has_api_key ? '留空则保留当前密钥' : '仅保存在服务端'}" autocomplete="new-password"></label>
+      <div class="ai-model-editor-toggles">
+        <label class="checkbox"><input id="ai-model-enabled" type="checkbox" ${model.enabled !== false ? 'checked' : ''}> 对用户开放</label>
+        <label class="checkbox"><input id="ai-model-default" type="checkbox" ${model.is_default ? 'checked' : ''}> 设为默认模型</label>
+      </div>
+    </form>`;
+}
+
+function openAiModelEditor(model = null) {
+  const isEdit = Boolean(model?.id);
+  showModal(isEdit ? '编辑 AI 模型' : '添加 AI 模型', aiModelEditorBody(model || {}), async () => {
+    const payload = {
+      name: document.getElementById('ai-model-name').value.trim(),
+      base_url: document.getElementById('ai-model-base-url').value.trim(),
+      model: document.getElementById('ai-model-id').value.trim(),
+      api_key: document.getElementById('ai-model-api-key').value.trim(),
+      enabled: document.getElementById('ai-model-enabled').checked,
+      is_default: document.getElementById('ai-model-default').checked
+    };
+    if (!payload.name || !payload.base_url || !payload.model || (!isEdit && !payload.api_key)) {
+      toast('请完整填写模型配置', 'error');
+      return false;
+    }
+    await saveAiModel(payload, model);
+  }, { confirmText: isEdit ? '保存模型' : '添加模型' });
+}
+
+async function saveAiModel(payload, current = null) {
+  try {
+    await api(current?.id ? `/api/admin/ai-models/${current.id}` : '/api/admin/ai-models', {
+      method: current?.id ? 'PUT' : 'POST',
+      body: JSON.stringify(payload)
+    });
+    toast(current?.id ? '模型配置已更新' : '模型已添加', 'success');
+    loadAdminAiModels();
+  } catch (error) {
+    toast(error.message, 'error');
+    throw error;
+  }
+}
+
+function deleteAiModel(model) {
+  showModal('删除 AI 模型', `确定删除“${escapeHtml(model.name)}”吗？已保存的密钥也会一并移除。`, async () => {
+    try {
+      await api(`/api/admin/ai-models/${model.id}`, { method: 'DELETE' });
+      toast('模型已删除', 'success');
+      loadAdminAiModels();
+    } catch (error) { toast(error.message, 'error'); throw error; }
+  }, { confirmText: '删除模型', danger: true });
 }
 
 // ===== 管理员：系统性能 =====
@@ -14052,3 +15337,4 @@ function renderMoodHeatmap(yearHeatmap) {
   }
   container.innerHTML = html.join('');
 }
+

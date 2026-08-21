@@ -44,3 +44,8 @@ Thumbs.db
 
 # 日志
 logs/
+
+# Playwright local traces
+.playwright-cli/
+output/
+
