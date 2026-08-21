@@ -8382,7 +8382,8 @@ const AI_SLASH_COMMANDS = [
 
 let aiSlashState = { open:false, filter:'', activeIndex:0 };
 function getAiSlashMatches(filter){
-  const q = String(filter||'').trim().toLowerCase();
+  const raw = String(filter||'').trim().toLowerCase();
+  const q = raw.split(/\s+/)[0] || '';
   if(!q) return AI_SLASH_COMMANDS.slice(0,7);
   return AI_SLASH_COMMANDS.filter(c=> c.slash.toLowerCase().includes(q) || c.alias.toLowerCase().includes(q) || c.title.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q));
 }
@@ -9404,9 +9405,11 @@ function initAiSidebar() {
     if(event.key==='Escape' && aiSlashState.open){ event.preventDefault(); closeAiSlash(); }
   });
   prompt.addEventListener('input', ()=>{
-    const v=prompt.value.trim();
-    if(v.startsWith('/')){
-      openAiSlash(v.slice(1));
+    const raw=prompt.value;
+    const trimmed=raw.trim();
+    if(trimmed.startsWith('/')){
+      const m=raw.match(/^\/([^\s]*)(?:\s+.*)?$/);
+      openAiSlash(m ? m[1] : trimmed.slice(1));
     } else if(aiSlashState.open){
       closeAiSlash();
     }
