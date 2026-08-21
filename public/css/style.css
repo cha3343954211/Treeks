@@ -12805,6 +12805,13 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-diff-ins { background: #e6ffec; border-bottom: 2px solid #2da44e; text-decoration: none; border-radius: 2px; }
 .ai-diff-del { background: #ffebe9; border-bottom: 2px solid #cf222e; text-decoration: line-through; opacity: 0.96; border-radius: 2px; }
 .ai-diff-eq { color: var(--fg); }
+.ai-diff-view-toggle{ display:flex; gap:6px; align-items:center; }
+.ai-diff-view-btn{ min-height:26px; padding:0 9px; border-radius:999px; border:1px solid rgba(0,0,0,0.08); background:#fff; font:inherit; font-size:11.5px; font-weight:600; cursor:pointer; }
+.ai-diff-view-btn.active{ background: var(--accent); color:#fff; border-color: var(--accent); }
+.ai-diff-split{ display:none; grid-template-columns: 1fr 1fr; gap:10px; font-family: var(--font-mono); font-size:12.5px; line-height:1.7; }
+.ai-diff-split.active{ display:grid; }
+.ai-diff-col{ border:1px solid rgba(0,0,0,0.06); border-radius:10px; background:#fff; overflow:auto; padding:10px 12px; }
+.ai-diff-col h4{ margin:0 0 6px; font-size:11px; color: var(--fg-muted); letter-spacing:0.02em; }
 
 /* ===== AI thinking / streaming (Claude Code style) ===== */
 .ai-thinking { border: 1px solid rgba(0,0,0,0.07); border-radius: 10px; background: #fff; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
@@ -12942,6 +12949,24 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 .ai-chat-search-count{ color: var(--fg-tertiary); font-size:11px; min-width:32px; text-align:right; }
 .ai-chat mark{ background: #fff3b0; padding:0 1px; border-radius:3px; }
 
+
+/* ai message polish: timestamp + actions hover */
+.ai-message{ position: relative; }
+.ai-message-time{ margin-top:6px; color: var(--fg-tertiary); font-size:10.5px; letter-spacing:0.01em; opacity:0.9; }
+.ai-message-actions-row{ opacity: 0.94; }
+.ai-message:hover .ai-message-actions-row{ opacity: 1; }
+.ai-message-copy.ai-message-delete{ color: var(--fg-tertiary); }
+.ai-message-copy.ai-message-delete:hover{ color: var(--danger); border-color: rgba(217,104,92,0.22); background: rgba(217,104,92,0.08); }
+/* scroll shadows for chat */
+.ai-chat{ position: relative; }
+.ai-chat::before, .ai-chat::after{
+  content:''; position: sticky; left:0; right:0; height:14px; pointer-events:none; z-index:1; opacity:0; transition: opacity 0.2s;
+}
+.ai-chat::before{ top:0; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0)); margin-bottom:-14px; }
+.ai-chat::after{ bottom:0; background: linear-gradient(0deg, rgba(255,255,255,0.88), rgba(255,255,255,0)); margin-top:-14px; }
+.ai-chat.has-scroll-top::before{ opacity:1; }
+.ai-chat.has-scroll-bottom::after{ opacity:1; }
+
 /* ===== AI dark mode polish ===== */
 [data-theme="dark"] .ai-sidebar, [data-mode="dark"] .ai-sidebar{ background: rgba(28,32,29,0.84); border-left-color: rgba(255,255,255,0.07); }
 [data-theme="dark"] .ai-sidebar-header, [data-mode="dark"] .ai-sidebar-header{ background: rgba(28,32,29,0.56); border-bottom-color: rgba(255,255,255,0.06); }
@@ -12961,3 +12986,28 @@ button, .btn, .action-btn, .tool-btn, .nav-item, .folder-item { -webkit-tap-high
 [data-theme="dark"] .ai-result-md, [data-mode="dark"] .ai-result-md,
 [data-theme="dark"] .ai-thinking, [data-mode="dark"] .ai-thinking,
 [data-theme="dark"] .ai-streaming, [data-mode="dark"] .ai-streaming{ background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.07); }
+
+.ai-sidebar-resize{
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 3;
+  /* invisible hit area */
+}
+.ai-sidebar-resize::after{
+  content:'';
+  position:absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.2s;
+}
+.ai-sidebar:hover .ai-sidebar-resize::after,
+.ai-sidebar-resize.dragging::after{ background: rgba(76,153,92,0.22); }
+#view-editor.ai-sidebar-open .editor-pane .ai-sidebar-resize{ display:block; }
+@media (max-width: 768px){ .ai-sidebar-resize{ display:none !important; } }

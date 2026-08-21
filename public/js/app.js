@@ -7950,22 +7950,54 @@ function showAiEditPreview(proposed){
   const layer=document.getElementById('ai-diff-layer');
   const bar=document.getElementById('ai-diff-bar');
   const summary=document.getElementById('ai-diff-summary');
+  const splitWrap=document.getElementById('ai-diff-split');
   if(!textarea || !layer || !bar) return;
   const original=textarea.value;
   aiSidebarState.pendingEdit={ original, proposed };
   const rendered=renderAiDiffHtml(original, proposed);
+  // default inline
   layer.innerHTML=rendered.html;
   layer.style.display='block';
-  bar.style.display='flex';
+  if(splitWrap) splitWrap.classList.remove('active');
   layer.setAttribute('aria-hidden','false');
   if(summary) summary.textContent='检测到 '+(rendered.del? rendered.del+' 处删除 ':'')+(rendered.ins? rendered.ins+' 处新增':'')+( !rendered.del && !rendered.ins ? '无差异' : '')+' · 绿色为新增，红色为删除';
   textarea.setAttribute('aria-hidden','true');
+  // prepare split data
+  try{
+    if(splitWrap){
+      const esc=(s)=> String(s).replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const oldCol=splitWrap.querySelector('[data-col="old"]');
+      const newCol=splitWrap.querySelector('[data-col="new"]');
+      if(oldCol) oldCol.innerHTML = esc(original).replace(/\n/g,'<br>');
+      if(newCol) newCol.innerHTML = esc(proposed).replace(/\n/g,'<br>');
+    }
+    // ensure toggle exists
+    const toggleWrap=bar.querySelector('.ai-diff-view-toggle');
+    if(!toggleWrap){
+      const tw=document.createElement('div'); tw.className='ai-diff-view-toggle';
+      const b1=document.createElement('button'); b1.type='button'; b1.className='ai-diff-view-btn active'; b1.textContent='行内'; b1.dataset.view='inline';
+      const b2=document.createElement('button'); b2.type='button'; b2.className='ai-diff-view-btn'; b2.textContent='并排'; b2.dataset.view='split';
+      tw.append(b1,b2);
+      const actions=bar.querySelector('.ai-diff-bar-actions');
+      if(actions) bar.insertBefore(tw, actions);
+      else bar.appendChild(tw);
+      tw.addEventListener('click', (e)=>{
+        const btn=e.target.closest('.ai-diff-view-btn'); if(!btn) return;
+        tw.querySelectorAll('.ai-diff-view-btn').forEach(x=>x.classList.toggle('active', x===btn));
+        const v=btn.dataset.view;
+        if(v==='split'){ layer.style.display='none'; if(splitWrap) splitWrap.classList.add('active'); }
+        else { layer.style.display='block'; if(splitWrap) splitWrap.classList.remove('active'); }
+      });
+    }
+  }catch(_){}
 }
 function hideAiEditPreview(){
   const layer=document.getElementById('ai-diff-layer');
   const bar=document.getElementById('ai-diff-bar');
   const textarea=document.getElementById('editor-textarea');
+  const splitWrap=document.getElementById('ai-diff-split');
   if(layer){ layer.style.display='none'; layer.setAttribute('aria-hidden','true'); }
+  if(splitWrap) splitWrap.classList.remove('active');
   if(bar) bar.style.display='none';
   if(textarea) textarea.removeAttribute('aria-hidden');
 }
@@ -8139,6 +8171,70 @@ function setAiSidebarOpen(open, options = {}) {
   updateAiContextIndicator();
   if (aiSidebarState.isOpen) { loadAiModels(); try{ loadAiHistoryForCurrentDiary(); }catch(_){} }
 
+  // resizable sidebar (persisted)
+  (function initAiSidebarResize(){
+    const key='treeks_ai_sidebar_width';
+    const view=document.getElementById('view-editor');
+    const handle=document.getElementById('ai-sidebar-resize');
+    if(!view || !handle) return;
+    try{
+      const saved=parseInt(localStorage.getItem(key)||'',10);
+      if(saved>=280 && saved<=520) view.style.setProperty('--ai-sidebar-width', saved+'px');
+    }catch(_){}
+    let dragging=false, startX=0, startW=0;
+    const clamp=(v)=> Math.max(280, Math.min(520, v));
+    handle.addEventListener('mousedown', (e)=>{
+      if(window.matchMedia('(max-width: 768px)').matches) return;
+      dragging=true; handle.classList.add('dragging');
+      startX=e.clientX;
+      const cur=getComputedStyle(view).getPropertyValue('--ai-sidebar-width').trim();
+      startW= parseInt(cur,10) || 360;
+      e.preventDefault();
+      const onMove=(ev)=>{
+        if(!dragging) return;
+        const dx = startX - ev.clientX;
+        const w = clamp(startW + dx);
+        view.style.setProperty('--ai-sidebar-width', w+'px');
+      };
+      const onUp=(ev)=>{
+        if(!dragging) return;
+        dragging=false; handle.classList.remove('dragging');
+        const dx = startX - ev.clientX;
+        const w = clamp(startW + dx);
+        try{ localStorage.setItem(key, String(w)); }catch(_){}
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    // touch
+    handle.addEventListener('touchstart', (e)=>{
+      if(window.matchMedia('(max-width: 768px)').matches) return;
+      const t=e.touches[0]; if(!t) return;
+      dragging=true; handle.classList.add('dragging');
+      startX=t.clientX;
+      const cur=getComputedStyle(view).getPropertyValue('--ai-sidebar-width').trim();
+      startW= parseInt(cur,10) || 360;
+      const onMove=(ev)=>{
+        const tt=ev.touches[0]; if(!tt||!dragging) return;
+        const dx = startX - tt.clientX;
+        const w = clamp(startW + dx);
+        view.style.setProperty('--ai-sidebar-width', w+'px');
+      };
+      const onEnd=(ev)=>{
+        dragging=false; handle.classList.remove('dragging');
+        const tt=ev.changedTouches && ev.changedTouches[0];
+        const dx = tt ? (startX - tt.clientX) : 0;
+        const w = clamp(startW + dx);
+        try{ localStorage.setItem(key, String(w)); }catch(_){}
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onEnd);
+      };
+      document.addEventListener('touchmove', onMove, {passive:false});
+      document.addEventListener('touchend', onEnd);
+    }, {passive:true});
+  })();
   if(aiSidebarState.isOpen){ const sidebarEl=document.getElementById('ai-sidebar'); if(sidebarEl && !sidebarEl.dataset.trapBound){ sidebarEl.dataset.trapBound='1'; sidebarEl.addEventListener('keydown', function aiSidebarFocusTrap(e){ if(e.key!=='Tab'||!aiSidebarState.isOpen) return; const focusable=sidebarEl.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'); if(!focusable.length) return; const first=focusable[0], last=focusable[focusable.length-1]; if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); } else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); } }); } }
   if (aiSidebarState.isOpen && options.focus) {
     window.setTimeout(() => document.getElementById('ai-prompt')?.focus(), 230);
@@ -8212,10 +8308,17 @@ function renderAiHistory(items){
         msg.appendChild(actions);
       }
     }
-    // timestamp
+    // timestamp - subtle
     if(it.created_at){
-      const ts=document.createElement('div'); ts.style.cssText='margin-top:4px;color:var(--fg-tertiary);font-size:11px';
-      try{ const d=new Date(it.created_at.replace(' ', 'T')+'Z'); ts.textContent=d.toLocaleString(); }catch(_){ ts.textContent=it.created_at; }
+      const ts=document.createElement('div'); ts.className='ai-message-time';
+      try{
+        const iso = String(it.created_at).replace(' ', 'T') + (String(it.created_at).includes('Z')?'':'Z');
+        const d=new Date(iso);
+        const now=new Date();
+        const isToday = d.toDateString()===now.toDateString();
+        ts.textContent = isToday ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+        ts.title = d.toLocaleString();
+      }catch(_){ ts.textContent=String(it.created_at); }
       msg.appendChild(ts);
     }
     chat.appendChild(msg);
@@ -8712,7 +8815,17 @@ function appendAiMessage(role, content, result = '') {
   const text = document.createElement('div');
   text.className = 'ai-message-content';
   const rawContent=String(content||'');
-  if(role==='user'){ text.textContent=rawContent; const row=document.createElement('div'); row.className='ai-message-actions-row'; const cp=document.createElement('button'); cp.type='button'; cp.className='ai-message-copy'; cp.textContent='复制'; cp.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawContent); cp.textContent='已复制'; setTimeout(()=> cp.textContent='复制', 1100);}catch(_){} }); row.appendChild(cp); text.appendChild(row); } else { text.innerHTML = renderAiMarkdown(rawContent); }
+  if(role==='user'){
+    text.textContent=rawContent;
+    const row=document.createElement('div'); row.className='ai-message-actions-row';
+    const cp=document.createElement('button'); cp.type='button'; cp.className='ai-message-copy'; cp.textContent='复制'; cp.title='复制本条'; cp.setAttribute('aria-label','复制本条');
+    cp.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawContent); cp.textContent='已复制'; setTimeout(()=> cp.textContent='复制', 1100);}catch(_){} });
+    const retry=document.createElement('button'); retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重试'; retry.title='用本条内容重试'; retry.setAttribute('aria-label','重试');
+    retry.addEventListener('click', ()=>{ const ta=document.getElementById('ai-prompt'); if(ta){ ta.value=rawContent; ta.focus(); autoResizeAiPrompt(); } });
+    const del=document.createElement('button'); del.type='button'; del.className='ai-message-copy ai-message-delete'; del.textContent='删除'; del.title='移除本条显示（不影响历史记录）';
+    del.addEventListener('click', ()=>{ message.remove(); try{ const empty=document.getElementById('ai-empty'); const chat=document.getElementById('ai-chat'); if(empty && chat && chat.querySelectorAll('.ai-message').length<=1) empty.style.display='flex'; }catch(_){} });
+    row.append(cp, retry, del); text.appendChild(row);
+  } else { text.innerHTML = renderAiMarkdown(rawContent); }
   // SVG card handling: if content or result contains <svg>, render selectable card instead of / in addition to markdown
   const svgInContent = extractSvgString(content);
   const svgInResult = extractSvgString(result);
@@ -8773,6 +8886,14 @@ function appendAiMessage(role, content, result = '') {
     message.appendChild(actions);
   }
 
+  // subtle timestamp for live append
+  try{
+    const tm=document.createElement('div'); tm.className='ai-message-time';
+    const now=new Date();
+    tm.textContent = now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    tm.title = now.toLocaleString();
+    message.appendChild(tm);
+  }catch(_){}
   chat.appendChild(message);
   chat.scrollTop = chat.scrollHeight;
 }
@@ -9165,6 +9286,22 @@ function initAiSidebar() {
         input.focus(); input.select();
       }
     });
+    // chat scroll shadows
+    try{
+      const chatEl2=document.getElementById('ai-chat');
+      if(chatEl2){
+        const updateShadows=()=>{
+          const top = chatEl2.scrollTop > 6;
+          const bottom = (chatEl2.scrollTop + chatEl2.clientHeight) < (chatEl2.scrollHeight - 6);
+          chatEl2.classList.toggle('has-scroll-top', top);
+          chatEl2.classList.toggle('has-scroll-bottom', bottom);
+        };
+        chatEl2.addEventListener('scroll', updateShadows, {passive:true});
+        new MutationObserver(updateShadows).observe(chatEl2, {childList:true, subtree:true});
+        window.addEventListener('resize', updateShadows);
+        setTimeout(updateShadows, 300);
+      }
+    }catch(_){}
   })();
   // SVG modal trigger in header
   (function(){
