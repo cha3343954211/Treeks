@@ -1,6 +1,7 @@
 const assert = require('assert/strict');
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -17,6 +18,7 @@ process.env.TREEKS_RUNTIME_DB_DIR = dbDir;
 
 let child;
 let serverOutput = '';
+let mockProvider;
 
 async function request(url, options = {}) {
   const res = await fetch(BASE + url, options);
@@ -27,6 +29,27 @@ async function request(url, options = {}) {
 
 function auth(token, extra = {}) {
   return { Authorization: `Bearer ${token}`, ...extra };
+}
+
+async function startMockAiProvider() {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      requests.push(JSON.parse(body || '{}'));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        choices: [{ message: { content: `mock answer ${requests.length}` } }]
+      }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    requests,
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise(resolve => server.close(resolve))
+  };
 }
 
 async function waitForServer() {
@@ -261,6 +284,54 @@ async function main() {
   assert.equal(threadAfterDelete.res.status, 200);
   assert.equal(threadAfterDelete.data.total, 0);
 
+  // AI retry must replace its own exchange instead of appending a duplicate.
+  const { encryptSecret } = require('../services/aiModels');
+  mockProvider = await startMockAiProvider();
+  const mockModelInfo = db.prepare(`
+    INSERT INTO ai_models
+      (name, base_url, model, api_key_encrypted, enabled, is_default)
+    VALUES (?, ?, ?, ?, 1, 1)
+  `).run('Retry mock', mockProvider.baseUrl, 'mock-model', encryptSecret('mock-key'));
+  const mockModelId = String(mockModelInfo.lastInsertRowid);
+  const retryDiary = await request('/api/diaries', {
+    method: 'POST',
+    headers: auth(alice.token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title: 'AI retry', content: 'Current note body' })
+  });
+  assert.equal(retryDiary.res.status, 201);
+  const retryPayload = {
+    action: 'ask', title: 'AI retry', content: 'Current note body',
+    prompt: 'What does the note preserve?', diary_id: retryDiary.data.id,
+    model_id: mockModelId
+  };
+  const initialAiAnswer = await request('/api/ai/assist', {
+    method: 'POST', headers: auth(alice.token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(retryPayload)
+  });
+  assert.equal(initialAiAnswer.res.status, 200, JSON.stringify(initialAiAnswer.data));
+  assert.equal(initialAiAnswer.data.result, 'mock answer 1');
+  assert.ok(initialAiAnswer.data.thread_id);
+  const initialRetryHistory = await request(`/api/ai/conversations?diary_id=${retryDiary.data.id}`, { headers: auth(alice.token) });
+  assert.equal(initialRetryHistory.data.total, 2);
+  const foreignRetry = await request('/api/ai/assist', {
+    method: 'POST', headers: auth(bob.token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ ...retryPayload, retry_thread_id: initialAiAnswer.data.thread_id })
+  });
+  assert.equal(foreignRetry.res.status, 404);
+  const retriedAiAnswer = await request('/api/ai/assist', {
+    method: 'POST', headers: auth(alice.token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ ...retryPayload, retry_thread_id: initialAiAnswer.data.thread_id })
+  });
+  assert.equal(retriedAiAnswer.res.status, 200, JSON.stringify(retriedAiAnswer.data));
+  assert.equal(retriedAiAnswer.data.result, 'mock answer 2');
+  assert.ok(retriedAiAnswer.data.thread_id);
+  assert.notEqual(retriedAiAnswer.data.thread_id, initialAiAnswer.data.thread_id);
+  assert.equal(mockProvider.requests[1].messages.some(message => message.content.includes('mock answer 1')), false);
+  const historyAfterRetry = await request(`/api/ai/conversations?diary_id=${retryDiary.data.id}`, { headers: auth(alice.token) });
+  assert.equal(historyAfterRetry.data.total, 2);
+  assert.deepEqual(historyAfterRetry.data.items.map(item => item.role), ['user', 'assistant']);
+  assert.equal(historyAfterRetry.data.items.at(-1).result, 'mock answer 2');
+
   const escapedAiSearch = await request(`/api/ai/conversations?diary_id=${aiDiaryId}&search=${encodeURIComponent('needle-100%_')}`, { headers: auth(alice.token) });
   assert.equal(escapedAiSearch.res.status, 200);
   assert.equal(escapedAiSearch.data.total, 1);
@@ -291,6 +362,9 @@ main().catch(error => {
   console.error(error.stack || error);
   process.exitCode = 1;
 }).finally(async () => {
+  if (mockProvider) {
+    await mockProvider.close();
+  }
   if (child && !child.killed) {
     child.kill();
     await new Promise(resolve => child.once('exit', resolve));

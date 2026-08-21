@@ -40,23 +40,40 @@ function normalizeDiaryIdForStorage(v){
   if(n <= 0) return -1;
   return Math.floor(n);
 }
-function loadRecentConversations(userId, diaryId, limit=12){
+function loadRecentConversations(userId, diaryId, limit=12, excludeThreadId=''){
   try{
-    const rows = db.prepare('SELECT role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=? ORDER BY created_at DESC, id DESC LIMIT ?').all(userId, diaryId, limit);
+    const excludeSql = excludeThreadId ? ' AND IFNULL(thread_id, \'\') != ?' : '';
+    const params = excludeThreadId ? [userId, diaryId, excludeThreadId, limit] : [userId, diaryId, limit];
+    const rows = db.prepare(`SELECT role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${excludeSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...params);
     return rows.reverse();
   }catch(e){ return []; }
 }
-function saveConversations(userId, diaryId, messages){
+function saveConversations(userId, diaryId, messages, options={}){
   try{
     const stmt = db.prepare('INSERT INTO ai_conversations (user_id, diary_id, role, content, result, action, model_id, mode, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     const threadId = crypto.randomUUID();
     const tx = db.transaction(()=>{
+      if(options.replaceThreadId) db.prepare('DELETE FROM ai_conversations WHERE user_id=? AND IFNULL(thread_id, \'\')=?').run(userId, options.replaceThreadId);
       for(const m of messages){
         stmt.run(userId, diaryId, String(m.role||'user'), String(m.content||''), String(m.result||''), String(m.action||''), String(m.model_id||''), String(m.mode||''), threadId);
       }
     });
     tx();
+    return threadId;
   }catch(e){ console.warn('[AI] saveConversations failed', e.message); }
+}
+
+function loadRetryContext(userId, threadId){
+  if(!threadId || typeof threadId !== 'string' || threadId.length > 100) return null;
+  const rows = db.prepare('SELECT user_id, diary_id, role, content, action FROM ai_conversations WHERE user_id=? AND IFNULL(thread_id, \'\')=? ORDER BY id ASC').all(userId, threadId);
+  const userRow = rows.find(row => row.role === 'user');
+  if(!userRow) return null;
+  if(userRow.diary_id !== -1){
+    const diary = db.prepare('SELECT id, user_id FROM diaries WHERE id=?').get(userRow.diary_id);
+    if(!diary || !canReadDiary(diary, userId)) return null;
+  }
+  const action = ALLOWED_ACTIONS.has(userRow.action) ? userRow.action : 'custom';
+  return { diaryId: userRow.diary_id, action, prompt: String(userRow.content || '') };
 }
 function buildHistoryMessages(rows){
   const out=[];
@@ -248,12 +265,17 @@ router.get('/assist/stream', authRequired, async (req, res) => {
   const rawPrompt = String(req.query.prompt || '');
   const rawModelId = req.query.model_id != null ? String(req.query.model_id) : undefined;
   const dec = s=>{ try{ return decodeURIComponent(s);}catch(_){ return s; }};
-  const a = dec(rawAction); const t = dec(rawTitle); const c = dec(rawContent); const sel = dec(rawSelection); const p = dec(rawPrompt); const mid = rawModelId ? dec(rawModelId) : undefined;
-  const rawDiaryId = req.query.diary_id != null ? String(req.query.diary_id) : undefined;
+  const rawRetryId = req.query.retry_thread_id != null ? String(req.query.retry_thread_id) : '';
+  let a = dec(rawAction); let p = dec(rawPrompt);
+  const retryContext = rawRetryId ? loadRetryContext(req.user.id, dec(rawRetryId)) : null;
+  if(rawRetryId && !retryContext){ res.status(404).json({ error: '要重新生成的对话不存在' }); return res.end(); }
+  if(retryContext){ a = retryContext.action; p = retryContext.prompt; }
+  const t = dec(rawTitle); const c = dec(rawContent); const sel = dec(rawSelection); const mid = rawModelId ? dec(rawModelId) : undefined;
+  const rawDiaryId = retryContext ? String(retryContext.diaryId) : (req.query.diary_id != null ? String(req.query.diary_id) : undefined);
   const diaryCtx = resolveDiaryContext(req.user.id, rawDiaryId != null ? dec(rawDiaryId) : undefined, t, c);
   const effectiveTitle = diaryCtx.title || t;
   const effectiveSource = diaryCtx.source || (sel || c || '');
-  const historyRows = loadRecentConversations(req.user.id, diaryCtx.diaryId, 12);
+  const historyRows = loadRecentConversations(req.user.id, diaryCtx.diaryId, 12, retryContext ? rawRetryId : '');
   const historyMessages = buildHistoryMessages(historyRows);
   if (!ALLOWED_ACTIONS.has(a)) return res.status(400).end('unsupported action');
   const source = (sel || c || '').trim();
@@ -268,22 +290,53 @@ router.get('/assist/stream', authRequired, async (req, res) => {
   for(let i=0;i<thinkingSteps.length;i++){ sseWrite(res,'thinking',{index:i,total:thinkingSteps.length,text:thinkingSteps[i],state:'done'}); await new Promise(r=>setTimeout(r,180+Math.random()*220)); }
   sseWrite(res,'thinking_done',{});
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),45000); req.on('close',()=>{ try{controller.abort();}catch(_){} });
+  const persistConversation = (text) => saveConversations(req.user.id, diaryCtx.diaryId, [
+    {role:'user', content: (p||labelsForSave(a,p)), result:'', action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))},
+    {role:'assistant', content:text, result:text, action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}
+  ], retryContext ? {replaceThreadId:rawRetryId} : {});
+  let savedThreadId = null;
   try {
     const chatMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。尊重用户语气，不提供诊断、判断或虚构事实。所有输出必须是纯 Markdown，不要使用 HTML，不要用代码块包裹整篇输出。'}, ...historyMessages, {role:'user',content:userPrompt}];
     const resp=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,stream:true,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:chatMessages}),signal:controller.signal});
-    if(!resp.ok){ let errText=''; try{const j=await resp.json(); errText=j?.error?.message||j?.error||'';}catch(_){ try{errText=await resp.text();}catch(_){}} console.error('[AI stream] provider error:',resp.status, String(errText).slice(0,400)); const fbMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。所有输出必须是纯 Markdown，不要使用 HTML。'}, ...historyMessages, {role:'user',content:userPrompt}]; const fallback=await fetch(baseUrl+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},body:JSON.stringify({model:aiModel.model,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:fbMessages}),signal:controller.signal}); const fj=await fallback.json().catch(()=>({})); if(fallback.ok && fj?.choices?.[0]?.message?.content){ let fr=String(fj.choices[0].message.content).trim(); const fm=fr.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/); if(fm) fr=fm[1].trim(); sseWrite(res,'delta',{text:fr.slice(0,8000)}); sseWrite(res,'done',{result:fr}); clearTimeout(timeout); return res.end(); } sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(timeout); return res.end(); }
-    const reader=resp.body && resp.body.getReader ? resp.body.getReader() : null; if(!reader){ const text=await resp.text(); sseWrite(res,'delta',{text}); sseWrite(res,'done',{result:text}); clearTimeout(timeout); return res.end(); }
+    if(!resp.ok){
+      let errText='';
+      try{ const j=await resp.json(); errText=j?.error?.message||j?.error||''; }catch(_){ try{ errText=await resp.text(); }catch(_){}}
+      console.error('[AI stream] provider error:',resp.status,String(errText).slice(0,400));
+      const fbMessages=[{role:'system',content:'你是 Treeks 日记应用中的中文写作助手。所有输出必须是纯 Markdown，不要使用 HTML。'}, ...historyMessages, {role:'user',content:userPrompt}];
+      const fallback=await fetch(baseUrl+'/chat/completions',{
+        method:'POST',
+        headers:{'Content-Type':'application/json',Authorization:'Bearer '+aiModel.api_key},
+        body:JSON.stringify({model:aiModel.model,temperature:isEdit?0.35:0.55,max_tokens:isEdit?2200:900,messages:fbMessages}),
+        signal:controller.signal
+      });
+      const fj=await fallback.json().catch(()=>({}));
+      const fallbackText=fj?.choices?.[0]?.message?.content;
+      if(fallback.ok && fallbackText){
+        let fr=String(fallbackText).trim();
+        const fm=fr.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
+        if(fm) fr=fm[1].trim();
+        savedThreadId=persistConversation(fr)||null;
+        sseWrite(res,'delta',{text:fr.slice(0,8000)});
+        sseWrite(res,'done',{result:fr,thread_id:savedThreadId});
+        clearTimeout(timeout); return res.end();
+      }
+      sseWrite(res,'error',{error:'AI 服务暂时不可用，请稍后重试'}); clearTimeout(timeout); return res.end();
+    }
+    const reader=resp.body && resp.body.getReader ? resp.body.getReader() : null; if(!reader){ const text=await resp.text(); savedThreadId=persistConversation(text)||null; sseWrite(res,'delta',{text}); sseWrite(res,'done',{result:text,thread_id:savedThreadId}); clearTimeout(timeout); return res.end(); }
     const decoder=new TextDecoder('utf-8'); let buffer=''; let full='';
     while(true){ const {done,value}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const lines=buffer.split('\n'); buffer=lines.pop()||''; for(const line of lines){ const trimmed=line.trim(); if(!trimmed||trimmed.startsWith(':')) continue; if(!trimmed.startsWith('data:')) continue; const payload=trimmed.slice(5).trim(); if(payload==='[DONE]'){buffer=''; break;} try{ const j=JSON.parse(payload); const delta=j?.choices?.[0]?.delta?.content||''; if(delta){ full+=delta; sseWrite(res,'delta',{text:delta}); } }catch(_){} } }
     if(buffer.trim().startsWith('data:')){ const payload=buffer.trim().slice(5).trim(); if(payload && payload!=='[DONE]'){ try{ const j=JSON.parse(payload); const d=j?.choices?.[0]?.delta?.content||''; if(d){ full+=d; sseWrite(res,'delta',{text:d}); } }catch(_){} } }
-    let finalText=full.trim(); const fence=finalText.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/); if(fence) finalText=fence[1].trim(); sseWrite(res,'done',{result:finalText||full, diary_id: diaryCtx.diaryId});
-    try{ saveConversations(req.user.id, diaryCtx.diaryId, [{role:'user', content: (p||labelsForSave(a,p)), result:'', action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}, {role:'assistant', content: finalText||full, result: finalText||full, action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}]); }catch(_){}
+    let finalText=full.trim();
+    const fence=finalText.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
+    if(fence) finalText=fence[1].trim();
+    savedThreadId=persistConversation(finalText||full)||null;
+    sseWrite(res,'done',{result:finalText||full, diary_id: diaryCtx.diaryId, thread_id:savedThreadId});
     clearTimeout(timeout); res.end();
   } catch(e){ clearTimeout(timeout); if(e.name==='AbortError') sseWrite(res,'error',{error:'AI 请求超时，请稍后重试'}); else { console.error('[AI stream] failed',e.message); sseWrite(res,'error',{error:'AI 服务连接失败，请稍后重试'}); } res.end(); }
 });
 
 router.post('/assist', authRequired, async (req, res) => {
-  const { action, title, content, selection, prompt, model_id: modelId } = req.body || {};
+  let { action, title, content, selection, prompt, model_id: modelId, retry_thread_id: retryThreadId } = req.body || {};
   if (modelId != null && !(typeof modelId === 'number' || typeof modelId === 'string')) {
     return res.status(400).json({ error: 'AI 模型格式无效' });
   }
@@ -304,8 +357,17 @@ router.post('/assist', authRequired, async (req, res) => {
   if (req.body && req.body.diary_id != null && typeof req.body.diary_id !== 'number' && typeof req.body.diary_id !== 'string') {
     return res.status(400).json({ error: 'diary_id 格式无效' });
   }
+  if (retryThreadId != null && typeof retryThreadId !== 'string') {
+    return res.status(400).json({ error: '重试对话格式无效' });
+  }
+  const retryContextPost = retryThreadId ? loadRetryContext(req.user.id, retryThreadId) : null;
+  if(retryThreadId && !retryContextPost) return res.status(404).json({ error: '要重新生成的对话不存在' });
+  if(retryContextPost){
+    action = retryContextPost.action;
+    prompt = retryContextPost.prompt;
+  }
 
-  const diaryCtxPost = resolveDiaryContext(req.user.id, req.body?.diary_id, title, content);
+  const diaryCtxPost = resolveDiaryContext(req.user.id, retryContextPost ? retryContextPost.diaryId : req.body?.diary_id, title, content);
   const effectiveTitlePost = diaryCtxPost.title || title;
   const effectiveSourcePost = diaryCtxPost.source || (selection || content || '');
   const source = String(effectiveSourcePost).trim();
@@ -324,7 +386,7 @@ router.post('/assist', authRequired, async (req, res) => {
   const timeout = setTimeout(() => controller.abort(), 30000);
 
   const userPrompt = buildUserPrompt(action, effectiveTitlePost, source, content, prompt);
-  const historyRowsPost = loadRecentConversations(req.user.id, diaryCtxPost.diaryId, 12);
+  const historyRowsPost = loadRecentConversations(req.user.id, diaryCtxPost.diaryId, 12, retryContextPost ? retryThreadId : '');
   const historyMessagesPost = buildHistoryMessages(historyRowsPost);
 
   const isEdit = action === 'edit' || action === 'draw';
@@ -355,14 +417,18 @@ router.post('/assist', authRequired, async (req, res) => {
     // 兜底：剥离可能包裹的 ```markdown 代码块
     const fence = result.match(/^```(?:markdown)?\s*\n([\s\S]*?)\n```\s*$/);
     if (fence) result = fence[1].trim();
-    try{ saveConversations(req.user.id, diaryCtxPost.diaryId, [{role:'user', content: (prompt||labelsForSave(action,prompt)), result:'', action, model_id:String(aiModel.id), mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist'))}, {role:'assistant', content: result, result, action, model_id:String(aiModel.id), mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist'))}]); }catch(_){}
+    const savedThreadIdPost = saveConversations(req.user.id, diaryCtxPost.diaryId, [
+      {role:'user', content: (prompt||labelsForSave(action,prompt)), result:'', action, model_id:String(aiModel.id), mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist'))},
+      {role:'assistant', content: result, result, action, model_id:String(aiModel.id), mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist'))}
+    ], retryContextPost ? {replaceThreadId:retryThreadId} : {});
     res.json({
       available: true,
       result,
       note: `已由 ${aiModel.name} 生成`,
       mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist')),
       model: { id: aiModel.id, name: aiModel.name, model: aiModel.model },
-      diary_id: diaryCtxPost.diaryId
+      diary_id: diaryCtxPost.diaryId,
+      thread_id: savedThreadIdPost || null
     });
   } catch (error) {
     if (error.name === 'AbortError') {

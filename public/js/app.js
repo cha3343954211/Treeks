@@ -8268,7 +8268,7 @@ function getAiDiaryId(){
   if(id != null && Number.isFinite(Number(id))) return Number(id);
   return -1;
 }
-function createAiHistoryMessage(item){
+function createAiHistoryMessage(item, allItems = []){
   const role = item.role === 'user' ? 'user' : 'assistant';
   const content = role === 'user' ? (item.content || '') : (item.result || item.content || '');
   const svg = extractSvgString(content);
@@ -8301,9 +8301,16 @@ function createAiHistoryMessage(item){
   if(item.id){
     const actions=document.createElement('div'); actions.className='ai-message-actions-row';
     const rawText=role==='user' ? (item.content||'') : (item.result||item.content||'');
+    let retryAction=null;
     const copy=document.createElement('button');
     copy.type='button'; copy.className='ai-message-copy'; copy.textContent='复制'; copy.title='复制本条'; copy.setAttribute('aria-label','复制本条');
     copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawText); copy.textContent='已复制'; setTimeout(()=>copy.textContent='复制',1100); }catch(_){} });
+    if(item.thread_id && originalPrompt){
+      const retry=document.createElement('button');
+      retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重新生成'; retry.title='使用当前笔记上下文重新生成本轮回答'; retry.setAttribute('aria-label','重新生成本轮回答');
+      retry.addEventListener('click', ()=>runAiAction(msg.dataset.aiAction||'custom', originalPrompt, {retryThreadId:String(item.thread_id)}));
+      retryAction=retry;
+    }
     const remove=document.createElement('button');
     remove.type='button'; remove.className='ai-message-copy ai-message-delete'; remove.textContent='删除对话'; remove.title='删除这条问答记录'; remove.setAttribute('aria-label','删除这条问答记录');
     remove.addEventListener('click', async ()=>{
@@ -8325,6 +8332,7 @@ function createAiHistoryMessage(item){
         toast(e.message||'删除失败','error');
       }
     });
+    if(retryAction) actions.appendChild(retryAction);
     actions.append(copy,remove);
     msg.appendChild(actions);
   }
@@ -8376,7 +8384,7 @@ async function loadOlderAiHistory(){
     const items=data.items||[];
     const fragment=document.createDocumentFragment();
     for(const it of items) {
-      const message=createAiHistoryMessage(it);
+      const message=createAiHistoryMessage(it, items);
       if(aiSidebarState.activeSearchQuery) message.dataset.searchContext='true';
       fragment.appendChild(message);
     }
@@ -8422,7 +8430,7 @@ function renderAiHistory(items, options = {}){
     return;
   }
   for(const it of items){
-    const message=createAiHistoryMessage(it);
+    const message=createAiHistoryMessage(it, items);
     if(options.searchContext) message.dataset.searchContext='true';
     chat.appendChild(message);
   }
@@ -8966,12 +8974,18 @@ function createAiResultActions(result) {
   actions.appendChild(copy);
   return actions;
 }
-function appendAiMessage(role, content, result = '') {
+function appendAiMessage(role, content, result = '', meta = {}) {
   const chat = document.getElementById('ai-chat');
   if (!chat) return;
   const emptyEl=document.getElementById('ai-empty'); if(emptyEl) emptyEl.style.display='none';
   const message = document.createElement('div');
   message.className = `ai-message ai-message-${role}`;
+  const threadId=String(meta.threadId||'');
+  const actionId=String(meta.action||'custom');
+  const promptText=String(meta.prompt ?? content ?? '');
+  if(threadId) message.dataset.threadId=threadId;
+  message.dataset.aiAction=actionId;
+  message.dataset.aiPrompt=promptText;
   const label = document.createElement('div');
   label.className = 'ai-message-label';
   label.textContent = role === 'user' ? '你' : 'Treeks AI';
@@ -8983,8 +8997,11 @@ function appendAiMessage(role, content, result = '') {
     const row=document.createElement('div'); row.className='ai-message-actions-row';
     const cp=document.createElement('button'); cp.type='button'; cp.className='ai-message-copy'; cp.textContent='复制'; cp.title='复制本条'; cp.setAttribute('aria-label','复制本条');
     cp.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(rawContent); cp.textContent='已复制'; setTimeout(()=> cp.textContent='复制', 1100);}catch(_){} });
-    const retry=document.createElement('button'); retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重试'; retry.title='用本条内容重试'; retry.setAttribute('aria-label','重试');
-    retry.addEventListener('click', ()=>{ const ta=document.getElementById('ai-prompt'); if(ta){ ta.value=String(rawContent||'').trim(); ta.focus(); autoResizeAiPrompt(); } });
+    const retry=document.createElement('button'); retry.type='button'; retry.className='ai-message-copy'; retry.textContent='重新生成'; retry.title='使用当前笔记上下文重新生成本轮回答'; retry.setAttribute('aria-label','重新生成本轮回答');
+    retry.addEventListener('click', ()=>{
+      if(message.dataset.threadId && message.dataset.aiPrompt) runAiAction(actionId, promptText, {retryThreadId:message.dataset.threadId});
+      else { const ta=document.getElementById('ai-prompt'); if(ta){ ta.value=String(rawContent||'').trim(); ta.focus(); autoResizeAiPrompt(); } }
+    });
     const del=document.createElement('button'); del.type='button'; del.className='ai-message-copy ai-message-delete'; del.textContent='撤回'; del.title='撤回本条显示（5s 内可撤销）';
     del.addEventListener('click', ()=>{
       message.style.opacity='0.45';
@@ -9185,14 +9202,18 @@ function makeAiWritingResult(action, context, prompt = '') {
   };
 }
 
-async function runAiAction(action, prompt = '') {
+async function runAiAction(action, prompt = '', options = {}) {
   if(aiSidebarState.isGenerating){ toast('正在生成中，请稍候',''); return; }
   aiSidebarState.resetSearch?.({ restore:false });
+  const retryThreadId=String(options.retryThreadId||'');
+  if(retryThreadId) document.querySelectorAll('#ai-chat .ai-message[data-thread-id="'+CSS.escape(retryThreadId)+'"]').forEach(node=>node.remove());
   const context = getAiWritingContext();
   if (getAiMode() === 'edit' && action === 'custom') action = 'edit';
   const labels = { continue: '续写当前内容', polish: '润色当前内容', outline: '整理写作提纲', summarize: '生成内容摘要', title: '生成标题建议', tasks: '提取行动项', ask: '询问笔记', edit: '编辑笔记', draw: '绘制 SVG' };
-  if (action === 'custom' || action === 'ask' || action === 'edit' || action === 'draw') appendAiMessage('user', prompt || labels[action] || '处理当前内容');
-  else appendAiMessage('user', labels[action] || '处理当前内容');
+  if (!retryThreadId) {
+    if (action === 'custom' || action === 'ask' || action === 'edit' || action === 'draw') appendAiMessage('user', prompt || labels[action] || '处理当前内容', '', {action, prompt});
+    else appendAiMessage('user', labels[action] || '处理当前内容', '', {action, prompt});
+  }
   setAiComposerBusy(true);
   aiSidebarState.abortController = (typeof AbortController!=='undefined') ? new AbortController() : null;
 
@@ -9218,6 +9239,7 @@ async function runAiAction(action, prompt = '') {
     selection: String(context.selection||''),
     prompt: String(prompt||''),
     diary_id: String(getAiDiaryId()),
+    ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}),
     ...(aiSidebarState.selectedModelId ? { model_id: String(aiSidebarState.selectedModelId) } : {})
   });
   // EventSource URL needs auth via cookie/header; we pass token as query fallback if needed
@@ -9256,9 +9278,12 @@ async function runAiAction(action, prompt = '') {
         else if(event==='thinking'){ try{ const j=JSON.parse(data); if(thinking) thinking.markDone(j.index); else if(metaInfo && metaInfo.thinkingSteps){ thinking=createAiThinkingBlock(streamHost, metaInfo.thinkingSteps); thinking.markDone(j.index);} }catch(_){} }
         else if(event==='thinking_done'){ if(thinking) thinking.setAllDone(); if(!streaming){ streaming=createAiStreamingBlock(streamHost); } }
         else if(event==='delta'){ try{ const j=JSON.parse(data); const t=j.text||''; fullBuffer+=t; if(!streaming) streaming=createAiStreamingBlock(streamHost); streaming.appendDelta(t); }catch(_){} }
-        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action }; }catch(_){ }
+        else if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); else if(fullBuffer){ streaming=createAiStreamingBlock(streamHost); streaming.finalize(fullBuffer);} if(thinking) thinking.setAllDone(); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, threadId:j.thread_id||'' }; }catch(_){ }
         }
-        else if(event==='unavailable'){ output=null; if(streamHost) streamHost.remove(); const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt); output={ note: local.note, result: stripCodeFence(local.result||''), mode: action }; if(thinking) thinking.setAllDone(); }
+        else if(event==='unavailable'){
+          if(retryThreadId) throw new Error('AI 服务暂不可用，已保留原对话');
+          output=null; if(streamHost) streamHost.remove(); const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt); output={ note: local.note, result: stripCodeFence(local.result||''), mode: action }; if(thinking) thinking.setAllDone();
+        }
         else if(event==='error'){ try{ const j=JSON.parse(data); toast(j.error||'AI 服务暂时不可用','error'); }catch(_){ toast('AI 服务暂时不可用','error'); } if(streaming) streaming.destroy(); if(thinking) thinking.setAllDone(); throw new Error('stream error'); }
       }
     }
@@ -9267,7 +9292,7 @@ async function runAiAction(action, prompt = '') {
       const lines=buf.split('\n');
       let event='message'; let data='';
       for(const line of lines){ if(line.startsWith('event:')) event=line.slice(6).trim(); else if(line.startsWith('data:')) data+=line.slice(5).trim(); }
-      if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action }; }catch(_){} }
+      if(event==='done'){ try{ const j=JSON.parse(data); if(j.result!=null) fullBuffer=j.result; if(streaming) streaming.finalize(fullBuffer); output={ note: (metaInfo&&metaInfo.note)||'已由 AI 生成。', result: stripCodeFence(fullBuffer||''), mode: (metaInfo&&metaInfo.mode)||action, threadId:j.thread_id||'' }; }catch(_){} }
     }
   }
   try{
@@ -9287,10 +9312,15 @@ async function runAiAction(action, prompt = '') {
     // fallback to non-stream api if stream failed mid-flight and we have no output yet
     if(!output){
       try{
-        const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined }) });
-        if(response.available) output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action };
-        else { const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt); output={ note: local.note, result: stripCodeFence(local.result||''), mode: action }; }
-      } catch(e){ setAiComposerBusy(false); toast(error.message||e.message, 'error'); return; }
+        const response = await api('/api/ai/assist', { method:'POST', body: JSON.stringify({ action, title: context.title, content: context.content, selection: context.selection, prompt, diary_id: getAiDiaryId(), model_id: aiSidebarState.selectedModelId || undefined, ...(retryThreadId ? { retry_thread_id: retryThreadId } : {}) }) });
+        if(response.available){
+          output={ note: response.note || '已由 AI 生成。', result: stripCodeFence(response.result||''), mode: response.mode||action, threadId:response.thread_id||'' };
+        } else {
+          if(retryThreadId) throw new Error('AI 服务暂不可用，已保留原对话');
+          const local=makeAiWritingResult(action==='edit' ? 'polish' : action==='ask' ? 'custom' : action, context, prompt);
+          output={ note: local.note, result: stripCodeFence(local.result||''), mode: action };
+        }
+      } catch(e){ setAiComposerBusy(false); loadAiHistoryForCurrentDiary(true); toast(error.message||e.message, 'error'); return; }
     } else {
       // we already have partial output from stream, keep it
     }
@@ -9302,7 +9332,7 @@ async function runAiAction(action, prompt = '') {
   if (output.mode === 'edit' && action !== 'draw') {
     const target = output.result;
     // 编辑：直接在编辑区以红绿差异呈现，不再只留在侧栏
-    appendAiMessage('assistant', output.note + '（已在编辑区以红绿差异呈现，可点「应用」写入笔记）', target);
+    appendAiMessage('assistant', output.note + '（已在编辑区以红绿差异呈现，可点「应用」写入笔记）', target, {threadId:output.threadId, action, prompt});
     showAiEditPreview(target);
     // 侧栏结果额外提供直接应用按钮
     const last=document.querySelector('#ai-chat .ai-message:last-child');
@@ -9315,12 +9345,12 @@ async function runAiAction(action, prompt = '') {
   } else if (output.mode === 'draw' || action === 'draw') {
     const svg = extractSvgString(output.result);
     if(svg && svg.startsWith('<svg')){
-      appendAiMessage('assistant', output.note, svg);
+      appendAiMessage('assistant', output.note, svg, {threadId:output.threadId, action:'draw', prompt});
     } else {
-      appendAiMessage('assistant', output.note, output.result);
+      appendAiMessage('assistant', output.note, output.result, {threadId:output.threadId, action:'draw', prompt});
     }
   } else {
-    appendAiMessage('assistant', output.note, output.result);
+    appendAiMessage('assistant', output.note, output.result, {threadId:output.threadId, action, prompt});
   }
   if (action === 'title' && output.result) {
     const last = document.querySelector('#ai-chat .ai-message:last-child');
