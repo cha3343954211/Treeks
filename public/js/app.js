@@ -8442,8 +8442,8 @@ function handleAiPromptSlashKeys(e){
   if(!aiSlashState.open) return false;
   const list=document.getElementById('ai-slash-list');
   const matches=getAiSlashMatches(aiSlashState.filter);
-  if(e.key==='ArrowDown'){ e.preventDefault(); aiSlashState.activeIndex=Math.min(matches.length-1, aiSlashState.activeIndex+1); renderAiSlashPalette(); return true; }
-  if(e.key==='ArrowUp'){ e.preventDefault(); aiSlashState.activeIndex=Math.max(0, aiSlashState.activeIndex-1); renderAiSlashPalette(); return true; }
+  if(e.key==='ArrowDown'){ e.preventDefault(); aiSlashState.activeIndex=Math.min(matches.length-1, aiSlashState.activeIndex+1); renderAiSlashPalette(); try{ document.querySelector('#ai-slash-list .ai-slash-item.active')?.scrollIntoView({block:'nearest'}); }catch(_){} return true; }
+  if(e.key==='ArrowUp'){ e.preventDefault(); aiSlashState.activeIndex=Math.max(0, aiSlashState.activeIndex-1); renderAiSlashPalette(); try{ document.querySelector('#ai-slash-list .ai-slash-item.active')?.scrollIntoView({block:'nearest'}); }catch(_){} return true; }
   if(e.key==='Enter'){ e.preventDefault(); const cur=matches[aiSlashState.activeIndex]; if(cur){ let extra=""; const ta2=document.getElementById('ai-prompt'); if(ta2){ const mm=ta2.value.match(/^\/[^\s]+\s+(.+)$/s); if(mm) extra=mm[1].trim(); } aiSlashState.open=false; renderAiSlashPalette(); const _ta=document.getElementById('ai-prompt'); if(_ta) _ta.value=''; runAiAction(cur.id, extra); } return true; }
   if(e.key==='Escape'){ e.preventDefault(); closeAiSlash(); return true; }
   if(e.key==='Tab'){ e.preventDefault(); aiSlashState.activeIndex=(aiSlashState.activeIndex+1)%matches.length; renderAiSlashPalette(); return true; }
