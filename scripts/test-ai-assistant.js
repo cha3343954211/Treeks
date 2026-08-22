@@ -334,6 +334,26 @@ async function main() {
       assert(streamingA11y.tag === 'BUTTON' && streamingA11y.expanded === 'true' && streamingA11y.controls, `stream collapse semantics invalid: ${JSON.stringify(streamingA11y)}`);
       assert(streamingA11y.count === '5 字' && streamingA11y.busy === 'false' && streamingA11y.collapsed && streamingA11y.restored, `stream collapse behavior invalid: ${JSON.stringify(streamingA11y)}`);
       assert(streamingA11y.thinkingCollapsed && streamingA11y.thinkingRestored, 'thinking collapse semantics invalid');
+
+      await page.evaluate(() => {
+        setAiMode('edit');
+        const prompt = document.getElementById('ai-prompt');
+        prompt.value = 'EDIT_TOOLBAR_TEST';
+        prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await page.waitForFunction(() => !document.getElementById('ai-send-btn')?.disabled, { timeout: 5000 });
+      await page.click('.ai-send-btn');
+      await page.waitForFunction(() => document.getElementById('ai-diff-bar')?.style.display === 'flex', { timeout: 20000 });
+      const editPreview = await page.evaluate(() => ({
+        layerVisible: document.getElementById('ai-diff-layer')?.style.display === 'block',
+        summary: document.getElementById('ai-diff-summary')?.textContent || '',
+        deletions: document.querySelectorAll('#ai-diff-layer .ai-diff-del').length,
+        insertions: document.querySelectorAll('#ai-diff-layer .ai-diff-ins').length
+      }));
+      assert(editPreview.layerVisible && editPreview.deletions > 0 && editPreview.insertions > 0, `AI edit diff preview did not render changes: ${JSON.stringify(editPreview)}`);
+      assert(editPreview.summary.includes('处删除') && editPreview.summary.includes('处新增'), 'AI edit diff summary omitted change counts');
+      await page.evaluate(() => document.getElementById('ai-diff-discard').click());
+      await page.waitForFunction(() => document.getElementById('ai-diff-bar')?.style.display === 'none', { timeout: 5000 });
       await page.evaluate(() => {
         setAiMode('ask');
         const prompt = document.getElementById('ai-prompt');
@@ -376,6 +396,61 @@ async function main() {
         { role: 'assistant', action: 'ask', result: 'A **markdown** answer.', created_at: new Date().toISOString() }
       ]));
       assert(exported.includes('# Treeks AI 对话导出') && exported.includes('What changed?') && exported.includes('A **markdown** answer.'), 'AI conversation export markdown invalid');
+
+      const svgCardInteraction = await page.evaluate(async (validSvg) => {
+        const textarea = document.getElementById('editor-textarea');
+        const contentBeforeInsert = textarea.value;
+        let uploadCount = 0;
+        let releaseUpload;
+        const previousApi = window.api;
+        window.api = () => new Promise(resolve => {
+          uploadCount += 1;
+          releaseUpload = resolve;
+        });
+        const card = renderSvgCard(validSvg, { name: 'integration-card' });
+        card.style.position = 'fixed';
+        card.style.opacity = '0';
+        card.style.pointerEvents = 'none';
+        document.body.appendChild(card);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 20));
+          const select = card.querySelector('[data-svg-action="select"]');
+          const save = card.querySelector('[data-svg-action="save"]');
+          const insert = card.querySelector('[data-svg-action="insert"]');
+          if (!card.classList.contains('ai-svg-selected') || card.getAttribute('aria-pressed') !== 'true') {
+            return { ok: false, message: 'SVG card was not auto-selected' };
+          }
+          select.click();
+          if (card.classList.contains('ai-svg-selected') || card.getAttribute('aria-pressed') !== 'false') {
+            return { ok: false, message: 'SVG select button did not clear selection' };
+          }
+          card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          if (!card.classList.contains('ai-svg-selected') || card.getAttribute('aria-pressed') !== 'true') {
+            return { ok: false, message: 'SVG keyboard activation failed' };
+          }
+
+          save.click();
+          await new Promise(resolve => setTimeout(resolve, 20));
+          const lockedWhileUploading = save.disabled && insert.disabled;
+          releaseUpload({ url: '/uploads/integration-card.svg' });
+          await new Promise(resolve => setTimeout(resolve, 20));
+          if (!lockedWhileUploading || save.disabled || insert.disabled || uploadCount !== 1) {
+            return { ok: false, message: 'SVG upload busy state or count invalid', lockedWhileUploading, saveDisabled: save.disabled, insertDisabled: insert.disabled, uploadCount };
+          }
+          insert.click();
+          await new Promise(resolve => setTimeout(resolve, 20));
+          if (uploadCount !== 1 || !textarea.value.includes('![integration-card](/uploads/integration-card.svg)')) {
+            return { ok: false, message: 'SVG insert did not reuse uploaded URL', uploadCount };
+          }
+          textarea.value = contentBeforeInsert;
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          return { ok: true };
+        } finally {
+          window.api = previousApi;
+          card.remove();
+        }
+      }, validSvg);
+      assert(svgCardInteraction.ok, `SVG chat card interaction failed: ${JSON.stringify(svgCardInteraction)}`);
       assert(pageErrors.length === 0, `sidebar produced page errors: ${pageErrors.join('; ')}`);
     } finally {
       await browser.close();
@@ -392,6 +467,6 @@ async function main() {
 }
 
 main().catch(error => {
-  console.error(error.message);
+  console.error(error.stack || error.message);
   process.exit(1);
 });

@@ -8131,6 +8131,7 @@ function showAiEditPreview(proposed, request = {}){
   layer.style.display='block';
   if(splitWrap) splitWrap.classList.remove('active');
   layer.setAttribute('aria-hidden','false');
+  if(bar) bar.style.display='flex';
   if(summary){ const delPart = rendered.del ? '<b style="color:var(--danger)">'+rendered.del+'</b> 处删除 ' : ''; const insPart = rendered.ins ? '<b style="color:#1a7f37">'+rendered.ins+'</b> 处新增' : ''; const emptyPart = (!rendered.del && !rendered.ins ? '无差异' : ''); summary.innerHTML = '检测到 ' + delPart + insPart + emptyPart + ' <span style="color:var(--fg-tertiary)">· 绿新增 / 红删除</span>'; }
   textarea.setAttribute('aria-hidden','true');
   // prepare split data
@@ -8877,81 +8878,121 @@ function renderSvgCard(svg, opts={}){
   card.className='ai-svg-card' + (opts.selected ? ' ai-svg-selected' : '');
   card.tabIndex=0;
   card.setAttribute('role','button');
-  card.setAttribute('aria-label','SVG 矢量图，点击选中');
+  card.setAttribute('aria-pressed', String(Boolean(opts.selected)));
+  card.setAttribute('aria-label','SVG 矢量图，按 Enter 或空格切换选中');
   const prev=document.createElement('div');
   prev.className='ai-svg-card-preview';
   prev.innerHTML = svg;
   const actions=document.createElement('div');
   actions.className='ai-svg-card-actions';
   const btnSelect=document.createElement('button');
-  btnSelect.type='button'; btnSelect.className='btn btn-secondary';
+  btnSelect.type='button'; btnSelect.className='btn btn-secondary ai-svg-select-btn';
+  btnSelect.dataset.svgAction='select';
   btnSelect.textContent = opts.selected ? '已选中' : '选中';
   const btnInsert=document.createElement('button');
   btnInsert.type='button'; btnInsert.className='btn btn-primary';
+  btnInsert.dataset.svgAction='insert';
   btnInsert.textContent='插入到 Markdown';
   const btnSave=document.createElement('button');
   btnSave.type='button'; btnSave.className='btn';
+  btnSave.dataset.svgAction='save';
   btnSave.textContent='保存到文件';
   const btnCopy=document.createElement('button');
-  btnCopy.type='button';
+  btnCopy.type='button'; btnCopy.className='btn';
+  btnCopy.dataset.svgAction='copy';
   btnCopy.textContent='复制代码';
-  btnCopy.className='btn';
   actions.append(btnSelect, btnInsert, btnSave, btnCopy);
   card.append(prev, actions);
+  let uploading=false;
+
+  function setUploading(next){
+    uploading=next;
+    btnSave.disabled=next;
+    btnInsert.disabled=next;
+  }
+
   function setSelected(v){
     card.classList.toggle('ai-svg-selected', v);
     btnSelect.textContent = v ? '已选中' : '选中';
+    card.setAttribute('aria-pressed', String(v));
+    card.setAttribute('aria-label', v ? '已选中的 SVG 矢量图，按 Enter 或空格取消选中' : 'SVG 矢量图，按 Enter 或空格选中');
     if(v){ aiSvgState.selected = svg; }
-    // allow single selected across chat
-    document.querySelectorAll('#ai-chat .ai-svg-card.ai-svg-selected').forEach(el=>{ if(el!==card) el.classList.remove('ai-svg-selected'); const b=el.querySelector('button'); if(b) b.textContent='选中'; });
+    document.querySelectorAll('#ai-chat .ai-svg-card.ai-svg-selected').forEach(el=>{
+      if(el===card) return;
+      el.classList.remove('ai-svg-selected');
+      const otherSelect=el.querySelector('[data-svg-action="select"]');
+      if(otherSelect) otherSelect.textContent='选中';
+      el.setAttribute('aria-pressed','false');
+      el.setAttribute('aria-label','SVG 矢量图，按 Enter 或空格选中');
+    });
   }
+
   card.addEventListener('click', (e)=>{
     if(e.target.closest('button')) return;
-    const isSel = card.classList.contains('ai-svg-selected');
-    setSelected(!isSel);
+    setSelected(!card.classList.contains('ai-svg-selected'));
+  });
+  card.addEventListener('keydown', (e)=>{
+    if(e.target!==card || (e.key!=='Enter' && e.key!==' ')) return;
+    e.preventDefault();
+    setSelected(!card.classList.contains('ai-svg-selected'));
   });
   btnSelect.addEventListener('click', ()=> setSelected(!card.classList.contains('ai-svg-selected')));
   btnCopy.addEventListener('click', async ()=>{
-    try{ await navigator.clipboard.writeText(svg); toast('已复制 SVG 代码','success'); }catch(_){ toast('复制失败','error'); }
+    try{ await navigator.clipboard.writeText(svg); toast('已复制 SVG 代码','success'); }
+    catch(_){ toast('复制失败','error'); }
   });
+
+  async function uploadSvg(){
+    if(opts.url) return opts.url;
+    const name = opts.name || 'ai-drawing';
+    const res = await api('/api/upload/svg', {
+      method:'POST',
+      body: JSON.stringify({ svg, name })
+    });
+    opts.url = res.url;
+    return opts.url;
+  }
+
   btnSave.addEventListener('click', async ()=>{
+    if(uploading) return;
+    setUploading(true);
     try{
-      const name = (opts.name || 'ai-drawing');
-      const res = await api('/api/upload/svg', { method:'POST', body: JSON.stringify({ svg, name }) });
-      toast('已保存到我的文件：'+ res.url,'success');
-      // also mark selected
+      const url = await uploadSvg();
       setSelected(true);
-    }catch(e){ toast('保存失败：'+e.message,'error'); }
+      toast('已保存到我的文件：'+url,'success');
+    }catch(e){
+      toast('保存失败：'+e.message,'error');
+    }finally{
+      setUploading(false);
+    }
   });
+
   btnInsert.addEventListener('click', async ()=>{
-    // ensure saved then insert markdown
+    if(uploading) return;
+    setUploading(true);
     try{
-      let url = opts.url || '';
-      if(!url){
-        const name = (opts.name || 'ai-drawing');
-        const res = await api('/api/upload/svg', { method:'POST', body: JSON.stringify({ svg, name }) });
-        url = res.url;
-        toast('已保存到我的文件','success');
-      }
+      const url = await uploadSvg();
       const md = '![' + (opts.name||'ai-drawing') + '](' + url + ')';
-      // insert at cursor in editor
       const ta=document.getElementById('editor-textarea');
       if(ta){
         const start=ta.selectionStart, end=ta.selectionEnd;
         const before=ta.value.slice(0,start), after=ta.value.slice(end);
-        const insert = (before && !before.endsWith('\n') ? '\n' : '') + md + '\n' + after;
-        // Actually keep original before + md + after
-        ta.value = before + (before && !before.endsWith('\n') && before.length? '\n' : '') + md + '\n' + after;
-        ta.selectionStart = ta.selectionEnd = before.length + (before && !before.endsWith('\n') && before.length?1:0) + md.length + 1;
+        const separator = before && !before.endsWith('\n') ? '\n' : '';
+        ta.value = before + separator + md + '\n' + after;
+        ta.selectionStart = ta.selectionEnd = before.length + separator.length + md.length + 1;
         ta.focus();
         ta.dispatchEvent(new Event('input',{bubbles:true}));
         if(typeof updatePreview==='function') updatePreview();
         if(typeof updateWordCount==='function') updateWordCount();
       }
       toast('已插入到 Markdown','success');
-    }catch(e){ toast('插入失败：'+e.message,'error'); }
+    }catch(e){
+      toast('插入失败：'+e.message,'error');
+    }finally{
+      setUploading(false);
+    }
   });
-  // auto select on creation
+
   setTimeout(()=> setSelected(true), 0);
   return card;
 }
