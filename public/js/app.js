@@ -8973,19 +8973,7 @@ function renderSvgCard(svg, opts={}){
     try{
       const url = await uploadSvg();
       const md = '![' + (opts.name||'ai-drawing') + '](' + url + ')';
-      const ta=document.getElementById('editor-textarea');
-      if(ta){
-        const start=ta.selectionStart, end=ta.selectionEnd;
-        const before=ta.value.slice(0,start), after=ta.value.slice(end);
-        const separator = before && !before.endsWith('\n') ? '\n' : '';
-        ta.value = before + separator + md + '\n' + after;
-        ta.selectionStart = ta.selectionEnd = before.length + separator.length + md.length + 1;
-        ta.focus();
-        ta.dispatchEvent(new Event('input',{bubbles:true}));
-        if(typeof updatePreview==='function') updatePreview();
-        if(typeof updateWordCount==='function') updateWordCount();
-      }
-      toast('已插入到 Markdown','success');
+      if(insertMarkdownAtEditorCursor(md)) toast('已插入到 Markdown','success');
     }catch(e){
       toast('插入失败：'+e.message,'error');
     }finally{
@@ -9230,32 +9218,27 @@ function initAiSvgFeature(){
     const svg=getCurrentSvgFromModal();
     if(!svg || !svg.trim().startsWith('<svg')){ toast('当前画布为空或不是有效 SVG','error'); return; }
     const clean=sanitizeSvgText(svg.trim());
+    if(aiSidebarState.pendingEdit){
+      toast('请先应用或放弃当前 AI 编辑差异', '');
+      return;
+    }
     try{
       const res=await api('/api/upload/svg', {method:'POST', body: JSON.stringify({svg: clean, name: 'ai-drawing'})});
       const url=res.url;
       const md='!['+'ai-drawing'+']('+url+')';
-      const ta=document.getElementById('editor-textarea');
-      if(ta){
-        const start=ta.selectionStart, end=ta.selectionEnd;
-        const before=ta.value.slice(0,start), after=ta.value.slice(end);
-        ta.value = before + (before && !before.endsWith('\n') && before.length?'\n':'') + md + '\n' + after;
-        ta.selectionStart = ta.selectionEnd = before.length + (before && !before.endsWith('\n') && before.length?1:0) + md.length + 1;
-        ta.focus(); ta.dispatchEvent(new Event('input',{bubbles:true}));
-        if(typeof updatePreview==='function') updatePreview();
-        if(typeof updateWordCount==='function') updateWordCount();
-      }
+      const inserted = insertMarkdownAtEditorCursor(md);
       // also show in chat as selectable card
       const chat=document.getElementById('ai-chat');
       if(chat){
         const msg=document.createElement('div'); msg.className='ai-message ai-message-assistant';
         const label=document.createElement('div'); label.className='ai-message-label'; label.textContent='Treeks AI · 绘图';
-        const content=document.createElement('div'); content.className='ai-message-content'; content.textContent='已保存并插入到正文：';
+        const content=document.createElement('div'); content.className='ai-message-content'; content.textContent=inserted ? '已保存并插入到正文：' : '已保存到我的文件：';
         msg.append(label, content);
         const card=renderSvgCard(clean, {name:'ai-drawing', url});
         msg.appendChild(card);
         chat.appendChild(msg); chat.scrollTop=chat.scrollHeight;
       }
-      toast('已保存并插入到 Markdown','success');
+      toast(inserted ? '已保存并插入到 Markdown' : '已保存到我的文件', 'success');
       closeAiSvgModal();
     }catch(e){ toast('保存失败：'+e.message,'error'); }
   });
@@ -9342,6 +9325,27 @@ async function exportAiConversationMarkdown() {
     if (button) button.disabled = false;
   }
 }
+function insertMarkdownAtEditorCursor(markdown) {
+  const textarea = document.getElementById('editor-textarea');
+  if (!textarea) return false;
+  if (aiSidebarState.pendingEdit) {
+    toast('请先应用或放弃当前 AI 编辑差异', '');
+    return false;
+  }
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  const separator = before && !before.endsWith('\n') ? '\n' : '';
+  textarea.value = before + separator + markdown + '\n' + after;
+  textarea.selectionStart = textarea.selectionEnd = before.length + separator.length + markdown.length + 1;
+  textarea.focus();
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  if (typeof updatePreview === 'function') updatePreview();
+  if (typeof updateWordCount === 'function') updateWordCount();
+  return true;
+}
+
 function createAiResultActions(result) {
   const actions = document.createElement('div');
   actions.className = 'ai-result-actions';
@@ -9468,6 +9472,10 @@ function appendAiMessage(role, content, result = '', meta = {}) {
 function applyAiResult(result, mode) {
   const textarea = document.getElementById('editor-textarea');
   if (!textarea) return;
+  if (aiSidebarState.pendingEdit) {
+    toast('请先应用或放弃当前 AI 编辑差异', '');
+    return;
+  }
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
   const prefix = textarea.value.slice(0, start);
@@ -10065,6 +10073,7 @@ function initAiSidebar() {
   function aiSidebarHasOpenModal(){ try{ return !!document.querySelector('.modal[style*="display: flex"], .modal[style*="display:flex"], #ai-svg-modal[style*="display: flex"], #ai-svg-modal[style*="display:flex"], #image-lightbox-modal[style*="display: flex"]'); }catch(_){ return false; } }
   document.addEventListener('keydown', (e)=>{
     if(e.key==='Escape' && aiSidebarState.isOpen && !aiSidebarHasOpenModal()){
+      if(aiSidebarState.pendingEdit){ discardAiEdit(); return; }
       if(aiSidebarState.isGenerating && aiSidebarState.abortController){ cancelAiGeneration(); }
       else if(!e.ctrlKey && !e.metaKey) setAiSidebarOpen(false);
     }

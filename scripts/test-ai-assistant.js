@@ -352,8 +352,20 @@ async function main() {
       }));
       assert(editPreview.layerVisible && editPreview.deletions > 0 && editPreview.insertions > 0, `AI edit diff preview did not render changes: ${JSON.stringify(editPreview)}`);
       assert(editPreview.summary.includes('处删除') && editPreview.summary.includes('处新增'), 'AI edit diff summary omitted change counts');
-      await page.evaluate(() => document.getElementById('ai-diff-discard').click());
-      await page.waitForFunction(() => document.getElementById('ai-diff-bar')?.style.display === 'none', { timeout: 5000 });
+      const guardedResult = await page.evaluate(() => {
+        const textarea = document.getElementById('editor-textarea');
+        const before = textarea.value;
+        applyAiResult('BLOCKED_RESULT_INSERT', 'insert');
+        return {
+          before,
+          after: textarea.value,
+          pending: Boolean(aiSidebarState.pendingEdit),
+          barVisible: document.getElementById('ai-diff-bar')?.style.display === 'flex'
+        };
+      });
+      assert(guardedResult.before === guardedResult.after && guardedResult.pending && guardedResult.barVisible, `pending AI edit did not block result insertion: ${JSON.stringify(guardedResult)}`);
+      await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+      await page.waitForFunction(() => document.getElementById('ai-diff-bar')?.style.display === 'none' && !aiSidebarState.pendingEdit && aiSidebarState.isOpen, { timeout: 5000 });
       await page.evaluate(() => {
         setAiMode('ask');
         const prompt = document.getElementById('ai-prompt');
