@@ -8613,6 +8613,7 @@ async function loadOlderAiHistory(){
     const items=data.items||[];
     const fragment=document.createDocumentFragment();
     for(const it of items) {
+      if(!aiSidebarState.activeSearchQuery && it.topic_boundary) fragment.appendChild(createAiFreshTopicDivider());
       const message=createAiHistoryMessage(it, items);
       if(aiSidebarState.activeSearchQuery) message.dataset.searchContext='true';
       fragment.appendChild(message);
@@ -8658,11 +8659,10 @@ function renderAiHistory(items, options = {}){
     ensureAiHistoryOlderButton();
     return;
   }
-  const freshIndex = aiSidebarState.freshThreadId
-    ? items.findIndex(item => String(item.thread_id || '') === aiSidebarState.freshThreadId)
-    : -1;
+  const freshIndex = items.findIndex(item => item.topic_boundary);
+  const showBoundary = freshIndex >= 0 && !options.searchContext && !aiSidebarState.activeSearchQuery;
   items.forEach((it, index) => {
-    if(index === freshIndex) chat.appendChild(createAiFreshTopicDivider());
+    if(showBoundary && index === freshIndex) chat.appendChild(createAiFreshTopicDivider());
     const message=createAiHistoryMessage(it, items);
     if(options.searchContext) message.dataset.searchContext='true';
     chat.appendChild(message);

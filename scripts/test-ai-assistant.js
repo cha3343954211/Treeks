@@ -65,6 +65,7 @@ async function main() {
     req.on('end', () => {
       const payload = JSON.parse(body);
       provider.lastPrompt = payload.messages.at(-1).content;
+      provider.lastMessages = payload.messages;
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -352,6 +353,24 @@ async function main() {
       assert(!provider.lastPrompt.includes('REPLACED'), 'fresh topic leaked prior assistant answer');
       await page.waitForFunction(() => document.querySelectorAll('.ai-topic-divider').length === 1 && !document.querySelector('.ai-topic-divider[data-pending]'), { timeout: 15000 });
       assert(await page.evaluate(() => document.querySelector('[data-ai-fresh-topic]')?.getAttribute('aria-pressed')) === 'false', 'fresh topic did not reset after generation');
+      await page.evaluate(() => {
+        const prompt = document.getElementById('ai-prompt');
+        prompt.value = 'FOLLOWUP_SAME_TOPIC_PROMPT';
+        prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await page.waitForFunction(() => !document.getElementById('ai-send-btn')?.disabled, { timeout: 5000 });
+      const resultCountBeforeFollowUp = await page.evaluate(() => document.querySelectorAll('#ai-chat .ai-result-md').length);
+      await page.click('.ai-send-btn');
+      await page.waitForFunction(count => document.querySelectorAll('#ai-chat .ai-result-md').length > count, { timeout: 20000 }, resultCountBeforeFollowUp);
+      await page.waitForFunction(() => !aiSidebarState?.isGenerating, { timeout: 20000 });
+      const followupContext = provider.lastMessages.map(message => message.content).join('\n');
+      assert(followupContext.includes('FRESH_TOPIC_PROMPT'), 'durable topic dropped its opening question');
+      assert(followupContext.includes('FOLLOWUP_SAME_TOPIC_PROMPT'), 'durable topic dropped follow-up prompt');
+      assert(followupContext.includes('SELECTED_TARGET'), 'durable topic dropped current note context');
+      assert(!followupContext.includes('browser streaming check'), 'durable topic leaked a pre-boundary exchange');
+      const persistedHistory = await page.evaluate(() => api('/api/ai/conversations?diary_id=' + encodeURIComponent(String(getAiDiaryId())) + '&limit=100'));
+      assert(persistedHistory.items.some(item => item.topic_boundary), 'topic boundary was not persisted');
+      await page.waitForFunction(() => document.querySelectorAll('.ai-topic-divider').length === 1, { timeout: 15000 });
       const exported = await page.evaluate(() => buildAiConversationMarkdown([
         { role: 'user', action: 'ask', content: 'What changed?', created_at: new Date().toISOString() },
         { role: 'assistant', action: 'ask', result: 'A **markdown** answer.', created_at: new Date().toISOString() }

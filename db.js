@@ -203,6 +203,7 @@ function initDatabase() {
       model_id TEXT DEFAULT '',
       mode TEXT DEFAULT '',
       thread_id TEXT DEFAULT '',
+      topic_boundary INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -384,6 +385,7 @@ function initDatabase() {
   // A question and its answer share one stable id. Search uses this to show
   // the complete exchange even when only the answer contains the keyword.
   addColumnIfMissing('ai_conversations', 'thread_id', "TEXT DEFAULT ''");
+  addColumnIfMissing('ai_conversations', 'topic_boundary', 'INTEGER DEFAULT 0');
   const blankThreads = db.prepare("SELECT COUNT(*) AS count FROM ai_conversations WHERE IFNULL(thread_id, '') = ''").get().count;
   if (blankThreads) {
     const rows = db.prepare(`
@@ -418,6 +420,7 @@ function initDatabase() {
     backfillThreads();
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_ai_conversations_thread ON ai_conversations(thread_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ai_conversations_topic ON ai_conversations(user_id, diary_id, topic_boundary, id)');
 
   // Normalize future inserts even when an old SQLite table still has a
   // datetime('now', 'localtime') default in its persisted schema.

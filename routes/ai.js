@@ -42,20 +42,35 @@ function normalizeDiaryIdForStorage(v){
 }
 function loadRecentConversations(userId, diaryId, limit=12, excludeThreadId=''){
   try{
-    const excludeSql = excludeThreadId ? ' AND IFNULL(thread_id, \'\') != ?' : '';
-    const params = excludeThreadId ? [userId, diaryId, excludeThreadId, limit] : [userId, diaryId, limit];
-    const rows = db.prepare(`SELECT role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${excludeSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...params);
+    // A topic boundary starts a durable context window: only exchanges at or
+    // after the newest boundary belong to follow-up prompts.
+    const boundaryThread = db.prepare("SELECT thread_id FROM ai_conversations WHERE user_id=? AND diary_id=? AND topic_boundary=1 ORDER BY id DESC LIMIT 1").get(userId, diaryId);
+    const boundary = boundaryThread?.thread_id
+      ? db.prepare("SELECT MIN(id) AS id FROM ai_conversations WHERE user_id=? AND diary_id=? AND thread_id=?").get(userId, diaryId, boundaryThread.thread_id)?.id || 0
+      : 0;
+    const excludeSql = excludeThreadId ? " AND IFNULL(thread_id, '') != ?" : '';
+    const boundarySql = boundary ? ' AND id >= ?' : '';
+    const params = [userId, diaryId];
+    if(excludeThreadId) params.push(excludeThreadId);
+    if(boundary) params.push(boundary);
+    params.push(limit);
+    const rows = db.prepare(`SELECT role, content, result, action, mode, model_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${excludeSql}${boundarySql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...params);
     return rows.reverse();
   }catch(e){ return []; }
 }
 function saveConversations(userId, diaryId, messages, options={}){
   try{
-    const stmt = db.prepare('INSERT INTO ai_conversations (user_id, diary_id, role, content, result, action, model_id, mode, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const stmt = db.prepare('INSERT INTO ai_conversations (user_id, diary_id, role, content, result, action, model_id, mode, thread_id, topic_boundary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     const threadId = crypto.randomUUID();
+    let topicBoundary = options.topicBoundary ? 1 : 0;
     const tx = db.transaction(()=>{
-      if(options.replaceThreadId) db.prepare('DELETE FROM ai_conversations WHERE user_id=? AND IFNULL(thread_id, \'\')=?').run(userId, options.replaceThreadId);
+      if(options.replaceThreadId){
+        const previous = db.prepare('SELECT topic_boundary FROM ai_conversations WHERE user_id=? AND IFNULL(thread_id, \'\')=? ORDER BY id ASC').get(userId, options.replaceThreadId);
+        if(previous && !options.topicBoundary) topicBoundary = previous.topic_boundary ? 1 : 0;
+        db.prepare('DELETE FROM ai_conversations WHERE user_id=? AND IFNULL(thread_id, \'\')=?').run(userId, options.replaceThreadId);
+      }
       for(const m of messages){
-        stmt.run(userId, diaryId, String(m.role||'user'), String(m.content||''), String(m.result||''), String(m.action||''), String(m.model_id||''), String(m.mode||''), threadId);
+        stmt.run(userId, diaryId, String(m.role||'user'), String(m.content||''), String(m.result||''), String(m.action||''), String(m.model_id||''), String(m.mode||''), threadId, topicBoundary);
       }
     });
     tx();
@@ -222,12 +237,12 @@ router.get('/conversations', authRequired, (req, res)=>{
     const listParams = [req.user.id, diaryId];
     if(hasCursor) listParams.push(beforeId);
     listParams.push(limit);
-    rows = db.prepare(`SELECT id, user_id, diary_id, role, content, result, action, mode, model_id, thread_id, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${cursorSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...listParams).reverse();
+    rows = db.prepare(`SELECT id, user_id, diary_id, role, content, result, action, mode, model_id, thread_id, topic_boundary, created_at FROM ai_conversations WHERE user_id=? AND diary_id=?${cursorSql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...listParams).reverse();
     const oldest = rows[0] || null;
     hasMore = Boolean(oldest && db.prepare('SELECT 1 FROM ai_conversations WHERE user_id=? AND diary_id=? AND id < ? LIMIT 1').get(req.user.id, diaryId, oldest.id));
     total = db.prepare('SELECT COUNT(*) AS count FROM ai_conversations WHERE user_id=? AND diary_id=?').get(req.user.id, diaryId).count;
   }
-  res.json({ items: rows, diary_id: diaryId, query: search, total, match_count: search ? matchCount : undefined, has_more: hasMore, oldest_id: rows[0]?.id || null });
+  res.json({ items: rows.map(row => ({ ...row, topic_boundary: !!row.topic_boundary })), diary_id: diaryId, query: search, total, match_count: search ? matchCount : undefined, has_more: hasMore, oldest_id: rows[0]?.id || null });
 });
 router.delete('/conversations', authRequired, (req, res)=>{
   const rawId = req.query.diary_id ?? req.body?.diary_id;
@@ -340,7 +355,7 @@ router.post('/assist/stream', authRequired, async (req, res) => {
   const persistConversation = (text) => saveConversations(req.user.id, diaryCtx.diaryId, [
     {role:'user', content: (p||labelsForSave(a,p)), result:'', action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))},
     {role:'assistant', content:text, result:text, action:a, model_id:String(aiModel.id), mode: a==='draw'?'draw':(isEdit?'edit':(a==='ask'?'ask':'assist'))}
-    ], retryContext ? {replaceThreadId:rawRetryId} : {});
+    ], retryContext ? {replaceThreadId:rawRetryId} : {topicBoundary:freshContext});
   persistPartial=()=>{
     if(completed || partialSaved || !providerFull.trim()) return;
     partialSaved=true;
@@ -514,7 +529,7 @@ router.post('/assist', authRequired, async (req, res) => {
     const savedThreadIdPost = saveConversations(req.user.id, diaryCtxPost.diaryId, [
       {role:'user', content: (prompt||labelsForSave(action,prompt)), result:'', action, model_id:String(aiModel.id), mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist'))},
       {role:'assistant', content: result, result, action, model_id:String(aiModel.id), mode: action === 'draw' ? 'draw' : (isEdit ? 'edit' : (action === 'ask' ? 'ask' : 'assist'))}
-    ], retryContextPost ? {replaceThreadId:retryThreadId} : {});
+    ], retryContextPost ? {replaceThreadId:retryThreadId} : {topicBoundary:freshContextPost});
     res.json({
       available: true,
       result,
